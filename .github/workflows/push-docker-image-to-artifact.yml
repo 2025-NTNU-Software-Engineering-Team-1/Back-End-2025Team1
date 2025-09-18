@@ -1,0 +1,63 @@
+name: Build & Push Backend Image To Arifcat
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  GAR_LOCATION: asia-east1                 # Artifact Registry 區域
+  GAR_REPOSITORY: backend                  # Artifact Registry repository 名稱
+  IMAGE_NAME: noj-web                      # Docker image 名稱
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_ARTIFACT_REGISTRY_KEY }}
+
+      - name: Setup gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Configure Docker auth
+        run: gcloud auth configure-docker "${GAR_LOCATION}-docker.pkg.dev"
+
+      - name: Compose image metadata
+        run: |
+          IMAGE_URI="${GAR_LOCATION}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${GAR_REPOSITORY}/${IMAGE_NAME}"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            IMAGE_TAG="${GITHUB_REF#refs/tags/}"
+          else
+            IMAGE_TAG="${GITHUB_SHA}"
+          fi
+          echo "IMAGE_URI=${IMAGE_URI}" >> "${GITHUB_ENV}"
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> "${GITHUB_ENV}"
+
+      - name: Build image (production stage)
+        run: |
+          docker build \
+            --target production \
+            -t "${IMAGE_URI}:${IMAGE_TAG}" \
+            Back-End
+
+      - name: Push commit/tag image
+        run: docker push "${IMAGE_URI}:${IMAGE_TAG}"
+
+      - name: Tag & push latest (main branch only)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          docker tag "${IMAGE_URI}:${IMAGE_TAG}" "${IMAGE_URI}:latest"
+          docker push "${IMAGE_URI}:latest"
