@@ -1,6 +1,6 @@
 # NOJ Backend
 
-[![Coverage Badge](https://normal-oj.github.io/Back-End/coverage.svg)](https://normal-oj.github.io/Back-End/index.html)
+[![Coverage Badge](https://2025-NTNU-Software-Engineering-Team-1.github.io/Back-End-2025Team1/coverage.svg)](https://2025-NTNU-Software-Engineering-Team-1.github.io/Back-End-2025Team1/index.html)
 
 ## Setup Instructions for running Back-End tests locally
 
