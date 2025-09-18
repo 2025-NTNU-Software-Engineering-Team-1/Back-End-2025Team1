@@ -51,7 +51,7 @@ jobs:
           docker build \
             --target production \
             -t "${IMAGE_URI}:${IMAGE_TAG}" \
-            Back-End
+            .
 
       - name: Push commit/tag image
         run: docker push "${IMAGE_URI}:${IMAGE_TAG}"
