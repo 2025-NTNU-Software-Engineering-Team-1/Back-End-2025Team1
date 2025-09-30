@@ -139,6 +139,7 @@ class User(Document):
         ADMIN = 0
         TEACHER = 1
         STUDENT = 2
+        TA = 3 # Teacher Assistant
 
     username = StringField(max_length=16, required=True, primary_key=True)
     user_id = StringField(db_field='userId', max_length=24, required=True)
@@ -493,3 +494,51 @@ class LoginRecords(Document):
     ip_addr = StringField(required=True)
     success = BooleanField(required=True, default=False)
     timestamp = DateTimeField(required=True, default=datetime.now)
+
+
+class PersonalAccessToken(Document):
+    """
+    Personal Access Token (PAT) Document.
+    Collection name: 'personal_access_tokens'
+    """
+    
+    meta = {
+        'collection': 'personal_access_tokens',
+        'indexes': [
+            'owner',        # Index for querying the owner's tokens
+            '-created_time', # Index for sorting by creation time (descending)
+            'due_time',      # Index for sorting by expiration time
+            'hash',         # Index for quick hash lookup
+        ]
+    }
+    
+    # === Core Attributes ===
+    
+    # PAT ID (Primary Key)
+    pat_id = StringField(max_length=64, required=True, primary_key=True, db_field='id')
+    
+    # PAT Hash Value (SHA-256)
+    hash = StringField(max_length=64, required=True, db_field='hash')
+    
+    # PAT Name
+    name = StringField(max_length=128, required=True, db_field='name')
+    
+    # User ID or username who owns the PAT
+    owner = StringField(required=True)
+    
+    # Allowed permissions/scopes (e.g., "read:user, write:post")
+    scope = ListField(StringField(), required=True, default=list, db_field='scope')
+    
+    # === Time and Usage Tracking ===
+    
+    # The expiration time of the PAT
+    due_time = DateTimeField(required=True, db_field='dueTime')
+    
+    # The time the PAT was created
+    created_time = DateTimeField(default=datetime.utcnow, required=True, db_field='createdTime')
+    
+    # The last time the PAT was used (Optional)
+    last_used_time = DateTimeField(required=False, db_field='lastUsedTime')
+    
+    # The scope used during the last access (Optional)
+    last_used_scope = ListField(StringField(), required=False, db_field='lastUsedScope', default=list)

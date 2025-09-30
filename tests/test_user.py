@@ -127,7 +127,7 @@ def test_non_admin_cannot_read_user_list(
 def test_read_user_list_with_role(forge_client):
     client = forge_client('first_admin')
 
-    expected = [(0, 1), (1, 0), (2, 0)]
+    expected = [(0, 1), (1, 0), (2, 0), (3, 0)]
     for role, count in expected:
         rv, rv_json, rv_data = BaseTester.request(client, 'get',
                                                   f'/user?role={role}')
@@ -136,8 +136,9 @@ def test_read_user_list_with_role(forge_client):
 
     utils.user.create_user_many(3, role=1)
     utils.user.create_user_many(5, role=2)
+    utils.user.create_user_many(2, role=3)  # Role: TA
 
-    expected = [(0, 1), (1, 3), (2, 5)]
+    expected = [(0, 1), (1, 3), (2, 5), (3, 2)]
     for role, count in expected:
         rv, rv_json, rv_data = BaseTester.request(client, 'get',
                                                   f'/user?role={role}')
@@ -329,6 +330,7 @@ def test_client_can_make_cors_preflight_request(client):
 def test_user_summary(forge_client):
     utils.user.create_user_many(3, role=engine.User.Role.STUDENT)
     utils.user.create_user_many(2, role=engine.User.Role.TEACHER)
+    utils.user.create_user_many(2, role=engine.User.Role.TA)
 
     client = forge_client('first_admin')
     rv, rv_json, _ = BaseTester.request(client, 'get', '/user/summary')
@@ -337,8 +339,8 @@ def test_user_summary(forge_client):
 
     rv_json = rv_json['data']
     assert rv_json[
-        'userCount'] == 6, rv_json  # 3 students + 2 teachers + 1 admin
-    assert len(rv_json['breakdown']) == 3, rv_json
+        'userCount'] == 8, rv_json  # 3 students + 2 teachers + 1 admin + 2 TAs
+    assert len(rv_json['breakdown']) == 4, rv_json  # student, teacher, admin, ta
 
     breakdown = sorted(rv_json['breakdown'], key=lambda x: x['role'])
     expected_breakdown = sorted([
@@ -348,6 +350,10 @@ def test_user_summary(forge_client):
         },
         {
             'role': 'teacher',
+            'count': 2
+        },
+        {
+            'role': 'ta',
             'count': 2
         },
         {
