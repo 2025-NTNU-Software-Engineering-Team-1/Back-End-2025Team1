@@ -4,7 +4,7 @@ import mongoengine
 import os
 import html
 from enum import IntEnum
-from datetime import datetime
+from datetime import datetime, timezone
 from zipfile import ZipFile, BadZipFile
 
 __all__ = [*mongoengine.__all__]
@@ -514,43 +514,21 @@ class PersonalAccessToken(Document):
     
     # === Core Attributes ===
     
-    # PAT ID (Primary Key)
-    pat_id = StringField(max_length=64, required=True, primary_key=True, db_field='id')
-    
-    # PAT Hash Value (SHA-256)
-    hash = StringField(max_length=64, required=True, db_field='hash')
-    
-    # PAT Name
-    name = StringField(max_length=128, required=True, db_field='name')
-    
-    # User ID or username who owns the PAT
-    owner = StringField(required=True)
-    
-    # Allowed permissions/scopes (e.g., "read:user, write:post")
-    scope = ListField(StringField(), required=True, default=list, db_field='scope')
+    pat_id = StringField(max_length=64, required=True, primary_key=True, db_field='id')     # PAT ID (Primary Key)
+    hash = StringField(max_length=64, required=True, db_field='hash')                       # PAT Hash Value (SHA-256)
+    name = StringField(max_length=128, required=True, db_field='name')                      # PAT Name
+    owner = StringField(required=True)                                                      # User ID or username who owns the PAT
+    scope = ListField(StringField(), required=True, default=list, db_field='scope')     
     
     # === Time and Usage Tracking ===
-    
-    # The expiration time of the PAT
-    due_time = DateTimeField(required=True, db_field='dueTime')
-    
-    # The time the PAT was created
-    created_time = DateTimeField(default=datetime.utcnow, required=True, db_field='createdTime')
-    
-    # The last time the PAT was used (Optional)
-    last_used_time = DateTimeField(required=False, db_field='lastUsedTime')
-    
-    # The scope used during the last access (Optional)
-    last_used_scope = ListField(StringField(), required=False, db_field='lastUsedScope', default=list)
+    due_time = DateTimeField(required=True, db_field='dueTime')                                     # The expiration time of the PAT
+    created_time = DateTimeField(default=datetime.now(timezone.utc), required=True, db_field='createdTime')    # The time the PAT was created
+    last_used_time = DateTimeField(required=False, db_field='lastUsedTime')                         # The last time the PAT was used (Optional)
+    last_used_scope = ListField(StringField(), required=False, db_field='lastUsedScope', default=list)  # The scope used during the last access (Optional)
 
-    # Revoked status by admin, cannot be changed by user
-    is_revoked = BooleanField(default=False)
+    # === Revoke ===
+    is_revoked = BooleanField(default=False)    # Revoked status by admin, cannot be changed by user
+    revoked_by = StringField(required=False)    # Record who revoked the token (admin user ID)
+    revoked_time = DateTimeField(required=False)# Record the time of revocation
 
-    # Record who revoked the token (admin user ID)
-    revoked_by = StringField(required=False)
-
-    # Record the time of revocation
-    revoked_time = DateTimeField(required=False)
-
-    # Record the purpose of the token (Optional)
-    description = StringField(required=False, max_length=256)
+    description = StringField(required=False, max_length=256)   # Record the purpose of the token (Optional)
