@@ -35,6 +35,7 @@ STUDENT_SCOPES = [
 ]
 ROLE_SCOPE_MAP[Role.STUDENT] = STUDENT_SCOPES
 
+# Teacher Assistant Scopes
 TA_SCOPES = [
     *STUDENT_SCOPES,        # Inherits all STUDENT privileges
     'write:submissions',    # Create and modify submissions
