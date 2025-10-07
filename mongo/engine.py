@@ -542,3 +542,15 @@ class PersonalAccessToken(Document):
     
     # The scope used during the last access (Optional)
     last_used_scope = ListField(StringField(), required=False, db_field='lastUsedScope', default=list)
+
+    # Revoked status by admin, cannot be changed by user
+    is_revoked = BooleanField(default=False)
+
+    # Record who revoked the token (admin user ID)
+    revoked_by = StringField(required=False)
+
+    # Record the time of revocation
+    revoked_time = DateTimeField(required=False)
+
+    # Record the purpose of the token (Optional)
+    description = StringField(required=False, max_length=256)
