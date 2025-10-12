@@ -521,7 +521,7 @@ class PersonalAccessToken(Document):
     scope = ListField(StringField(), required=True, default=list, db_field='scope')     
     
     # === Time and Usage Tracking ===
-    due_time = DateTimeField(required=True, db_field='dueTime')                                     # The expiration time of the PAT
+    due_time = DateTimeField(required=False, db_field='dueTime')                                     # The expiration time of the PAT
     created_time = DateTimeField(default=datetime.now(timezone.utc), required=True, db_field='createdTime')    # The time the PAT was created
     last_used_time = DateTimeField(required=False, db_field='lastUsedTime')                         # The last time the PAT was used (Optional)
     last_used_scope = ListField(StringField(), required=False, db_field='lastUsedScope', default=list)  # The scope used during the last access (Optional)
