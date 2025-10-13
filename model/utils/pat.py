@@ -13,7 +13,7 @@ def hash_pat_token(pat_token: str) -> str:
 def get_pat_status(pat_obj):
     """判斷 PAT token 的狀態"""
     if pat_obj.is_revoked:
-        return "revoked"
+        return "deactivated" # When revoked by Admin
 
     if pat_obj.due_time:
         # Ensure both datetimes have timezone info for comparison
@@ -22,7 +22,7 @@ def get_pat_status(pat_obj):
         if due_time.tzinfo is None:
             due_time = due_time.replace(tzinfo=timezone.utc)
         if now > due_time:
-            return "expired"
+            return "due"
 
     return "active"
 
