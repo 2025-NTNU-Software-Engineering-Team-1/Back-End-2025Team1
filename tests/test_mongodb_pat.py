@@ -1,8 +1,7 @@
 import pytest
 from datetime import datetime, timezone, timedelta
 from mongo.engine import PersonalAccessToken
-from model.profile import _clean_token, get_pat_status
-from model.utils.pat import hash_pat_token
+from model.utils.pat import hash_pat_token,_clean_token, get_pat_status
 
 def test_mongodb_pat_integration():
     """Test basic PAT functionality with MongoDB"""

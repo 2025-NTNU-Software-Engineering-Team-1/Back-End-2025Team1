@@ -3,11 +3,8 @@ import json
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock
 from tests.base_tester import BaseTester
-from model.profile import (
-    _clean_token,
-    profile_api
-)
-from model.utils.pat import hash_pat_token
+from model.profile import profile_api
+from model.utils.pat import hash_pat_token, _clean_token
 from mongo.engine import PersonalAccessToken
 class TestPATHelpers:
     """Test helper functions that don't require Flask context"""
@@ -238,7 +235,11 @@ class TestPATRoutes(BaseTester):
         rv = client_student.patch(f'/profile/api_token/deactivate/{pat_id}')
         json_data = rv.get_json()
         
-        assert rv.status_code == 200
+        error_data = json_data.get('data', {})
+        
+        backend_message = error_data.get('Message', '後端未提供詳細錯誤訊息')
+        
+        assert rv.status_code == 200, f"\nBack-End error: {backend_message}"
         assert json_data['status'] == 'ok'
         assert json_data['message'] == 'Token revoked'
         

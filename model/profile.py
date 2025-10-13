@@ -1,137 +1,79 @@
 from flask import Blueprint
-from datetime import datetime, timezone, timedelta
-import secrets
-import hmac
-import hashlib
-from uuid import uuid4
-from copy import deepcopy
+from datetime import datetime, timezone
+from mongoengine import ValidationError
 
 from mongo import *
+from mongo.engine import PersonalAccessToken
 from .auth import *
 from .utils import *
 from .utils.pat import hash_pat_token
 
-__all__ = ["profile_api"]
+__all__ = ['profile_api']
 
-profile_api = Blueprint("profile_api", __name__)
+profile_api = Blueprint('profile_api', __name__)
 
 
-@profile_api.route("/", methods=["GET"])
-@profile_api.route("/<username>", methods=["GET"])
+@profile_api.route('/', methods=['GET'])
+@profile_api.route('/<username>', methods=['GET'])
 @login_required
 def view_profile(user, username=None):
     user = user if username is None else User(username)
     if not user:
-        return HTTPError("Profile not exist.", 404)
+        return HTTPError('Profile not exist.', 404)
 
     data = {
-        "email": user.obj.email,
-        "displayedName": user.obj.profile.displayed_name,
-        "bio": user.obj.profile.bio,
+        'email': user.obj.email,
+        'displayedName': user.obj.profile.displayed_name,
+        'bio': user.obj.profile.bio
     }
     data.update(user.info)
 
-    return HTTPResponse("Profile exist.", data=data)
+    return HTTPResponse('Profile exist.', data=data)
 
 
-@profile_api.route("/", methods=["POST"])
+@profile_api.route('/', methods=['POST'])
 @login_required
-@Request.json("bio", vars_dict={"displayed_name": "displayedName"})
+@Request.json('bio', vars_dict={'displayed_name': 'displayedName'})
 def edit_profile(user, displayed_name, bio):
     profile = user.obj.profile or {}
 
     if displayed_name is not None:
-        profile["displayed_name"] = (
-            displayed_name if displayed_name != "" else user.username
-        )
+        profile[
+            'displayed_name'] = displayed_name if displayed_name != "" else user.username
     if bio is not None:
-        profile["bio"] = bio
+        profile['bio'] = bio
 
     user.obj.update(profile=profile)
 
-    cookies = {"jwt": user.cookie}
-    return HTTPResponse("Uploaded.", cookies=cookies)
+    cookies = {'jwt': user.cookie}
+    return HTTPResponse('Uploaded.', cookies=cookies)
 
 
-@profile_api.route("/config", methods=["PUT"])
+@profile_api.route('/config', methods=['PUT'])
 @login_required
-@Request.json("font_size", "theme", "indent_type", "tab_size", "language")
+@Request.json('font_size', 'theme', 'indent_type', 'tab_size', 'language')
 def edit_config(user, font_size, theme, indent_type, tab_size, language):
     try:
         config = {
-            "font_size": font_size,
-            "theme": theme,
-            "indent_type": indent_type,
-            "tab_size": tab_size,
-            "language": language,
+            'font_size': font_size,
+            'theme': theme,
+            'indent_type': indent_type,
+            'tab_size': tab_size,
+            'language': language
         }
         user.obj.update(editor_config=config)
     except ValidationError as ve:
-        return HTTPError("Update fail.", 400, data=ve.to_dict())
+        return HTTPError('Update fail.', 400, data=ve.to_dict())
     user.reload()
-    cookies = {"jwt": user.cookie}
-    return HTTPResponse("Uploaded.", cookies=cookies)
+    cookies = {'jwt': user.cookie}
+    return HTTPResponse('Uploaded.', cookies=cookies)
 
 
 # ======================== pat ========================
+from model.utils.pat import (add_pat_to_database, _clean_token)
 
-# Personal Access Token functionality
-from mongo.engine import PersonalAccessToken
-
-
-# ======================== Helper Functions ========================
-def get_pat_status(pat_obj):
-    """判斷 PAT token 的狀態"""
-    if pat_obj.is_revoked:
-        return "revoked"
-
-    if pat_obj.due_time:
-        # Ensure both datetimes have timezone info for comparison
-        now = datetime.now(timezone.utc)
-        due_time = pat_obj.due_time
-        if due_time.tzinfo is None:
-            due_time = due_time.replace(tzinfo=timezone.utc)
-        if now > due_time:
-            return "expired"
-
-    return "active"
-
-
-def add_pat_to_database(pat_id, name, owner, hash_val, scope=None, due_time=None):
-    """在資料庫中新增 PAT token"""
-    try:
-        pat = PersonalAccessToken(
-            pat_id=pat_id,
-            name=name or "",
-            owner=owner,
-            hash=hash_val,
-            scope=scope or [],
-            due_time=due_time,
-            created_time=datetime.now(timezone.utc),
-            is_revoked=False,
-        )
-        pat.save()
-        return pat
-    except Exception as e:
-        raise Exception(f"Failed to save PAT to database: {str(e)}")
-
-
-def _clean_token(pat_obj):
-    """Convert PersonalAccessToken MongoDB object to API response format"""
-    status = get_pat_status(pat_obj)
-    return {
-        "Name": pat_obj.name,
-        "ID": pat_obj.pat_id,
-        "Owner": pat_obj.owner,
-        "Status": [status.capitalize()],  # 'Active', 'Expired', 'Revoked'
-        "Created": pat_obj.created_time.isoformat() if pat_obj.created_time else None,
-        "Due_Time": pat_obj.due_time.isoformat() if pat_obj.due_time else None,
-        "Last_Used": (
-            pat_obj.last_used_time.isoformat() if pat_obj.last_used_time else None
-        ),
-        "Scope": pat_obj.scope or [],
-    }
-
+import secrets
+from uuid import uuid4
 
 @profile_api.route("/api_token", methods=["GET"])
 @login_required
@@ -287,3 +229,5 @@ def deactivate_token(user, pat_id):
             500,
             data={"Type": "ERR", "Message": f"Database error: {str(e)}"},
         )
+
+# ======================== pat ends ========================
