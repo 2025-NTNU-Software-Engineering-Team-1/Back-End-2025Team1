@@ -52,7 +52,7 @@ def _clean_token(pat_obj):
         "Name": pat_obj.name,
         "ID": pat_obj.pat_id,
         "Owner": pat_obj.owner,
-        "Status": [status.capitalize()],  # 'Active', 'Expired', 'Revoked'
+        "Status": status.capitalize(),  # 'Active', 'Expired', 'Revoked'
         "Created": pat_obj.created_time.isoformat() if pat_obj.created_time else None,
         "Due_Time": pat_obj.due_time.isoformat() if pat_obj.due_time else None,
         "Last_Used": (
