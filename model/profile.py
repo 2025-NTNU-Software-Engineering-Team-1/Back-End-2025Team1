@@ -4,6 +4,7 @@ from mongoengine import ValidationError
 
 from mongo import *
 from mongo.engine import PersonalAccessToken
+from mongo.user import ROLE_SCOPE_MAP
 from .auth import *
 from .utils import *
 from .utils.pat import hash_pat_token
@@ -88,11 +89,8 @@ def get_tokens(user):
 @profile_api.route("/api_token/getscope", methods=["GET"])
 @login_required
 def get_scope(user):
-    scopes = set()
-    pat_objects = PersonalAccessToken.objects(owner=user.username)
-    for pat in pat_objects:
-        for s in pat.scope:
-            scopes.add(s)
+    user_role_key = user.role.value if hasattr(user.role, 'value') else user.role
+    scopes = ROLE_SCOPE_MAP.get(user_role_key, [])
     return HTTPResponse("OK", data={"Scope": list(scopes)})
 
 
