@@ -15,12 +15,13 @@ MONGO_HOST = os.environ.get('MONGO_HOST', 'mongomock://localhost')
 if MONGO_HOST.startswith('mongomock'):
     import mongomock
     MONGO_HOST = MONGO_HOST.replace('mongomock', 'mongodb')
-    connect('normal-oj',
-            host=MONGO_HOST,
-            mongo_client_class=mongomock.MongoClient,
-            uuidRepresentation='standard')
+    connect(
+        'normal-oj',
+        host=MONGO_HOST,
+        mongo_client_class=mongomock.MongoClient,
+    )
 else:
-    connect('normal-oj', host=MONGO_HOST, uuidRepresentation='standard')
+    connect('normal-oj', host=MONGO_HOST)
 
 
 def handler(event):
