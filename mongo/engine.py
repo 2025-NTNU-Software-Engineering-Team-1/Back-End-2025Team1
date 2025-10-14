@@ -139,7 +139,7 @@ class User(Document):
         ADMIN = 0
         TEACHER = 1
         STUDENT = 2
-        TA = 3 # Teacher Assistant
+        TA = 3  # Teacher Assistant
 
     username = StringField(max_length=16, required=True, primary_key=True)
     user_id = StringField(db_field='userId', max_length=24, required=True)
@@ -501,34 +501,56 @@ class PersonalAccessToken(Document):
     Personal Access Token (PAT) Document.
     Collection name: 'personal_access_tokens'
     """
-    
+
     meta = {
-        'collection': 'personal_access_tokens',
+        'collection':
+        'personal_access_tokens',
         'indexes': [
-            'owner',        # Index for querying the owner's tokens
-            '-created_time', # Index for sorting by creation time (descending)
-            'due_time',      # Index for sorting by expiration time
-            'hash',         # Index for quick hash lookup
+            'owner',  # Index for querying the owner's tokens
+            '-created_time',  # Index for sorting by creation time (descending)
+            'due_time',  # Index for sorting by expiration time
+            'hash',  # Index for quick hash lookup
         ]
     }
-    
+
     # === Core Attributes ===
-    
-    pat_id = StringField(max_length=64, required=True, primary_key=True, db_field='id')     # PAT ID (Primary Key)
-    hash = StringField(max_length=64, required=True, db_field='hash')                       # PAT Hash Value (SHA-256)
-    name = StringField(max_length=128, required=True, db_field='name')                      # PAT Name
-    owner = StringField(required=True)                                                      # User ID or username who owns the PAT
-    scope = ListField(StringField(), required=True, default=list, db_field='scope')     
-    
+
+    pat_id = StringField(max_length=64,
+                         required=True,
+                         primary_key=True,
+                         db_field='id')  # PAT ID (Primary Key)
+    hash = StringField(max_length=64, required=True,
+                       db_field='hash')  # PAT Hash Value (SHA-256)
+    name = StringField(max_length=128, required=True,
+                       db_field='name')  # PAT Name
+    owner = StringField(required=True)  # User ID or username who owns the PAT
+    scope = ListField(StringField(),
+                      required=True,
+                      default=list,
+                      db_field='scope')
+
     # === Time and Usage Tracking ===
-    due_time = DateTimeField(required=False, db_field='dueTime')                                     # The expiration time of the PAT
-    created_time = DateTimeField(default=datetime.now(timezone.utc), required=True, db_field='createdTime')    # The time the PAT was created
-    last_used_time = DateTimeField(required=False, db_field='lastUsedTime')                         # The last time the PAT was used (Optional)
-    last_used_scope = ListField(StringField(), required=False, db_field='lastUsedScope', default=list)  # The scope used during the last access (Optional)
+    due_time = DateTimeField(
+        required=False, db_field='dueTime')  # The expiration time of the PAT
+    created_time = DateTimeField(
+        default=datetime.now(timezone.utc),
+        required=True,
+        db_field='createdTime')  # The time the PAT was created
+    last_used_time = DateTimeField(
+        required=False,
+        db_field='lastUsedTime')  # The last time the PAT was used (Optional)
+    last_used_scope = ListField(
+        StringField(), required=False, db_field='lastUsedScope',
+        default=list)  # The scope used during the last access (Optional)
 
     # === Revoke ===
-    is_revoked = BooleanField(default=False)    # Revoked status by admin, cannot be changed by user
-    revoked_by = StringField(required=False)    # Record who revoked the token (admin user ID)
-    revoked_time = DateTimeField(required=False)# Record the time of revocation
+    is_revoked = BooleanField(
+        default=False)  # Revoked status by admin, cannot be changed by user
+    revoked_by = StringField(
+        required=False)  # Record who revoked the token (admin user ID)
+    revoked_time = DateTimeField(
+        required=False)  # Record the time of revocation
 
-    description = StringField(required=False, max_length=256)   # Record the purpose of the token (Optional)
+    description = StringField(
+        required=False,
+        max_length=256)  # Record the purpose of the token (Optional)

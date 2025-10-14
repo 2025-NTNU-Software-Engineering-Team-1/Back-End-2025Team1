@@ -6,6 +6,7 @@ from typing import Any, Dict, List, TYPE_CHECKING, Optional
 from . import engine, course
 from .utils import *
 from .base import *
+
 Role = engine.User.Role
 
 import hashlib
@@ -37,29 +38,29 @@ ROLE_SCOPE_MAP[Role.STUDENT] = STUDENT_SCOPES
 
 # Teacher Assistant Scopes
 TA_SCOPES = [
-    *STUDENT_SCOPES,        # Inherits all STUDENT privileges
-    'write:submissions',    # Create and modify submissions
-    'read:submissions:all', # Read all submissions (required for grading)
+    *STUDENT_SCOPES,  # Inherits all STUDENT privileges
+    'write:submissions',  # Create and modify submissions
+    'read:submissions:all',  # Read all submissions (required for grading)
 ]
 ROLE_SCOPE_MAP[Role.TA] = TA_SCOPES
 
 # Teacher/Advanced User Scopes
 TEACHER_SCOPES = [
-    *STUDENT_SCOPES,        # Inherits all STUDENT privileges
-    'write:courses',        # Create and modify courses
-    'write:problems',       # Create and modify problems
-    'read:submissions:all', # Read all student submissions (required for grading)
-    'grade:submissions',    # Perform grading operation (non-CRUD action)
+    *STUDENT_SCOPES,  # Inherits all STUDENT privileges
+    'write:courses',  # Create and modify courses
+    'write:problems',  # Create and modify problems
+    'read:submissions:all',  # Read all student submissions (required for grading)
+    'grade:submissions',  # Perform grading operation (non-CRUD action)
 ]
 ROLE_SCOPE_MAP[Role.TEACHER] = TEACHER_SCOPES
 
 # System Administrator Scopes
 ADMIN_SCOPES = [
-    *TEACHER_SCOPES,        # Inherits all TEACHER privileges
-    'read:user:all',        # Read all user information in the system
-    'write:user:all',       # Modify any user's information (including roles)
-    'revoke:pat:all',       # Ability to revoke any user's PAT Token (for deactivation)
-    'admin:system',         # Access to system configuration and maintenance APIs
+    *TEACHER_SCOPES,  # Inherits all TEACHER privileges
+    'read:user:all',  # Read all user information in the system
+    'write:user:all',  # Modify any user's information (including roles)
+    'revoke:pat:all',  # Ability to revoke any user's PAT Token (for deactivation)
+    'admin:system',  # Access to system configuration and maintenance APIs
 ]
 ROLE_SCOPE_MAP[Role.ADMIN] = ADMIN_SCOPES
 

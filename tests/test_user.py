@@ -340,7 +340,8 @@ def test_user_summary(forge_client):
     rv_json = rv_json['data']
     assert rv_json[
         'userCount'] == 8, rv_json  # 3 students + 2 teachers + 1 admin + 2 TAs
-    assert len(rv_json['breakdown']) == 4, rv_json  # student, teacher, admin, ta
+    assert len(
+        rv_json['breakdown']) == 4, rv_json  # student, teacher, admin, ta
 
     breakdown = sorted(rv_json['breakdown'], key=lambda x: x['role'])
     expected_breakdown = sorted([

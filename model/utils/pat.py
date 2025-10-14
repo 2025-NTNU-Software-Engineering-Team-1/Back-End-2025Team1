@@ -6,14 +6,16 @@ import hashlib
 from datetime import datetime, timezone, timedelta
 from mongo.engine import PersonalAccessToken
 
+
 def hash_pat_token(pat_token: str) -> str:
     """Computes SHA-256 hash for the Personal Access Token."""
     return hashlib.sha256(pat_token.encode('utf-8')).hexdigest()
 
+
 def get_pat_status(pat_obj):
     """判斷 PAT token 的狀態"""
     if pat_obj.is_revoked:
-        return "deactivated" # When revoked by Admin
+        return "deactivated"  # When revoked by Admin
 
     if pat_obj.due_time:
         # Ensure both datetimes have timezone info for comparison
@@ -27,7 +29,12 @@ def get_pat_status(pat_obj):
     return "active"
 
 
-def add_pat_to_database(pat_id, name, owner, hash_val, scope=None, due_time=None):
+def add_pat_to_database(pat_id,
+                        name,
+                        owner,
+                        hash_val,
+                        scope=None,
+                        due_time=None):
     """在資料庫中新增 PAT token"""
     try:
         pat = PersonalAccessToken(
@@ -44,19 +51,26 @@ def add_pat_to_database(pat_id, name, owner, hash_val, scope=None, due_time=None
         return pat
     except Exception as e:
         raise Exception(f"Failed to save PAT to database: {str(e)}")
-    
+
+
 def _clean_token(pat_obj):
     """Convert PersonalAccessToken MongoDB object to API response format"""
     status = get_pat_status(pat_obj)
     return {
-        "Name": pat_obj.name,
-        "ID": pat_obj.pat_id,
-        "Owner": pat_obj.owner,
-        "Status": status.capitalize(),  # 'Active', 'Expired', 'Revoked'
-        "Created": pat_obj.created_time.isoformat() if pat_obj.created_time else None,
-        "Due_Time": pat_obj.due_time.isoformat() if pat_obj.due_time else None,
-        "Last_Used": (
-            pat_obj.last_used_time.isoformat() if pat_obj.last_used_time else None
-        ),
-        "Scope": pat_obj.scope or [],
+        "Name":
+        pat_obj.name,
+        "ID":
+        pat_obj.pat_id,
+        "Owner":
+        pat_obj.owner,
+        "Status":
+        status.capitalize(),  # 'Active', 'Expired', 'Revoked'
+        "Created":
+        pat_obj.created_time.isoformat() if pat_obj.created_time else None,
+        "Due_Time":
+        pat_obj.due_time.isoformat() if pat_obj.due_time else None,
+        "Last_Used": (pat_obj.last_used_time.isoformat()
+                      if pat_obj.last_used_time else None),
+        "Scope":
+        pat_obj.scope or [],
     }

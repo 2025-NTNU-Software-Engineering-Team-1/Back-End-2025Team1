@@ -76,6 +76,7 @@ from model.utils.pat import (add_pat_to_database, _clean_token)
 import secrets
 from uuid import uuid4
 
+
 @profile_api.route("/api_token", methods=["GET"])
 @login_required
 def get_tokens(user):
@@ -89,7 +90,8 @@ def get_tokens(user):
 @profile_api.route("/api_token/getscope", methods=["GET"])
 @login_required
 def get_scope(user):
-    user_role_key = user.role.value if hasattr(user.role, 'value') else user.role
+    user_role_key = user.role.value if hasattr(user.role,
+                                               'value') else user.role
     scopes = ROLE_SCOPE_MAP.get(user_role_key, [])
     return HTTPResponse("OK", data={"Scope": list(scopes)})
 
@@ -108,7 +110,8 @@ def create_token(user, Name, Due_Time, Scope):
     due_time_obj = None
     if Due_Time:
         try:
-            due_time_obj = datetime.fromisoformat(Due_Time.replace("Z", "+00:00"))
+            due_time_obj = datetime.fromisoformat(
+                Due_Time.replace("Z", "+00:00"))
         except (ValueError, AttributeError):
             due_time_obj = None  # Invalid format defaults to no expiration
 
@@ -125,13 +128,20 @@ def create_token(user, Name, Due_Time, Scope):
 
         return HTTPResponse(
             "Token Created",
-            data={"Type": "OK", "Message": "Token Created", "Token": presented_token},
+            data={
+                "Type": "OK",
+                "Message": "Token Created",
+                "Token": presented_token
+            },
         )
     except Exception as e:
         return HTTPError(
             "Failed to create token",
             500,
-            data={"Type": "ERR", "Message": f"Database error: {str(e)}"},
+            data={
+                "Type": "ERR",
+                "Message": f"Database error: {str(e)}"
+            },
         )
 
 
@@ -140,21 +150,30 @@ def create_token(user, Name, Due_Time, Scope):
 @Request.json("data")
 def edit_token(user, pat_id, data):
     if not data:
-        return HTTPError(
-            "No data provided", 400, data={"Type": "ERR", "Message": "No data provided"}
-        )
+        return HTTPError("No data provided",
+                         400,
+                         data={
+                             "Type": "ERR",
+                             "Message": "No data provided"
+                         })
 
     try:
         pat = PersonalAccessToken.objects.get(pat_id=pat_id)
     except PersonalAccessToken.DoesNotExist:
-        return HTTPError(
-            "Token not found", 404, data={"Type": "ERR", "Message": "Token not found"}
-        )
+        return HTTPError("Token not found",
+                         404,
+                         data={
+                             "Type": "ERR",
+                             "Message": "Token not found"
+                         })
 
     if pat.owner != user.username:
-        return HTTPError(
-            "Not token owner", 403, data={"Type": "ERR", "Message": "Not token owner"}
-        )
+        return HTTPError("Not token owner",
+                         403,
+                         data={
+                             "Type": "ERR",
+                             "Message": "Not token owner"
+                         })
 
     # Update fields if provided
     update_data = {}
@@ -164,29 +183,36 @@ def edit_token(user, pat_id, data):
         try:
             if data["Due_Time"]:
                 update_data["due_time"] = datetime.fromisoformat(
-                    data["Due_Time"].replace("Z", "+00:00")
-                )
+                    data["Due_Time"].replace("Z", "+00:00"))
             else:
                 update_data["due_time"] = None
         except (ValueError, AttributeError):
             return HTTPError(
                 "Invalid Due_Time format",
                 400,
-                data={"Type": "ERR", "Message": "Invalid Due_Time format"},
+                data={
+                    "Type": "ERR",
+                    "Message": "Invalid Due_Time format"
+                },
             )
     if "Scope" in data:
         update_data["scope"] = list(data["Scope"])
 
     try:
         pat.update(**update_data)
-        return HTTPResponse(
-            "Token updated", data={"Type": "OK", "Message": "Token updated"}
-        )
+        return HTTPResponse("Token updated",
+                            data={
+                                "Type": "OK",
+                                "Message": "Token updated"
+                            })
     except Exception as e:
         return HTTPError(
             "Failed to update token",
             500,
-            data={"Type": "ERR", "Message": f"Database error: {str(e)}"},
+            data={
+                "Type": "ERR",
+                "Message": f"Database error: {str(e)}"
+            },
         )
 
 
@@ -196,20 +222,29 @@ def deactivate_token(user, pat_id):
     try:
         pat = PersonalAccessToken.objects.get(pat_id=pat_id)
     except PersonalAccessToken.DoesNotExist:
-        return HTTPError(
-            "Token not found", 404, data={"Type": "ERR", "Message": "Token not found"}
-        )
+        return HTTPError("Token not found",
+                         404,
+                         data={
+                             "Type": "ERR",
+                             "Message": "Token not found"
+                         })
 
     if pat.owner != user.username:
-        return HTTPError(
-            "Not token owner", 403, data={"Type": "ERR", "Message": "Not token owner"}
-        )
+        return HTTPError("Not token owner",
+                         403,
+                         data={
+                             "Type": "ERR",
+                             "Message": "Not token owner"
+                         })
 
     if pat.is_revoked:
         return HTTPError(
             "Token already revoked",
             400,
-            data={"Type": "ERR", "Message": "Token already revoked"},
+            data={
+                "Type": "ERR",
+                "Message": "Token already revoked"
+            },
         )
 
     try:
@@ -218,14 +253,20 @@ def deactivate_token(user, pat_id):
             revoked_by=user.username,
             revoked_time=datetime.now(timezone.utc),
         )
-        return HTTPResponse(
-            "Token revoked", data={"Type": "OK", "Message": "Token revoked"}
-        )
+        return HTTPResponse("Token revoked",
+                            data={
+                                "Type": "OK",
+                                "Message": "Token revoked"
+                            })
     except Exception as e:
         return HTTPError(
             "Failed to revoke token",
             500,
-            data={"Type": "ERR", "Message": f"Database error: {str(e)}"},
+            data={
+                "Type": "ERR",
+                "Message": f"Database error: {str(e)}"
+            },
         )
+
 
 # ======================== pat ends ========================

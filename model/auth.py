@@ -92,65 +92,75 @@ def get_verify_link(user: User) -> str:
         _external=True,
         token=user.cookie,
     )
-    
+
+
 def pat_required(*required_scopes: str) -> Callable[[Callable], Callable]:
     '''
     PAT authentication decorator. Requires Authorization: Bearer <token> in header.
     Performs validation, expiration, revocation (401), and scope checks (403).
     '''
+
     def verify(func: Callable) -> Callable:
+
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            
+
             # 1. Parse Header: Authorization: Bearer <token>
             auth_header = request.headers.get('Authorization')
-            if not auth_header or not auth_header.lower().startswith('bearer '):
-                return HTTPError('Authentication Required: Bearer token is missing', 401)
-                
+            if not auth_header or not auth_header.lower().startswith(
+                    'bearer '):
+                return HTTPError(
+                    'Authentication Required: Bearer token is missing', 401)
+
             pat_token = auth_header.split(' ', 1)[1]
-            
+
             # 2. Hash Calculation and DB Lookup
             token_hash = hash_pat_token(pat_token)
-            
+
             try:
-                pat_record = engine.PersonalAccessToken.objects.get(hash=token_hash)
+                pat_record = engine.PersonalAccessToken.objects.get(
+                    hash=token_hash)
             except engine.DoesNotExist:
                 return HTTPError('Token Invalid or Not Found', 401)
-                
+
             # 3. Status Check: Manual Revocation
             if pat_record.is_revoked:
                 return HTTPError('Token has been manually revoked', 401)
-                
+
             # 4. Status Check: Automatic Expiration
-            if pat_record.due_time and datetime.now(timezone.utc) > pat_record.due_time:
+            if pat_record.due_time and datetime.now(
+                    timezone.utc) > pat_record.due_time:
                 return HTTPError('Token Expired', 401)
-                
+
             # 5. Scope Verification
             # Using set comparisons
-            token_scopes: Set[str] = set(pat_record.scope) 
+            token_scopes: Set[str] = set(pat_record.scope)
             required_set: Set[str] = set(required_scopes)
 
             if not required_set.issubset(token_scopes):
                 missing_scopes = ','.join(required_set - token_scopes)
-                return HTTPError(f'Insufficient Scopes Required: {missing_scopes}', 403)
-            
+                return HTTPError(
+                    f'Insufficient Scopes Required: {missing_scopes}', 403)
+
             # 6. Inject User Object
             try:
-                user: User = User.get_by_username(pat_record.owner) 
+                user: User = User.get_by_username(pat_record.owner)
             except engine.DoesNotExist:
-                return HTTPError('Token owner not found', 403) # Token is valid but owner does not exist
+                return HTTPError(
+                    'Token owner not found',
+                    403)  # Token is valid but owner does not exist
 
             kwargs['user'] = user
-            
+
             # 7. Update Usage Record
-            pat_record.modify(
-                last_used_time=datetime.now(timezone.utc), 
-                last_used_scope=list(required_set) 
-            )
+            pat_record.modify(last_used_time=datetime.now(timezone.utc),
+                              last_used_scope=list(required_set))
 
             # 8. Proceed to Original Function
             return func(*args, **kwargs)
+
         return wrapper
+
     return verify
 
 
