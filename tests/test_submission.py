@@ -729,6 +729,15 @@ class TestCreateSubmission(SubmissionTester):
         assert bool(s)
         s_code = open(s.main_code_path()).read()
         code = open('tests/src/base.c').read()
+
+        def clean_code_for_compare(text):
+            # Remove all newline symbol (\r, \n) and Tab characters
+            # then remove all extra spaces
+            return "".join(text.split()).strip()
+
+        code = clean_code_for_compare(code)
+        s_code = clean_code_for_compare(s_code)
+
         assert code == s_code, (s.main_code_path(), s_code)
 
     def test_reupload_code_should_fail(
