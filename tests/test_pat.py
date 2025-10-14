@@ -49,7 +49,7 @@ class TestPATHelpers:
         assert cleaned['Name'] == 'Test PAT'
         assert cleaned['ID'] == 'test_001'
         assert cleaned['Owner'] == 'test_user'
-        assert cleaned['Status'] == ['Active']
+        assert cleaned['Status'] == 'Active'
         assert cleaned['Scope'] == ['read', 'write']
         # Internal fields should not be present in mapping
         assert 'Hash' not in cleaned
@@ -60,13 +60,13 @@ class TestPATHelpers:
         # Test active token
         pat = PersonalAccessToken.objects.get(pat_id='test_001')
         cleaned = _clean_token(pat)
-        assert cleaned['Status'] == ['Active']
+        assert cleaned['Status'] == 'Active'
 
         # Test revoked token
         pat.update(is_revoked=True)
         pat.reload()
         cleaned = _clean_token(pat)
-        assert cleaned['Status'] == ['Revoked']
+        assert cleaned['Status'] == 'Deactivated'
 
     def test_api_token_store_manipulation(self):
         """Test PAT creation and listing via MongoDB"""
@@ -101,7 +101,7 @@ class TestPATHelpers:
 
         # Clean token mapping should reflect status change
         cleaned = _clean_token(pat)
-        assert cleaned['Status'] == ['Revoked']
+        assert cleaned['Status'] == 'Deactivated'
 
 
 class TestPATRoutes(BaseTester):
@@ -152,8 +152,9 @@ class TestPATRoutes(BaseTester):
         assert 'Scope' in json_data['data']
 
         scopes = json_data['data']['Scope']
-        assert 'read' in scopes
-        assert 'write' in scopes
+        assert 'read:user' in scopes
+        assert 'write:submissions' in scopes
+        assert 'read:problems' in scopes
 
     def test_create_token_endpoint(self, client_student):
         """Test POST /profile/api_token/create"""

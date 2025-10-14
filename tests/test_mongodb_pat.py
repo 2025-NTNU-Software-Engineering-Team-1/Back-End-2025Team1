@@ -12,11 +12,12 @@ def test_mongodb_pat_integration():
 
     # Test creating a PAT
     test_token = "noj_pat_test_secret"
+    SCOPES = ['read:user', 'read:problems', 'write:submissions']
     test_pat = PersonalAccessToken(pat_id='test_001',
                                    name='Test Token',
                                    owner='test_user',
                                    hash=hash_pat_token(test_token),
-                                   scope=['read', 'write'],
+                                   scope=SCOPES,
                                    due_time=datetime.now(timezone.utc) +
                                    timedelta(days=30),
                                    created_time=datetime.now(timezone.utc),
@@ -27,7 +28,7 @@ def test_mongodb_pat_integration():
     retrieved = PersonalAccessToken.objects.get(pat_id='test_001')
     assert retrieved.name == 'Test Token'
     assert retrieved.owner == 'test_user'
-    assert retrieved.scope == ['read', 'write']
+    assert retrieved.scope == SCOPES
     assert not retrieved.is_revoked
 
     # Test _clean_token function
@@ -35,14 +36,15 @@ def test_mongodb_pat_integration():
     assert cleaned['Name'] == 'Test Token'
     assert cleaned['ID'] == 'test_001'
     assert cleaned['Owner'] == 'test_user'
-    assert cleaned['Status'] == ['Active']
-    assert cleaned['Scope'] == ['read', 'write']
+    assert cleaned['Status'] == 'Active'
+    assert cleaned['Scope'] == SCOPES
 
     # Test updating PAT
-    retrieved.update(name='Updated Token', scope=['read'])
+    UPDATED_SCOPES = ['read:user']
+    retrieved.update(name='Updated Token', scope=UPDATED_SCOPES)
     updated = PersonalAccessToken.objects.get(pat_id='test_001')
     assert updated.name == 'Updated Token'
-    assert updated.scope == ['read']
+    assert updated.scope == UPDATED_SCOPES
 
     # Test revoking PAT
     updated.update(is_revoked=True, revoked_by='admin')
@@ -52,27 +54,28 @@ def test_mongodb_pat_integration():
 
     # Test _clean_token with revoked token
     cleaned_revoked = _clean_token(revoked)
-    assert cleaned_revoked['Status'] == ['Revoked']
+    assert cleaned_revoked['Status'] == 'Deactivated'
 
     # Test get_pat_status function directly
-    assert get_pat_status(revoked) == 'revoked'
+    assert get_pat_status(revoked) == 'deactivated'
 
     # Test expired token status
+    EXPIRED_SCOPES = ['read:courses']
     expired_pat = PersonalAccessToken(
         pat_id='test_002',
         name='Expired Token',
         owner='test_user',
         hash=hash_pat_token('noj_pat_expired'),
-        scope=['read'],
+        scope=EXPIRED_SCOPES,
         due_time=datetime.now(timezone.utc) -
         timedelta(days=1),  # Already expired
         created_time=datetime.now(timezone.utc),
         is_revoked=False)
     expired_pat.save()
 
-    assert get_pat_status(expired_pat) == 'expired'
+    assert get_pat_status(expired_pat) == 'due'
     cleaned_expired = _clean_token(expired_pat)
-    assert cleaned_expired['Status'] == ['Expired']
+    assert cleaned_expired['Status'] == 'Due'
 
     # Clean up
     PersonalAccessToken.objects(pat_id__startswith='test_').delete()
