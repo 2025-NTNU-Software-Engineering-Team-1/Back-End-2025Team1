@@ -7,6 +7,8 @@ from . import engine, course
 from .utils import *
 from .base import *
 
+Role = engine.User.Role
+
 import hashlib
 import jwt
 import os
@@ -20,6 +22,47 @@ __all__ = ['User', 'jwt_decode']
 JWT_EXP = timedelta(days=int(os.environ.get('JWT_EXP', '30')))
 JWT_ISS = os.environ.get('JWT_ISS', 'test.test')
 JWT_SECRET = os.environ.get('JWT_SECRET', 'SuperSecretString')
+
+ROLE_SCOPE_MAP = {}
+
+# Student/Standard User Scopes
+STUDENT_SCOPES = [
+    'read:user',
+    'write:user',
+    'read:courses',
+    'read:problems',
+    'write:submissions',
+    'read:submissions',
+]
+ROLE_SCOPE_MAP[Role.STUDENT] = STUDENT_SCOPES
+
+# Teacher Assistant Scopes
+TA_SCOPES = [
+    *STUDENT_SCOPES,  # Inherits all STUDENT privileges
+    'write:submissions',  # Create and modify submissions
+    'read:submissions:all',  # Read all submissions (required for grading)
+]
+ROLE_SCOPE_MAP[Role.TA] = TA_SCOPES
+
+# Teacher/Advanced User Scopes
+TEACHER_SCOPES = [
+    *STUDENT_SCOPES,  # Inherits all STUDENT privileges
+    'write:courses',  # Create and modify courses
+    'write:problems',  # Create and modify problems
+    'read:submissions:all',  # Read all student submissions (required for grading)
+    'grade:submissions',  # Perform grading operation (non-CRUD action)
+]
+ROLE_SCOPE_MAP[Role.TEACHER] = TEACHER_SCOPES
+
+# System Administrator Scopes
+ADMIN_SCOPES = [
+    *TEACHER_SCOPES,  # Inherits all TEACHER privileges
+    'read:user:all',  # Read all user information in the system
+    'write:user:all',  # Modify any user's information (including roles)
+    'revoke:pat:all',  # Ability to revoke any user's PAT Token (for deactivation)
+    'admin:system',  # Access to system configuration and maintenance APIs
+]
+ROLE_SCOPE_MAP[Role.ADMIN] = ADMIN_SCOPES
 
 
 class User(MongoBase, engine=engine.User):
