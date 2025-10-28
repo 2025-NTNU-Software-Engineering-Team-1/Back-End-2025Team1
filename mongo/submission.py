@@ -94,6 +94,12 @@ class SubmissionConfig(MongoBase, engine=engine.SubmissionConfig):
         self.name = name
 
 
+class BaseSubmissionDocument(engine.BaseSubmissionDocument):
+    '''
+    Base class for Submission document
+    '''
+
+
 class Submission(MongoBase, engine=engine.Submission):
 
     class Permission(enum.IntFlag):

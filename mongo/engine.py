@@ -381,20 +381,16 @@ class TaskResult(EmbeddedDocument):
     cases = EmbeddedDocumentListField(CaseResult, default=list)
 
 
-class Submission(Document):
+class BaseSubmissionDocument(Document):
     meta = {
+        'abstract': True,
         'indexes': [
-            (
-                'id',
-                'user',
-                'score',
-                'status',
-                'problem',
-                'language',
-                'timestamp',
-            ),
+            'problem',
+            'user',
+            ('problem', 'user', '-timestamp'),
         ]
     }
+
     problem = ReferenceField(Problem, required=True)
     user = ReferenceField(User, required=True)
     language = IntField(
@@ -416,8 +412,12 @@ class Submission(Document):
         db_field='codeMinioPath',
     )
     last_send = DateTimeField(db_field='lastSend', default=datetime.now)
-    comment = FileField(default=None, null=True)
     ip_addr = StringField(default=None, null=True)
+
+
+class Submission(BaseSubmissionDocument):
+    meta = {'indexes': [('problem', 'user'), ('problem', '-score')]}
+    comment = FileField(default=None, null=True)
 
 
 @escape_markdown.apply
