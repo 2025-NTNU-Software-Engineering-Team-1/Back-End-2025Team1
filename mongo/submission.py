@@ -22,6 +22,7 @@ from tempfile import NamedTemporaryFile
 from datetime import date, datetime
 from zipfile import ZipFile, is_zipfile
 from ulid import ULID
+import abc
 
 from . import engine
 from .base import MongoBase
@@ -34,6 +35,7 @@ from .utils import RedisCache, MinioClient
 __all__ = [
     'SubmissionConfig',
     'Submission',
+    'TrialSubmission',
     'JudgeQueueFullError',
     'TestCaseNotFound',
 ]
@@ -94,13 +96,10 @@ class SubmissionConfig(MongoBase, engine=engine.SubmissionConfig):
         self.name = name
 
 
-class BaseSubmissionDocument(engine.BaseSubmissionDocument):
+class BaseSubmission(abc.ABC):
     '''
-    Base class for Submission document
+    Base class for General and Test Submissions
     '''
-
-
-class Submission(MongoBase, engine=engine.Submission):
 
     class Permission(enum.IntFlag):
         VIEW = enum.auto()  # view submission info
@@ -116,11 +115,12 @@ class Submission(MongoBase, engine=engine.Submission):
 
     _config = None
 
-    def __init__(self, submission_id):
-        self.submission_id = str(submission_id)
+    # def __init__(self, submission_id):
+    #    self.submission_id = str(submission_id)
 
+    @abc.abstractmethod
     def __str__(self):
-        return f'submission [{self.submission_id}]'
+        raise NotImplementedError
 
     @property
     def id(self):
@@ -240,9 +240,15 @@ class Submission(MongoBase, engine=engine.Submission):
         '''
         for task in self.tasks:
             for case in task.cases:
-                case.output.delete()
+                if case.output:
+                    case.output.delete()
                 case.output_minio_path = None
         self.save()
+
+    @abc.abstractmethod
+    def _get_droppable_fields(self) -> set:
+        # 'code' and 'output' are common
+        return {'code', 'output'}
 
     def delete(self, *keeps):
         '''
@@ -250,17 +256,22 @@ class Submission(MongoBase, engine=engine.Submission):
 
         Args:
             keeps:
-                the field name you want to keep, accepted
-                value is {'comment', 'code', 'output'}
+                the field name you want to keep, e.g.
+                {'comment', 'code', 'output'}
                 other value will be ignored
         '''
-        drops = {'comment', 'code', 'output'} - {*keeps}
+        drops = self._get_droppable_fields() - {*keeps}
         del_funcs = {
             'output': self.delete_output,
         }
 
         def default_del_func(d):
-            return self.obj[d].delete()
+            # Check if field exists and is not None before deleting
+            if hasattr(self.obj, d) and self.obj[d]:
+                if hasattr(self.obj[d], 'delete'):
+                    self.obj[d].delete()
+                else:
+                    self.logger.warning(f"Field {d} has no delete method.")
 
         for d in drops:
             del_funcs.get(d, default_del_func)(d)
@@ -299,26 +310,22 @@ class Submission(MongoBase, engine=engine.Submission):
         load = 10**3  # current min load
         tar = None  # target
         for sb in self.config().sandbox_instances:
-            resp = rq.get(f'{sb.url}/status')
-            if not resp.ok:
-                self.logger.warning(f'sandbox {sb.name} status exception')
-                self.logger.warning(
-                    f'status code: {resp.status_code}\n '
-                    f'body: {resp.text}', )
+            try:
+                resp = rq.get(f'{sb.url}/status', timeout=1)
+                if not resp.ok:
+                    self.logger.warning(f'sandbox {sb.name} status exception')
+                    self.logger.warning(
+                        f'status code: {resp.status_code}\n '
+                        f'body: {resp.text}', )
+                    continue
+                resp_json = resp.json()
+                if resp_json['load'] < load:
+                    load = resp_json['load']
+                    tar = sb
+            except rq.exceptions.RequestException as e:
+                self.logger.warning(f'sandbox {sb.name} is unreachable: {e}')
                 continue
-            resp = resp.json()
-            if resp['load'] < load:
-                load = resp['load']
-                tar = sb
         return tar
-
-    def get_comment(self) -> bytes:
-        '''
-        if comment not exist
-        '''
-        if self.comment.grid_id is None:
-            raise FileNotFoundError('it seems that comment haven\'t upload')
-        return self.comment.read()
 
     def _check_code(self, file):
         if not file:
@@ -363,7 +370,7 @@ class Submission(MongoBase, engine=engine.Submission):
         )
         if current_app.config['TESTING']:
             return True
-        return self.send()
+        return self.send()  # Calls subclass's send()
 
     def _generate_code_minio_path(self):
         return f'submissions/{ULID()}.zip'
@@ -386,6 +393,453 @@ class Submission(MongoBase, engine=engine.Submission):
             content_type='application/zip',
         )
         return path
+
+    @abc.abstractmethod
+    def submit(self, *args, **kwargs) -> bool:
+        '''
+        prepare data for submit code to sandbox and then send it
+        '''
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def send(self) -> bool:
+        '''
+        send code to sandbox
+        '''
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def _calculate_task_score(self, task_index: int, status: int) -> int:
+        '''
+        Calculate score for a given task based on its status.
+        '''
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def finish_judging(self):
+        '''
+        Post-processing after results are received.
+        e.g. update homework, stats, etc.
+        '''
+        raise NotImplementedError
+
+    def process_result(self, tasks: list):
+        '''
+        process results from sandbox
+
+        Args:
+            tasks:
+                a 2-dim list of the dict with schema
+                {
+                    'exitCode': int,
+                    'status': str,
+                    'stdout': str,
+                    'stderr': str,
+                    'execTime': int,
+                    'memoryUsage': int
+                }
+        '''
+        self.logger.info(f'recieve {self} result')
+        processed_tasks = []
+        minio_client = MinioClient()
+
+        for i, task_cases in enumerate(tasks):
+            # process cases
+            cases = []
+            for j, case in enumerate(task_cases):
+                # we don't need exit code
+                del case['exitCode']
+                # convert status into integer
+                case['status'] = self.status2code.get(case['status'], -3)
+
+                # save stdout/stderr
+                fds = ['stdout', 'stderr']
+                tf = NamedTemporaryFile(delete=False)
+                with ZipFile(tf, 'w') as zf:
+                    for fd in fds:
+                        content = case.pop(fd)
+                        if content is None:
+                            self.logger.error(
+                                f'key {fd} not in case result {self} {i:02d}{j:02d}'
+                            )
+                        zf.writestr(fd, content
+                                    or "")  # Ensure content is not None
+                tf.seek(0)
+
+                # upload to minio
+                output_minio_path = self._generate_output_minio_path(i, j)
+                minio_client.client.put_object(
+                    minio_client.bucket,
+                    output_minio_path,
+                    io.BytesIO(tf.read()),
+                    -1,
+                    part_size=5 * 1024 * 1024,  # 5MB
+                    content_type='application/zip',
+                )
+
+                # convert dict to document
+                cases.append(
+                    engine.CaseResult(
+                        status=case['status'],
+                        exec_time=case['execTime'],
+                        memory_usage=case['memoryUsage'],
+                        output_minio_path=output_minio_path,
+                    ))
+
+            # process task
+            status = max(c.status for c in cases) if cases else -3
+            exec_time = max(c.exec_time for c in cases) if cases else -1
+            memory_usage = max(c.memory_usage for c in cases) if cases else -1
+
+            # Calculate score using subclass-defined logic
+            score = self._calculate_task_score(i, status)
+
+            processed_tasks.append(
+                engine.TaskResult(
+                    status=status,
+                    exec_time=exec_time,
+                    memory_usage=memory_usage,
+                    score=score,
+                    cases=cases,
+                ))
+
+        tasks = processed_tasks
+        status = max(t.status for t in tasks) if tasks else -3
+        exec_time = max(t.exec_time for t in tasks) if tasks else -1
+        memory_usage = max(t.memory_usage for t in tasks) if tasks else -1
+
+        self.update(
+            score=sum(task.score for task in tasks),
+            status=status,
+            tasks=tasks,
+            exec_time=exec_time,
+            memory_usage=memory_usage,
+        )
+        self.reload()
+        self.finish_judging()  # Call subclass's finish_judging
+        return True
+
+    def _generate_output_minio_path(self, task_no: int, case_no: int) -> str:
+        '''
+        generate a output file path for minio
+        '''
+        return f'submissions/task{task_no:02d}_case{case_no:02d}_{ULID()}.zip'
+
+    @staticmethod
+    @abc.abstractmethod
+    def count():
+        raise NotImplementedError
+
+    @classmethod
+    @abc.abstractmethod
+    def filter(
+        cls,
+        user,
+        offset: int = 0,
+        count: int = -1,
+        problem: Optional[Union[Problem, int]] = None,
+        q_user: Optional[Union[User, str]] = None,
+        status: Optional[int] = None,
+        language_type: Optional[Union[List[int], int]] = None,
+        course: Optional[Union[Course, str]] = None,
+        before: Optional[datetime] = None,
+        after: Optional[datetime] = None,
+        sort_by: Optional[str] = None,
+        with_count: bool = False,
+        ip_addr: Optional[str] = None,
+    ):
+        raise NotImplementedError
+
+    @classmethod
+    @abc.abstractmethod
+    def add(cls, *args, **kwargs):
+        '''
+        Insert a new submission into db
+        '''
+        raise NotImplementedError
+
+    @classmethod
+    def assign_token(cls, submission_id, token=None):
+        '''
+        generate a token for the submission
+        '''
+        if token is None:
+            token = gen_token()
+        RedisCache().set(gen_key(submission_id), token)
+        return token
+
+    @classmethod
+    def verify_token(cls, submission_id, token):
+        cache = RedisCache()
+        key = gen_key(submission_id)
+        s_token = cache.get(key)
+        if s_token is None:
+            return False
+        s_token = s_token.decode('ascii')
+        valid = secrets.compare_digest(s_token, token)
+        if valid:
+            cache.delete(key)
+        return valid
+
+    def to_dict(self) -> Dict[str, Any]:
+        ret = self._to_dict()
+        # Convert Bson object to python dictionary
+        ret = ret.to_dict()
+        return ret
+
+    def _to_dict(self) -> SON:
+        ret = self.to_mongo()
+        _ret = {
+            'problemId': ret['problem'],
+            'user': self.user.info,
+            'submissionId': str(self.id),
+            'timestamp': self.timestamp.timestamp(),
+            'lastSend': self.last_send.timestamp(),
+            'ipAddr': self.ip_addr,
+        }
+        old = [
+            '_id',
+            'problem',
+            'code',
+            # 'comment', # 'comment' is not in BaseSubmissionDocument
+            'tasks',
+            'ip_addr',
+        ]
+        # delete old keys
+        for o in old:
+            if o in ret:
+                del ret[o]
+
+        # 'comment' is specific to Submission, not BaseSubmission
+        if 'comment' in ret:
+            del ret['comment']
+
+        # insert new keys
+        ret.update(**_ret)
+        return ret
+
+    def get_result(self) -> List[Dict[str, Any]]:
+        '''
+        Get results without output
+        '''
+        tasks = [task.to_mongo() for task in self.tasks]
+        for task in tasks:
+            for case in task['cases']:
+                del case['output']
+                del case['output_minio_path']
+        return [task.to_dict() for task in tasks]
+
+    def get_detailed_result(self) -> List[Dict[str, Any]]:
+        '''
+        Get all results (including stdout/stderr) of this submission
+        '''
+        tasks = [task.to_mongo() for task in self.tasks]
+        for i, task in enumerate(tasks):
+            for j, case in enumerate(task['cases']):
+                output = self.get_single_output(i, j)
+                case['stdout'] = output['stdout']
+                case['stderr'] = output['stderr']
+                del case['output']  # non-serializable field
+                del case['output_minio_path']  # non-serializable field
+        return [task.to_dict() for task in tasks]
+
+    def _get_code_raw(self):
+        if self.code.grid_id is None and self.code_minio_path is None:
+            return None
+
+        if self.code_minio_path is not None:
+            minio_client = MinioClient()
+            try:
+                resp = minio_client.client.get_object(
+                    minio_client.bucket,
+                    self.code_minio_path,
+                )
+                return [resp.read()]
+            finally:
+                if 'resp' in locals():
+                    resp.close()
+                    resp.release_conn()
+
+        # fallback to read from gridfs
+        return [self.code.read()]
+
+    def _get_code_zip(self):
+        if (raw := self._get_code_raw()) is None:
+            return None
+        return ZipFile(io.BytesIO(b"".join(raw)))
+
+    def get_code(self, path: str, binary=False) -> Union[str, bytes]:
+        # read file
+        try:
+            if (z := self._get_code_zip()) is None:
+                raise SubmissionCodeNotFound
+            with z as zf:
+                data = zf.read(path)
+        # file not exists in the zip or code haven't been uploaded
+        except KeyError:
+            return None
+        # decode byte if need
+        if not binary:
+            try:
+                data = data.decode('utf-8')
+            except UnicodeDecodeError:
+                data = 'Unusual file content, decode fail'
+        return data
+
+    def get_main_code(self) -> str:
+        '''
+        Get source code user submitted
+        '''
+        ext = self.main_code_ext
+        return self.get_code(f'main{ext}')
+
+    def has_code(self) -> bool:
+        return self._get_code_zip() is not None
+
+    @abc.abstractmethod
+    def own_permission(self, user) -> Permission:
+        raise NotImplementedError
+
+    def permission(self, user, req: Permission):
+        """
+        check whether user own `req` permission
+        """
+
+        return bool(self.own_permission(user) & req)
+
+    def migrate_code_to_minio(self):
+        """
+        migrate code from gridfs to minio
+        """
+        # nothing to migrate
+        if self.code is None or self.code.grid_id is None:
+            self.logger.info(f"no code to migrate. submission={self.id}")
+            return
+
+        # upload code to minio
+        if self.code_minio_path is None:
+            self.logger.info(f"uploading code to minio. submission={self.id}")
+            self.update(code_minio_path=self._put_code(self.code), )
+            self.reload()
+            self.logger.info(
+                f"code uploaded to minio. submission={self.id} path={self.code_minio_path}"
+            )
+
+        # remove code in gridfs if it is consistent
+        if self._check_code_consistency():
+            self.logger.info(
+                f"data consistency validated, removing code in gridfs. submission={self.id}"
+            )
+            self._remove_code_in_mongodb()
+        else:
+            self.logger.warning(
+                f"data inconsistent, keeping code in gridfs. submission={self.id}"
+            )
+
+    def _remove_code_in_mongodb(self):
+        self.code.delete()
+        self.save()
+        self.reload('code')
+
+    def _check_code_consistency(self):
+        """
+        check whether the submission is consistent
+        """
+        if self.code is None or self.code.grid_id is None:
+            return False
+        gridfs_code = self.code.read()
+        if gridfs_code is None:
+            # if file is deleted but GridFS proxy is not updated
+            return False
+        gridfs_checksum = md5(gridfs_code).hexdigest()
+        self.logger.info(
+            f"calculated grid checksum. submission={self.id} checksum={gridfs_checksum}"
+        )
+
+        minio_client = MinioClient()
+        try:
+            resp = minio_client.client.get_object(
+                minio_client.bucket,
+                self.code_minio_path,
+            )
+            minio_code = resp.read()
+        finally:
+            if 'resp' in locals():
+                resp.close()
+                resp.release_conn()
+
+        minio_checksum = md5(minio_code).hexdigest()
+        self.logger.info(
+            f"calculated minio checksum. submission={self.id} checksum={minio_checksum}"
+        )
+        return minio_checksum == gridfs_checksum
+
+
+class Submission(MongoBase, BaseSubmission, engine=engine.Submission):
+    '''
+    Represents a formal submission for homework grading.
+    '''
+
+    def __init__(self, submission_id):
+        self.submission_id = str(submission_id)
+
+    def __str__(self):
+        return f'submission [{self.submission_id}]'
+
+    # --- Implement Abstract Methods ---
+
+    def _calculate_task_score(self, task_index: int, status: int) -> int:
+        '''
+        Calculate score based on problem's test case definition.
+        '''
+        if status == 0:  # AC
+            try:
+                return self.problem.test_case.tasks[task_index].task_score
+            except (AttributeError, IndexError):
+                self.logger.warning(
+                    f"Could not find score for {self} task {task_index}")
+                return 0
+        return 0
+
+    def finish_judging(self):
+        '''
+        Update user stats, homework scores, and problem high scores.
+        '''
+        # update user's submission
+        User(self.username).add_submission(self)
+        # update homework data
+        for homework in self.problem.homeworks:
+            try:
+                stat = homework.student_status[self.username][str(
+                    self.problem_id)]
+            except KeyError:
+                self.logger.warning(
+                    f'{self} not in {homework} [user={self.username}, problem={self.problem_id}]'
+                )
+                continue
+            if self.handwritten:
+                continue
+            if 'rawScore' not in stat:
+                stat['rawScore'] = 0
+            stat['submissionIds'].append(self.id)
+            # handwritten problem will only keep the last submission
+            if self.handwritten:
+                stat['submissionIds'] = stat['submissionIds'][-1:]
+            # if the homework is overdue, do the penalty
+            if self.timestamp > homework.duration.end and not self.handwritten and homework.penalty is not None:
+                self.score, stat['rawScore'] = Homework(homework).do_penalty(
+                    self, stat)
+            else:
+                if self.score > stat['rawScore']:
+                    stat['rawScore'] = self.score
+            # update high score / handwritten problem is judged by teacher
+            if self.score >= stat['score'] or self.handwritten:
+                stat['score'] = self.score
+                stat['problemStatus'] = self.status
+
+            homework.save()
+        key = Problem(self.problem).high_score_key(user=self.user)
+        RedisCache().delete(key)
 
     def submit(self, code_file) -> bool:
         '''
@@ -452,9 +906,10 @@ class Submission(MongoBase, engine=engine.Submission):
             'checker': 'print("not implement yet. qaq")',
             'problem_id': self.problem_id,
             'language': self.language,
+            'submission_type': 'normal',  # Flag for sandbox
         }
         judge_url = f'{tar.url}/submit/{self.id}'
-        # send submission to snadbox for judgement
+        # send submission to sandbox for judgement
         self.logger.info(f'send {self} to {tar.name}')
         resp = rq.post(
             judge_url,
@@ -464,129 +919,54 @@ class Submission(MongoBase, engine=engine.Submission):
         self.logger.info(f'recieve {self} resp from sandbox')
         return self.sandbox_resp_handler(resp)
 
-    def process_result(self, tasks: list):
-        '''
-        process results from sandbox
+    def own_permission(self, user) -> BaseSubmission.Permission:
+        key = f'SUBMISSION_PERMISSION_{self.id}_{user.id}_{self.problem.id}'
+        # Check cache
+        cache = RedisCache()
+        if (v := cache.get(key)) is not None:
+            return self.Permission(int(v))
 
-        Args:
-            tasks:
-                a 2-dim list of the dict with schema
-                {
-                    'exitCode': int,
-                    'status': str,
-                    'stdout': str,
-                    'stderr': str,
-                    'execTime': int,
-                    'memoryUsage': int
-                }
-        '''
-        self.logger.info(f'recieve {self} result')
-        for task in tasks:
-            for case in task:
-                # we don't need exit code
-                del case['exitCode']
-                # convert status into integer
-                case['status'] = self.status2code.get(case['status'], -3)
-        # process task
-        minio_client = MinioClient()
-        for i, cases in enumerate(tasks):
-            # save stdout/stderr
-            fds = ['stdout', 'stderr']
-            for j, case in enumerate(cases):
-                tf = NamedTemporaryFile(delete=False)
-                with ZipFile(tf, 'w') as zf:
-                    for fd in fds:
-                        content = case.pop(fd)
-                        if content is None:
-                            self.logger.error(
-                                f'key {fd} not in case result {self} {i:02d}{j:02d}'
-                            )
-                        zf.writestr(fd, content)
-                tf.seek(0)
-                # upload to minio
-                output_minio_path = self._generate_output_minio_path(i, j)
-                minio_client.client.put_object(
-                    minio_client.bucket,
-                    output_minio_path,
-                    io.BytesIO(tf.read()),
-                    -1,
-                    part_size=5 * 1024 * 1024,  # 5MB
-                    content_type='application/zip',
-                )
-                # convert dict to document
-                cases[j] = engine.CaseResult(
-                    status=case['status'],
-                    exec_time=case['execTime'],
-                    memory_usage=case['memoryUsage'],
-                    output_minio_path=output_minio_path,
-                )
-            status = max(c.status for c in cases)
-            exec_time = max(c.exec_time for c in cases)
-            memory_usage = max(c.memory_usage for c in cases)
-            tasks[i] = engine.TaskResult(
-                status=status,
-                exec_time=exec_time,
-                memory_usage=memory_usage,
-                score=self.problem.test_case.tasks[i].task_score
-                if status == 0 else 0,
-                cases=cases,
-            )
-        status = max(t.status for t in tasks)
-        exec_time = max(t.exec_time for t in tasks)
-        memory_usage = max(t.memory_usage for t in tasks)
-        self.update(
-            score=sum(task.score for task in tasks),
-            status=status,
-            tasks=tasks,
-            exec_time=exec_time,
-            memory_usage=memory_usage,
-        )
-        self.reload()
-        self.finish_judging()
-        return True
+        # Calculate
+        cap = self.Permission(0)
+        try:
+            problem_courses = map(Course, self.problem.courses)
+            if any(
+                    c.own_permission(user) & Course.Permission.GRADE
+                    for c in problem_courses):
+                cap = self.Permission.MANAGER
+            elif user.username == self.user.username:
+                cap = self.Permission.STUDENT
+            elif Problem(self.problem).permission(
+                    user=user,
+                    req=Problem.Permission.VIEW,
+            ):
+                cap = self.Permission.OTHER
+        except Exception as e:
+            self.logger.error(f"Error calculating permission for {self}: {e}")
+            # Fallback to no permission
+            cap = self.Permission(0)
 
-    def _generate_output_minio_path(self, task_no: int, case_no: int) -> str:
-        '''
-        generate a output file path for minio
-        '''
-        return f'submissions/task{task_no:02d}_case{case_no:02d}_{ULID()}.zip'
+        # students can view outputs of their CE submissions
+        CE = 2
+        if cap & self.Permission.STUDENT and self.status == CE:
+            cap |= self.Permission.VIEW_OUTPUT
 
-    def finish_judging(self):
-        # update user's submission
-        User(self.username).add_submission(self)
-        # update homework data
-        for homework in self.problem.homeworks:
-            try:
-                stat = homework.student_status[self.username][str(
-                    self.problem_id)]
-            except KeyError:
-                self.logger.warning(
-                    f'{self} not in {homework} [user={self.username}, problem={self.problem_id}]'
-                )
-                continue
-            if self.handwritten:
-                continue
-            if 'rawScore' not in stat:
-                stat['rawScore'] = 0
-            stat['submissionIds'].append(self.id)
-            # handwritten problem will only keep the last submission
-            if self.handwritten:
-                stat['submissionIds'] = stat['submissionIds'][-1:]
-            # if the homework is overdue, do the penalty
-            if self.timestamp > homework.duration.end and not self.handwritten and homework.penalty is not None:
-                self.score, stat['rawScore'] = Homework(homework).do_penalty(
-                    self, stat)
-            else:
-                if self.score > stat['rawScore']:
-                    stat['rawScore'] = self.score
-            # update high score / handwritten problem is judged by teacher
-            if self.score >= stat['score'] or self.handwritten:
-                stat['score'] = self.score
-                stat['problemStatus'] = self.status
+        cache.set(key, cap.value, 60)
+        return cap
 
-            homework.save()
-        key = Problem(self.problem).high_score_key(user=self.user)
-        RedisCache().delete(key)
+    def _get_droppable_fields(self) -> set:
+        # Submission has 'comment'
+        return super()._get_droppable_fields() | {'comment'}
+
+    # --- Submission-specific Methods ---
+
+    def get_comment(self) -> bytes:
+        '''
+        if comment not exist
+        '''
+        if self.comment.grid_id is None:
+            raise FileNotFoundError('it seems that comment haven\'t upload')
+        return self.comment.read()
 
     def add_comment(self, file):
         '''
@@ -609,6 +989,8 @@ class Submission(MongoBase, engine=engine.Submission):
         self.logger.debug(f'{self} comment updated.')
         # update submission
         self.save()
+
+    # --- Submission-specific Classmethods ---
 
     @staticmethod
     def count():
@@ -733,236 +1115,327 @@ class Submission(MongoBase, engine=engine.Submission):
         submission.save()
         return cls(submission.id)
 
-    @classmethod
-    def assign_token(cls, submission_id, token=None):
+
+class TrialSubmission(MongoBase, BaseSubmission,
+                      engine=engine.TrialSubmission):
+    '''
+    Represents a test submission against public or custom cases.
+    Does not affect homework scores. Expires after 14 days.
+    '''
+
+    def __init__(self, submission_id):
+        self.submission_id = str(submission_id)
+
+    def __str__(self):
+        return f'trial_submission [{self.submission_id}]'
+
+    # --- Implement Abstract Methods ---
+
+    def _calculate_task_score(self, task_index: int, status: int) -> int:
         '''
-        generate a token for the submission
+        Test submissions do not have a "score" in the traditional sense.
+        The pass/fail status of cases is what matters.
+        Return 0.
         '''
-        if token is None:
-            token = gen_token()
-        RedisCache().set(gen_key(submission_id), token)
-        return token
+        return 0
 
-    @classmethod
-    def verify_token(cls, submission_id, token):
-        cache = RedisCache()
-        key = gen_key(submission_id)
-        s_token = cache.get(key)
-        if s_token is None:
-            return False
-        s_token = s_token.decode('ascii')
-        valid = secrets.compare_digest(s_token, token)
-        if valid:
-            cache.delete(key)
-        return valid
-
-    def to_dict(self) -> Dict[str, Any]:
-        ret = self._to_dict()
-        # Convert Bson object to python dictionary
-        ret = ret.to_dict()
-        return ret
-
-    def _to_dict(self) -> SON:
-        ret = self.to_mongo()
-        _ret = {
-            'problemId': ret['problem'],
-            'user': self.user.info,
-            'submissionId': str(self.id),
-            'timestamp': self.timestamp.timestamp(),
-            'lastSend': self.last_send.timestamp(),
-            'ipAddr': self.ip_addr,
-        }
-        old = [
-            '_id',
-            'problem',
-            'code',
-            'comment',
-            'tasks',
-            'ip_addr',
-        ]
-        # delete old keys
-        for o in old:
-            del ret[o]
-        # insert new keys
-        ret.update(**_ret)
-        return ret
-
-    def get_result(self) -> List[Dict[str, Any]]:
+    def finish_judging(self):
         '''
-        Get results without output
+        Update problem-level test submission stats.
+        Does NOT update homework or user AC stats.
         '''
-        tasks = [task.to_mongo() for task in self.tasks]
-        for task in tasks:
-            for case in task['cases']:
-                del case['output']
-        return [task.to_dict() for task in tasks]
+        self.logger.info(f"Finished judging {self}")
 
-    def get_detailed_result(self) -> List[Dict[str, Any]]:
+        # Update problem stats (e.g., submission count)
+        problem = Problem(self.problem)
+        if problem:
+            username = self.user.username
+            count_key = f"trial_submission_counts.{username}"
+            problem.obj.update(**{f'inc__{count_key}': 1})
+
+        # No User.add_submission()
+        # No Homework.student_status update
+        pass
+
+    def submit(self,
+               code_file,
+               use_default_case: bool = True,
+               custom_input_file=None) -> bool:
         '''
-        Get all results (including stdout/stderr) of this submission
+        Prepare data for a test submission.
+        Checks for test mode enablement and quota.
         '''
-        tasks = [task.to_mongo() for task in self.tasks]
-        for i, task in enumerate(tasks):
-            for j, case in enumerate(task.cases):
-                output = self.get_single_output(i, j)
-                case['stdout'] = output['stdout']
-                case['stderr'] = output['stderr']
-                del case['output']  # non-serializable field
-        return [task.to_dict() for task in tasks]
+        if not self:
+            raise engine.DoesNotExist(f'{self}')
 
-    def _get_code_raw(self):
-        if self.code.grid_id is None and self.code_minio_path is None:
-            return None
+        problem = Problem(self.problem)
+        if not problem.test_mode_enabled:
+            raise PermissionError("Test mode is not enabled for this problem.")
 
-        if self.code_minio_path is not None:
-            minio_client = MinioClient()
-            try:
-                resp = minio_client.client.get_object(
-                    minio_client.bucket,
-                    self.code_minio_path,
+        # Check quota
+        if problem.trial_submission_quota > 0:
+            username = self.user.username
+            current_count = problem.trial_submission_counts.get(username, 0)
+            if current_count >= problem.trial_submission_quota:
+                raise PermissionError("Test submission quota exceeded.")
+
+        custom_input_path = None
+        if not use_default_case:
+            if custom_input_file is None:
+                raise ValueError(
+                    "Custom input file must be provided when not using default cases."
                 )
-                return [resp.read()]
-            finally:
-                if 'resp' in locals():
-                    resp.close()
-                    resp.release_conn()
+            # TODO: Implement _put_custom_input method, similar to _put_code
+            # Need to validate custom_input_file (e.g., check zip format, size)
+            # custom_input_path = self._put_custom_input(custom_input_file)
+            self.logger.warning(
+                f"Custom input for {self} is not yet implemented.")
+            # For now, we'll just store the code.
 
-        # fallback to read from gridfs
-        return [self.code.read()]
+        self.update(
+            status=-1,
+            last_send=datetime.now(),
+            code_minio_path=self._put_code(code_file),
+            use_default_case=use_default_case,
+            # custom_input_minio_path=custom_input_path,
+        )
+        self.reload()
+        self.logger.debug(f'{self} code updated.')
 
-    def _get_code_zip(self):
-        if (raw := self._get_code_raw()) is None:
-            return None
-        return ZipFile(io.BytesIO(b"".join(raw)))
+        if current_app.config['TESTING']:
+            return True
+        return self.send()
 
-    def get_code(self, path: str, binary=False) -> Union[str, bytes]:
-        # read file
-        try:
-            if (z := self._get_code_zip()) is None:
-                raise SubmissionCodeNotFound
-            with z as zf:
-                data = zf.read(path)
-        # file not exists in the zip or code haven't been uploaded
-        except KeyError:
-            return None
-        # decode byte if need
-        if not binary:
-            try:
-                data = data.decode('utf-8')
-            except UnicodeDecodeError:
-                data = 'Unusual file content, decode fail'
-        return data
-
-    def get_main_code(self) -> str:
+    def send(self) -> bool:
         '''
-        Get source code user submitted
+        Send code, public/custom cases, and AC code to sandbox.
         '''
-        ext = self.main_code_ext
-        return self.get_code(f'main{ext}')
+        problem = Problem(self.problem)
+        if not problem.test_mode_enabled:
+            self.logger.warning(
+                f"Attempted to send {self} but test mode is disabled.")
+            return False
 
-    def has_code(self) -> bool:
-        return self._get_code_zip() is not None
+        # 1. User's code
+        files = {
+            'src': io.BytesIO(b"".join(self._get_code_raw())),
+        }
 
-    def own_permission(self, user) -> Permission:
-        key = f'SUBMISSION_PERMISSION_{self.id}_{user.id}_{self.problem.id}'
-        # Check cache
+        # 2. Test cases (public or custom)
+        # TODO: This logic depends heavily on sandbox API.
+        # The sandbox needs to receive either the public cases or custom cases.
+        # This might involve passing Minio paths or zips.
+        if self.use_default_case:
+            if not problem.public_cases_zip_minio_path:
+                raise TestCaseNotFound(self.problem_id)
+            # files['public_cases'] = ... (logic to get public cases zip)
+        else:
+            if not self.custom_input_minio_path:
+                raise TestCaseNotFound(self.problem_id)  # Or a different error
+            # files['custom_cases'] = ... (logic to get custom input zip)
+
+        # 3. AC code (for comparison)
+        # TODO: Add logic for sending AC code
+        # if problem.ac_code_minio_path:
+        #    ac_code_raw = ... (logic to get AC code zip)
+        #    files['ac_code'] = ac_code_raw
+
+        tar = self.target_sandbox()
+        if tar is None:
+            self.logger.error(f'can not target a sandbox for {repr(self)}')
+            return False
+
+        TrialSubmission.assign_token(self.id, tar.token)
+
+        post_data = {
+            'token': tar.token,
+            'problem_id': self.problem_id,
+            'language': self.language,
+            'submission_type': 'test',  # Flag for sandbox
+            'use_default_case': self.use_default_case,
+            # 'ac_code_language': problem.ac_code_language,
+            # 'public_cases_path': problem.public_cases_zip_minio_path,
+            # 'custom_cases_path': self.custom_input_minio_path,
+            # 'ac_code_path': problem.ac_code_minio_path,
+        }
+
+        # This URL might be different, e.g., /submit_test/
+        judge_url = f'{tar.url}/submit/{self.id}'
+
+        self.logger.info(f'send {self} to {tar.name}')
+        self.logger.warning(
+            f"TrialSubmission.send() is a placeholder and needs sandbox API integration."
+        )
+
+        # TODO: Remove this placeholder and uncomment rq.post when sandbox is ready
+        # For now, simulate a sandbox error
+        self.logger.error("Test submission sandbox endpoint not implemented.")
+        return False
+
+        # resp = rq.post(
+        #     judge_url,
+        #     data=post_data,
+        #     files=files,
+        # )
+        # self.logger.info(f'recieve {self} resp from sandbox')
+        # return self.sandbox_resp_handler(resp)
+
+    def own_permission(self, user) -> BaseSubmission.Permission:
+        '''
+        TrialSubmissions: Teachers/TAs can see all. Students can only see their own.
+        '''
+        key = f'TRIAL_SUBMISSION_PERMISSION_{self.id}_{user.id}_{self.problem.id}'
         cache = RedisCache()
         if (v := cache.get(key)) is not None:
             return self.Permission(int(v))
 
-        # Calculate
-        if max(
-                course.own_permission(user) for course in map(
-                    Course, self.problem.courses)) & Course.Permission.GRADE:
-            cap = self.Permission.MANAGER
-        elif user.username == self.user.username:
-            cap = self.Permission.STUDENT
-        elif Problem(self.problem).permission(
-                user=user,
-                req=Problem.Permission.VIEW,
-        ):
-            cap = self.Permission.OTHER
-        else:
+        cap = self.Permission(0)
+        try:
+            # Teachers/TAs (Grade permission) can see all
+            problem_courses = map(Course, self.problem.courses)
+            if any(
+                    c.own_permission(user) & Course.Permission.GRADE
+                    for c in problem_courses):
+                cap = self.Permission.MANAGER
+            # Students can only see their own
+            elif user.username == self.user.username:
+                cap = self.Permission.STUDENT
+        except Exception as e:
+            self.logger.error(f"Error calculating permission for {self}: {e}")
             cap = self.Permission(0)
-
-        # students can view outputs of their CE submissions
-        CE = 2
-        if cap & self.Permission.STUDENT and self.status == CE:
-            cap |= self.Permission.VIEW_OUTPUT
 
         cache.set(key, cap.value, 60)
         return cap
 
-    def permission(self, user, req: Permission):
-        """
-        check whether user own `req` permission
-        """
+    def _get_droppable_fields(self) -> set:
+        # TrialSubmission has 'custom_input'
+        return super()._get_droppable_fields() | {'custom_input'}
 
-        return bool(self.own_permission(user) & req)
+    # --- TrialSubmission-specific Classmethods ---
 
-    def migrate_code_to_minio(self):
-        """
-        migrate code from gridfs to minio
-        """
-        # nothing to migrate
-        if self.code is None or self.code.grid_id is None:
-            self.logger.info(f"no code to migrate. submission={self.id}")
-            return
+    @staticmethod
+    def count():
+        return len(engine.TrialSubmission.objects)
 
-        # upload code to minio
-        if self.code_minio_path is None:
-            self.logger.info(f"uploading code to minio. submission={self.id}")
-            self.update(code_minio_path=self._put_code(self.code), )
-            self.reload()
-            self.logger.info(
-                f"code uploaded to minio. submission={self.id} path={self.code_minio_path}"
+    @classmethod
+    def filter(
+        cls,
+        user,
+        offset: int = 0,
+        count: int = -1,
+        problem: Optional[Union[Problem, int]] = None,
+        q_user: Optional[Union[User, str]] = None,
+        status: Optional[int] = None,
+        language_type: Optional[Union[List[int], int]] = None,
+        course: Optional[Union[Course, str]] = None,
+        before: Optional[datetime] = None,
+        after: Optional[datetime] = None,
+        sort_by: Optional[str] = None,
+        with_count: bool = False,
+        ip_addr: Optional[str] = None,
+    ):
+        # This logic is identical to Submission.filter, but
+        # queries engine.TrialSubmission
+
+        # --- (Validation logic, identical to Submission.filter) ---
+        if before is not None and after is not None:
+            if after > before:
+                raise ValueError('the query period is empty')
+        if offset < 0:
+            raise ValueError(f'offset must >= 0!')
+        if count < -1:
+            raise ValueError(f'count must >=-1!')
+        if sort_by is not None and sort_by not in ['runTime', 'memoryUsage']:
+            raise ValueError(f'can only sort by runTime or memoryUsage')
+        wont_have_results = False
+        if isinstance(problem, int):
+            problem = Problem(problem).obj
+            if problem is None:
+                wont_have_results = True
+        if isinstance(q_user, str):
+            q_user = User(q_user)
+            if not q_user:
+                wont_have_results = True
+            q_user = q_user.obj
+        if isinstance(course, str):
+            course = Course(course)
+            if not course:
+                wont_have_results = True
+        # problem's query key
+        p_k = 'problem'
+        if course:
+            problems = Problem.get_problem_list(
+                user,
+                course=course.course_name,
             )
+            if problem is None:
+                p_k = 'problem__in'
+                problem = problems
+            elif problem not in problems:
+                wont_have_results = True
+        if wont_have_results:
+            return ([], 0) if with_count else []
+        if isinstance(language_type, int):
+            language_type = [language_type]
+        # --- (End of validation) ---
 
-        # remove code in gridfs if it is consistent
-        if self._check_code_consistency():
-            self.logger.info(
-                f"data consistency validated, removing code in gridfs. submission={self.id}"
-            )
-            self._remove_code_in_mongodb()
+        q = {
+            p_k: problem,
+            'status': status,
+            'language__in': language_type,
+            'user': q_user,
+            'ip_addr': ip_addr,
+            'timestamp__lte': before,
+            'timestamp__gte': after,
+        }
+        q = {k: v for k, v in q.items() if v is not None}
+
+        # Query engine.TrialSubmission
+        submissions = engine.TrialSubmission.objects(
+            **q).order_by(sort_by if sort_by is not None else '-timestamp')
+
+        submission_count = submissions.count()
+        # truncate
+        if count == -1:
+            submissions = submissions[offset:]
         else:
-            self.logger.warning(
-                f"data inconsistent, keeping code in gridfs. submission={self.id}"
-            )
+            submissions = submissions[offset:offset + count]
 
-    def _remove_code_in_mongodb(self):
-        self.code.delete()
-        self.save()
-        self.reload('code')
+        submissions = list(cls(s) for s in submissions)
+        if with_count:
+            return submissions, submission_count
+        return submissions
 
-    def _check_code_consistency(self):
-        """
-        check whether the submission is consistent
-        """
-        if self.code is None or self.code.grid_id is None:
-            return False
-        gridfs_code = self.code.read()
-        if gridfs_code is None:
-            # if file is deleted but GridFS proxy is not updated
-            return False
-        gridfs_checksum = md5(gridfs_code).hexdigest()
-        self.logger.info(
-            f"calculated grid checksum. submission={self.id} checksum={gridfs_checksum}"
-        )
+    @classmethod
+    def add(
+        cls,
+        problem_id: int,
+        username: str,
+        lang: int,
+        timestamp: Optional[date] = None,
+        ip_addr: Optional[str] = None,
+    ) -> 'TrialSubmission':
+        '''
+        Insert a new test submission into db
+        '''
+        user = User(username)
+        if not user:
+            raise engine.DoesNotExist(f'{user} does not exist')
+        problem = Problem(problem_id)
+        if not problem:
+            raise engine.DoesNotExist(f'{problem} dose not exist')
 
-        minio_client = MinioClient()
-        try:
-            resp = minio_client.client.get_object(
-                minio_client.bucket,
-                self.code_minio_path,
-            )
-            minio_code = resp.read()
-        finally:
-            if 'resp' in locals():
-                resp.close()
-                resp.release_conn()
+        if not problem.test_mode_enabled:
+            raise PermissionError("Test mode is not enabled for this problem.")
 
-        minio_checksum = md5(minio_code).hexdigest()
-        self.logger.info(
-            f"calculated minio checksum. submission={self.id} checksum={minio_checksum}"
-        )
-        return minio_checksum == gridfs_checksum
+        if timestamp is None:
+            timestamp = datetime.now()
+
+        # create a new trial submission
+        submission = engine.TrialSubmission(problem=problem.obj,
+                                            user=user.obj,
+                                            language=lang,
+                                            timestamp=timestamp,
+                                            ip_addr=ip_addr)
+        submission.save()
+        return cls(submission.id)
