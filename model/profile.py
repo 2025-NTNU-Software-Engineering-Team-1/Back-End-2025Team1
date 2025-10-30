@@ -7,7 +7,7 @@ from mongo.engine import PersonalAccessToken
 from mongo.user import ROLE_SCOPE_MAP
 from .auth import *
 from .utils import *
-from .utils.pat import hash_pat_token
+from .utils.pat import hash_pat_token, validate_scope_for_role
 
 __all__ = ['profile_api']
 
@@ -115,6 +115,33 @@ def create_token(user, Name, Due_Time, Scope):
         except (ValueError, AttributeError):
             due_time_obj = None  # Invalid format defaults to no expiration
 
+    # Ensure Due_Time is in the future if provided
+    if due_time_obj:
+        now = datetime.now(timezone.utc)
+        if due_time_obj.tzinfo is None:
+            due_time_obj = due_time_obj.replace(tzinfo=timezone.utc)
+        if due_time_obj <= now:
+            return HTTPError(
+                "Due_Time must be in the future",
+                400,
+                data={
+                    "Type": "ERR",
+                    "Message": "Due_Time must be in the future"
+                },
+            )
+
+    # Ensure Scope is a list of unique values
+    Scope_Set = list(set(Scope)) if Scope else []
+
+    # Validate scope
+    if not validate_scope_for_role(Scope_Set, user.role, ROLE_SCOPE_MAP):
+        return HTTPError("Invalid Scope",
+                         400,
+                         data={
+                             "Type": "ERR",
+                             "Message": "Invalid Scope"
+                         })
+
     # Create new PersonalAccessToken in MongoDB
     try:
         pat = add_pat_to_database(
@@ -122,7 +149,7 @@ def create_token(user, Name, Due_Time, Scope):
             name=Name,
             owner=user.username,
             hash_val=hash_val,
-            scope=Scope,
+            scope=Scope_Set,
             due_time=due_time_obj,
         )
 

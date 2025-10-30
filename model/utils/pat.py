@@ -74,3 +74,14 @@ def _clean_token(pat_obj):
         "Scope":
         pat_obj.scope or [],
     }
+
+
+# Validate if Scope Set is allowed for the user's role
+def validate_scope_for_role(scope_set: list, user_role_key,
+                            role_scope_map) -> bool:
+    """Validate if all scopes in scope_set are allowed for the given user role."""
+    allowed_scopes = role_scope_map.get(user_role_key, [])
+    for scope in scope_set:
+        if scope not in allowed_scopes:
+            return False
+    return True
