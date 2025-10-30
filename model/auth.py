@@ -21,6 +21,7 @@ __all__ = (
     'login_required',
     'identity_verify',
     'get_verify_link',
+    'pat_required',
 )
 
 auth_api = Blueprint('auth_api', __name__)

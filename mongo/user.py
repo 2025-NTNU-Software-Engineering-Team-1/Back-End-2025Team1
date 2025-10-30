@@ -51,6 +51,7 @@ TEACHER_SCOPES = [
     'write:problems',  # Create and modify problems
     'read:submissions:all',  # Read all student submissions (required for grading)
     'grade:submissions',  # Perform grading operation (non-CRUD action)
+    'read:userips',  # Access to user login IP addresses
 ]
 ROLE_SCOPE_MAP[Role.TEACHER] = TEACHER_SCOPES
 
