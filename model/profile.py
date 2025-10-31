@@ -1,4 +1,4 @@
-from flask import Blueprint
+from flask import Blueprint, request
 from datetime import datetime, timezone
 from mongoengine import ValidationError
 
@@ -98,17 +98,21 @@ def get_scope(user):
 
 @profile_api.route("/api_token/create", methods=["POST"])
 @login_required
-@Request.json("Name", "Due_Time", "Scope")
-def create_token(user, Name, Due_Time, Scope):
+@Request.json("Name", "Scope")
+def create_token(user, Name, Scope):
     pat_id = uuid4().hex[:16]
     secret = secrets.token_urlsafe(32)
     # Build the presented token string first, then hash the entire token
     presented_token = f"noj_pat_{secret}"
     hash_val = hash_pat_token(presented_token)
 
+    # Request.json不能處理Due_Time，所以這裡手動處理
+    data = request.get_json()
+    Due_Time = data.get("Due_Time", None)
+
     # Convert Due_Time string to datetime if provided
     due_time_obj = None
-    if Due_Time:
+    if Due_Time and Due_Time is not None:
         try:
             due_time_obj = datetime.fromisoformat(
                 Due_Time.replace("Z", "+00:00"))
