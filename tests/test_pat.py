@@ -161,7 +161,7 @@ class TestPATRoutes(BaseTester):
         token_data = {
             'Name': 'New Test Token',
             'Due_Time': None,
-            'Scope': ['read']
+            'Scope': ['read:user']
         }
 
         rv = client_student.post('/profile/api_token/create', json=token_data)
@@ -191,7 +191,7 @@ class TestPATRoutes(BaseTester):
         new_token = new_tokens[0]
         assert new_token.owner == 'student'
         assert new_token.name == 'New Test Token'
-        assert new_token.scope == ['read']
+        assert new_token.scope == ['read:user']
 
     def test_edit_token_endpoint(self, client_student):
         """Test PATCH /profile/api_token/edit/<pat_id>"""
@@ -199,7 +199,7 @@ class TestPATRoutes(BaseTester):
         edit_data = {
             'data': {
                 'Name': 'Updated Token Name',
-                'Scope': ['read', 'write', 'admin']
+                'Scope': ['read:courses', 'write:submissions']
             }
         }
 
@@ -218,7 +218,7 @@ class TestPATRoutes(BaseTester):
         # Check that token was actually updated in DB
         token = PersonalAccessToken.objects.get(pat_id=pat_id)
         assert token.name == 'Updated Token Name'
-        assert token.scope == ['read', 'write', 'admin']
+        assert token.scope == ['read:courses', 'write:submissions']
 
     def test_edit_nonexistent_token(self, client_student):
         """Test editing non-existent token returns 404"""
@@ -301,7 +301,7 @@ class TestPATRoutes(BaseTester):
             name='Student PAT',
             owner='student',
             hash=hash_pat_token(student_token),
-            scope=['read', 'write'],
+            scope=['read:courses', 'write:submissions'],
             due_time=datetime.now(timezone.utc) + timedelta(days=30),
             created_time=datetime.now(timezone.utc),
             is_revoked=False,
@@ -311,7 +311,7 @@ class TestPATRoutes(BaseTester):
             name='Teacher PAT',
             owner='teacher',
             hash=hash_pat_token(teacher_token),
-            scope=['admin'],
+            scope=['grade:submissions'],
             due_time=datetime.now(timezone.utc) + timedelta(days=30),
             created_time=datetime.now(timezone.utc),
             is_revoked=False,
