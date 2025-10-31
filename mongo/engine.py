@@ -224,8 +224,8 @@ class Number(Document):
 class ProblemCase(EmbeddedDocument):
     task_score = IntField(required=True, db_field='taskScore')
     case_count = IntField(required=True, db_field='caseCount')
-    memory_limit = IntField(required=True, db_field='memoryLimit')
-    time_limit = IntField(required=True, db_field='timeLimit')
+    memory_limit = IntField(required=True, db_field='memoryLimit')  # in KB
+    time_limit = IntField(required=True, db_field='timeLimit')  # in ms
 
 
 class ProblemTestCase(EmbeddedDocument):
