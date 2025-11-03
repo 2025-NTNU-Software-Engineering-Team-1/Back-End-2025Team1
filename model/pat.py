@@ -26,7 +26,10 @@ def api_ping():
 @pat_api.route('/userips/<course_name>', methods=['GET'])
 @pat_required('read:userips')
 def get_course_user_ips(user, course_name: str):
-    # ...existing code...
+    """
+        Get all login and submission IP records of students in a course.
+        Return a CSV file with the records.
+    """
     try:
         course = Course(course_name)
         if not course or not course.obj:
@@ -58,7 +61,7 @@ def get_course_user_ips(user, course_name: str):
 
     # Submission 全撈後以成員名單過濾
     submission_records = engine.Submission.objects()
-    # ...existing code...
+
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
