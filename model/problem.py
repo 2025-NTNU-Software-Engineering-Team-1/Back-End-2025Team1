@@ -108,6 +108,10 @@ def view_problem(user: User, problem: Problem):
         'allowedLanguage',
         'courses',
         'quota',
+        'ACUser',             # <-- 新增
+        'submitter',          # <-- 新增
+        'canViewStdout',      # <-- 新增
+        'config',             # <-- 新增 (用於 Extra 設定)
         defaultCode='defaultCode',
         status='problemStatus',
         type='problemType',
