@@ -3,6 +3,7 @@ from mongo import DoesNotExist
 from tests.conftest import ForgeClient
 from tests.base_tester import BaseTester
 from tests import utils
+from tests.conftest import ForgeClient
 
 import pytest
 
