@@ -10,12 +10,12 @@ from mongo.utils import *
 from mongo.course import *
 from mongo import engine
 
-__all__ = ['api_api']
+__all__ = ['pat_api']
 
-api_api = Blueprint('api_api', __name__)
+pat_api = Blueprint('pat_api', __name__)
 
 
-@api_api.get('/ping')
+@pat_api.get('/ping')
 def api_ping():
     return {'ok': True}
 
@@ -23,7 +23,7 @@ def api_ping():
 # =========================== get user ips of a course ===========================
 
 
-@api_api.route('/userips/<course_name>', methods=['GET'])
+@pat_api.route('/userips/<course_name>', methods=['GET'])
 @pat_required('read:userips')
 def get_course_user_ips(user, course_name: str):
     # ...existing code...
