@@ -173,6 +173,9 @@ def get_problem_detailed(user, problem: Problem):
     'can_view_stdout',
     'allowed_language',
     'default_code',
+    'config: dict',
+    'pipeline: dict',
+    'Test_Mode: dict',
 )
 def create_problem(user: User, **ks):
     try:

@@ -35,7 +35,13 @@ class UploadInfo:
 
 
 class Problem(MongoBase, engine=engine.Problem):
+    input_description = engine.StringField(default='')
+    output_description = engine.StringField(default='')
+    hint = engine.StringField(default='')
+    sample_input = engine.ListField(engine.StringField(), default=[])
+    sample_output = engine.ListField(engine.StringField(), default=[])
 
+    config = engine.DictField(null=True)
     class Permission(enum.IntFlag):
         VIEW = enum.auto()  # user view permission
         ONLINE = enum.auto()  # user can view problem or not
@@ -257,6 +263,10 @@ class Problem(MongoBase, engine=engine.Problem):
         allowed_language: Optional[int] = None,
         quota: Optional[int] = None,
         default_code: Optional[str] = None,
+        config: Optional[dict] = None,
+        pipeline: Optional[dict] = None,
+        Test_Mode: Optional[dict] = None,
+        **kwargs,
     ):
         if len(courses) == 0:
             raise ValueError('No course provided')
@@ -265,16 +275,48 @@ class Problem(MongoBase, engine=engine.Problem):
             if not course:
                 raise engine.DoesNotExist
             course_objs.append(course.id)
+        config = config or {}
+        pipeline = pipeline or {}
+        test_mode = Test_Mode or {}
+        full_config = {
+            'compilation': config.get('compilation', False),
+            'testMode': test_mode.get('Enabled', False),
+            'aiVTuber': config.get('aiVTuber', False),
+            'acceptedFormat': config.get('acceptedFormat', 'code'),
+            'staticAnalys': config.get('staticAnalys', {'custom': False}),
+            'artifactCollection': config.get('artifactCollection', []),
+            'fopen': pipeline.get('fopen', False),
+            'fwrite': pipeline.get('fwrite', False),
+            'executionMode': pipeline.get('executionMode', 'general'),
+            'customChecker': pipeline.get('customChecker', False),
+            'teacherFirst': pipeline.get('teacherFirst', False),
+            'scoringScript': pipeline.get('scoringScrip', {'custom': False}),
+            'testModeQuotaPerStudent': test_mode.get('Quota_Per_Student', 0),
+        }
+        
+        # 2. (修改) 更新 problem_args
+        description_dict = description or {} # (舊的 description 參數)
         problem_args = drop_none({
             'courses': course_objs,
             'problem_status': status,
             'problem_type': type,
             'problem_name': problem_name,
-            'description': description,
+            
+            # (修改) 拆分 description 欄位
+            'description': description_dict.get('description', ''),
+            'input_description': description_dict.get('input', ''),
+            'output_description': description_dict.get('output', ''),
+            'hint': description_dict.get('hint', ''),
+            'sample_input': description_dict.get('sampleInput', []),
+            'sample_output': description_dict.get('sampleOutput', []),
+            
             'owner': user.username,
             'tags': tags,
             'quota': quota,
             'default_code': default_code,
+            
+            # (新增) 加入 config
+            'config': full_config,
         })
         problem = cls.engine(**problem_args).save()
         programming_problem_args = drop_none({
