@@ -4,7 +4,6 @@ from tests import utils
 import secrets
 from datetime import datetime
 
-
 class TestAPIUserIPs(BaseTester):
     """Test /pat/userips/<course_name> endpoint"""
 
@@ -143,3 +142,18 @@ class TestAPIUserIPs(BaseTester):
         lines = csv_content.strip().split('\n')
         assert len(lines) == 1
         assert 'Type' in lines[0] and 'Username' in lines[0]
+
+
+def teardown_module(module):
+    """模組級 teardown：在本檔案所有測試執行完後清空相關資料"""
+    from mongo import engine
+    print("\n[TEARDOWN] 清理 PAT 測試留下的資料...")
+    try:
+        engine.PersonalAccessToken.drop_collection()
+        engine.LoginRecords.drop_collection()
+        engine.Submission.drop_collection()
+        engine.Course.drop_collection()
+        engine.User.drop_collection()
+    except Exception as e:
+        print(f"[WARN] 清理失敗: {e}")
+
