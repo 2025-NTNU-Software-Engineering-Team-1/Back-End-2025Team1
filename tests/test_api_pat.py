@@ -6,23 +6,6 @@ import pytest
 from datetime import datetime
 
 
-@pytest.fixture(scope="module", autouse=True)
-def clean_after_all_tests():
-    yield
-    from mongo import engine
-    for model in [
-            engine.PersonalAccessToken,
-            engine.LoginRecords,
-            engine.Submission,
-            engine.Course,
-            engine.User,
-    ]:
-        try:
-            model.drop_collection()
-        except Exception:
-            pass
-
-
 class TestAPIUserIPs(BaseTester):
     """Test /pat/userips/<course_name> endpoint"""
 

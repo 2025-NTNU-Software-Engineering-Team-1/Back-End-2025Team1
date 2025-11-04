@@ -32,6 +32,29 @@ def setup_minio():
         yield
 
 
+@pytest.fixture(scope="module", autouse=True)
+def clean_db_after_module():
+
+    def _get_all_models_recursive(cls):
+        all_models = list(cls.__subclasses__())
+        for model in all_models:
+            all_models.extend(_get_all_models_recursive(model))
+        return all_models
+
+    yield
+
+    # Post cleanup
+    all_models = _get_all_models_recursive(mongo.engine.Document)
+    for model in all_models:
+        # Skip abstract models
+        if getattr(model._meta, 'abstract', False):
+            continue
+        try:
+            model.drop_collection()
+        except Exception:
+            pass
+
+
 @pytest.fixture
 def app(tmp_path):
     from app import app as flask_app
