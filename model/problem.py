@@ -202,7 +202,7 @@ def delete_problem(user: User, problem: Problem):
     if not problem.permission(user=user, req=problem.Permission.ONLINE):
         return online_error_response()
     problem.delete()
-    return HTTPResponse()
+    return HTTPResponse('Success.', data={'ok': True})
 
 
 @problem_api.route('/manage/<int:problem>', methods=['PUT'])
@@ -211,25 +211,50 @@ def delete_problem(user: User, problem: Problem):
 def manage_problem(user: User, problem: Problem):
 
     @Request.json(
-        'type',
+        # (API 需求的欄位名稱)
+        'problemName',
+        'description: dict',
         'courses: list',
-        'status',
-        'type',
-        'description',
-        'tags',
-        'problem_name',
-        'quota',
-        'test_case_info',
-        'can_view_stdout',
-        'allowed_language',
-        'default_code',
+        'tags: list',
+        'allowedLanguage: int',
+        'quota: int',
+        'type: int',
+        'status: int',
+        'testCaseInfo: dict',
+        'canViewStdout: bool',
+        'defaultCode',
+        'config: dict',
+        'pipeline: dict',
+        'Test_Mode: dict',
     )
     def modify_problem(**p_ks):
+        # 1. 轉換參數名稱
+        # (將 API 的 'problemName' 轉為 Model 的 'problem_name')
+        kwargs = {
+            'problem_name': p_ks.pop('problemName', None),
+            'description': p_ks.pop('description', None),
+            'courses': p_ks.pop('courses', None),
+            'tags': p_ks.pop('tags', None),
+            'allowed_language': p_ks.pop('allowedLanguage', None),
+            'quota': p_ks.pop('quota', None),
+            'type': p_ks.pop('type', None),
+            'status': p_ks.pop('status', None),
+            'test_case_info': p_ks.pop('testCaseInfo', None),
+            'can_view_stdout': p_ks.pop('canViewStdout', None),
+            'default_code': p_ks.pop('defaultCode', None),
+            'config': p_ks.pop('config', None),
+            'pipeline': p_ks.pop('pipeline', None),
+            'Test_Mode': p_ks.pop('Test_Mode', None),
+        }
+        
+        # 2. 呼叫我們剛剛在 mongo/problem.py 新增的函式
         Problem.edit_problem(
             user=user,
             problem_id=problem.id,
-            **drop_none(p_ks),
+            **drop_none(kwargs), # drop_none 實現「部分更新」
         )
+        
+        # 3. 回傳 200 { ok: true }
         return HTTPResponse()
 
     @Request.files('case')
