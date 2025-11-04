@@ -47,7 +47,7 @@ def clean_db_after_module():
     all_models = _get_all_models_recursive(mongo.engine.Document)
     for model in all_models:
         # Skip abstract models
-        if getattr(model._meta, 'abstract', False):
+        if getattr(model, '_meta', {}).get('abstract', False):
             continue
         try:
             model.drop_collection()
