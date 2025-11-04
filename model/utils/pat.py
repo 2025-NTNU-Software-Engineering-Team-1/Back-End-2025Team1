@@ -3,8 +3,18 @@
 """
 
 import hashlib
+from . import HTTPError
 from datetime import datetime, timezone, timedelta
 from mongo.engine import PersonalAccessToken
+
+__all__ = [
+    'hash_pat_token',
+    'get_pat_status',
+    'add_pat_to_database',
+    '_clean_token',
+    'validate_scope_for_role',
+    'validate_pat_due_time',
+]
 
 
 def hash_pat_token(pat_token: str) -> str:
@@ -85,3 +95,42 @@ def validate_scope_for_role(scope_set: list, user_role_key,
         if scope not in allowed_scopes:
             return False
     return True
+
+
+def validate_pat_due_time(due_time_str):
+    """
+    Validates the PAT Due_Time string.
+    Returns (datetime_obj, None) on success, or (None, HTTPError) on failure.
+    """
+    if not due_time_str:
+        return None, None  # No expiration is valid
+
+    try:
+        due_time_obj = datetime.fromisoformat(
+            due_time_str.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None, HTTPError(
+            "Invalid Due_Time format",
+            400,
+            data={
+                "Type": "ERR",
+                "Message": "Invalid Due_Time format"
+            },
+        )
+
+    # Ensure Due_Time is in the future
+    now = datetime.now(timezone.utc)
+    if due_time_obj.tzinfo is None:
+        due_time_obj = due_time_obj.replace(tzinfo=timezone.utc)
+
+    if due_time_obj <= now:
+        return None, HTTPError(
+            "Due_Time must be in the future",
+            400,
+            data={
+                "Type": "ERR",
+                "Message": "Due_Time must be in the future"
+            },
+        )
+
+    return due_time_obj, None

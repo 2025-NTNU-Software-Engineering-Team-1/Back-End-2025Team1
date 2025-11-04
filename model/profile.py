@@ -7,7 +7,6 @@ from mongo.engine import PersonalAccessToken
 from mongo.user import ROLE_SCOPE_MAP
 from .auth import *
 from .utils import *
-from .utils.pat import hash_pat_token, validate_scope_for_role
 
 __all__ = ['profile_api']
 
@@ -108,31 +107,10 @@ def create_token(user, Name, Scope):
 
     # Request.json不能處理Due_Time，所以這裡手動處理
     data = request.get_json()
-    Due_Time = data.get("Due_Time", None)
-
-    # Convert Due_Time string to datetime if provided
-    due_time_obj = None
-    if Due_Time and Due_Time is not None:
-        try:
-            due_time_obj = datetime.fromisoformat(
-                Due_Time.replace("Z", "+00:00"))
-        except (ValueError, AttributeError):
-            due_time_obj = None  # Invalid format defaults to no expiration
-
-    # Ensure Due_Time is in the future if provided
-    if due_time_obj:
-        now = datetime.now(timezone.utc)
-        if due_time_obj.tzinfo is None:
-            due_time_obj = due_time_obj.replace(tzinfo=timezone.utc)
-        if due_time_obj <= now:
-            return HTTPError(
-                "Due_Time must be in the future",
-                400,
-                data={
-                    "Type": "ERR",
-                    "Message": "Due_Time must be in the future"
-                },
-            )
+    due_time_str = data.get("Due_Time", None)
+    due_time_obj, error_response = validate_pat_due_time(due_time_str)
+    if error_response:
+        return error_response
 
     # Ensure Scope is a list of unique values
     Scope_Set = list(set(Scope)) if Scope else []
@@ -211,23 +189,21 @@ def edit_token(user, pat_id, data):
     if "Name" in data:
         update_data["name"] = data["Name"]
     if "Due_Time" in data:
-        try:
-            if data["Due_Time"]:
-                update_data["due_time"] = datetime.fromisoformat(
-                    data["Due_Time"].replace("Z", "+00:00"))
-            else:
-                update_data["due_time"] = None
-        except (ValueError, AttributeError):
-            return HTTPError(
-                "Invalid Due_Time format",
-                400,
-                data={
-                    "Type": "ERR",
-                    "Message": "Invalid Due_Time format"
-                },
-            )
+        due_time_obj, error_response = validate_pat_due_time(data["Due_Time"])
+        if error_response:
+            return error_response
+        update_data["due_time"] = due_time_obj
+
     if "Scope" in data:
-        update_data["scope"] = list(data["Scope"])
+        Scope_Set = list(set(data["Scope"])) if data["Scope"] else []
+        if not validate_scope_for_role(Scope_Set, user.role, ROLE_SCOPE_MAP):
+            return HTTPError("Invalid Scope",
+                             400,
+                             data={
+                                 "Type": "ERR",
+                                 "Message": "Invalid Scope"
+                             })
+        update_data["scope"] = Scope_Set
 
     try:
         pat.update(**update_data)
