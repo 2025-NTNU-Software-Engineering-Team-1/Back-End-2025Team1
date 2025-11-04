@@ -41,6 +41,7 @@ TA_SCOPES = [
     *STUDENT_SCOPES,  # Inherits all STUDENT privileges
     'write:submissions',  # Create and modify submissions
     'read:submissions:all',  # Read all submissions (required for grading)
+    'read:userips',  # Access to user login IP addresses
 ]
 ROLE_SCOPE_MAP[Role.TA] = TA_SCOPES
 
