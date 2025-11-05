@@ -15,11 +15,10 @@ MONGO_HOST = os.environ.get('MONGO_HOST', 'mongomock://localhost')
 if MONGO_HOST.startswith('mongomock'):
     import mongomock
     MONGO_HOST = MONGO_HOST.replace('mongomock', 'mongodb')
-    connect(
-        'normal-oj',
-        host=MONGO_HOST,
-        mongo_client_class=mongomock.MongoClient,
-    )
+    connect('normal-oj',
+            host=MONGO_HOST,
+            mongo_client_class=mongomock.MongoClient,
+            tz_aware=True)
 else:
     connect('normal-oj', host=MONGO_HOST)
 
@@ -531,7 +530,8 @@ class PersonalAccessToken(Document):
 
     # === Time and Usage Tracking ===
     due_time = DateTimeField(
-        required=False, db_field='dueTime')  # The expiration time of the PAT
+        required=False, db_field='dueTime',
+        utc_timezone=True)  # The expiration time of the PAT
     created_time = DateTimeField(
         default=datetime.now(timezone.utc),
         required=True,
