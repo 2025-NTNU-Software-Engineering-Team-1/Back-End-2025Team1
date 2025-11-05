@@ -82,7 +82,7 @@ def get_tokens(user):
     tokens = []
 
     # Admin can view all tokens
-    if user.role == 'admin':
+    if user.role == Role.ADMIN:
         pat_objects = PersonalAccessToken.objects()
         for pat in pat_objects:
             tokens.append(_clean_token(pat))

@@ -17,7 +17,7 @@ import re
 if TYPE_CHECKING:
     from .course import Course  # pragma: no cover
 
-__all__ = ['User', 'jwt_decode']
+__all__ = ['User', 'jwt_decode', 'Role']
 
 JWT_EXP = timedelta(days=int(os.environ.get('JWT_EXP', '30')))
 JWT_ISS = os.environ.get('JWT_ISS', 'test.test')
