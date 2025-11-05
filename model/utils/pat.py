@@ -4,7 +4,8 @@
 
 import hashlib
 from datetime import datetime, timezone, timedelta
-from mongo.engine import PersonalAccessToken
+from mongo.engine import PersonalAccessToken, TAIPEI_TIMEZONE
+from . import HTTPError
 
 
 def hash_pat_token(pat_token: str) -> str:
@@ -53,26 +54,28 @@ def add_pat_to_database(pat_id,
         raise Exception(f"Failed to save PAT to database: {str(e)}")
 
 
-def _clean_token(pat_obj):
-    """Convert PersonalAccessToken MongoDB object to API response format"""
+def _clean_token(pat_obj, timezone=TAIPEI_TIMEZONE):
+    """
+        Convert PersonalAccessToken MongoDB object to API response format.
+        
+        Timestamps will convert to TAIPEI timezone (UTC+8) in ISO 8601 format by default.
+    """
     status = get_pat_status(pat_obj)
+    created_time = pat_obj.created_time.astimezone(
+        timezone).isoformat() if pat_obj.created_time else None
+    due_time = pat_obj.due_time.astimezone(
+        timezone).isoformat() if pat_obj.due_time else None
+    last_used_time = pat_obj.last_used_time.astimezone(
+        timezone).isoformat() if pat_obj.last_used_time else None
     return {
-        "Name":
-        pat_obj.name,
-        "ID":
-        pat_obj.pat_id,
-        "Owner":
-        pat_obj.owner,
-        "Status":
-        status.capitalize(),  # 'Active', 'Expired', 'Revoked'
-        "Created":
-        pat_obj.created_time.isoformat() if pat_obj.created_time else None,
-        "Due_Time":
-        pat_obj.due_time.isoformat() if pat_obj.due_time else None,
-        "Last_Used": (pat_obj.last_used_time.isoformat()
-                      if pat_obj.last_used_time else None),
-        "Scope":
-        pat_obj.scope or [],
+        "Name": pat_obj.name,
+        "ID": pat_obj.pat_id,
+        "Owner": pat_obj.owner,
+        "Status": status.capitalize(),  # 'Active', 'Expired', 'Revoked'
+        "Created": created_time,
+        "Due_Time": due_time,
+        "Last_Used": last_used_time,
+        "Scope": pat_obj.scope or [],
     }
 
 
@@ -85,3 +88,48 @@ def validate_scope_for_role(scope_set: list, user_role_key,
         if scope not in allowed_scopes:
             return False
     return True
+
+
+def validate_pat_due_time(due_time_str, local_timezone=TAIPEI_TIMEZONE):
+    """
+    Validates the PAT Due_Time string.
+    Returns (datetime_obj, None) on success, or (None, HTTPError) on failure.
+    Treat the due_time_str as TAIPEI timezone if no timezone info is provided.
+    Then convert to UTC for storage.
+    """
+    if not due_time_str:
+        return None, None  # No expiration is valid
+
+    try:
+        due_time_obj = datetime.fromisoformat(
+            due_time_str.replace("Z", "+00:00"))
+        # Treat as TAIPEI timezone if no timezone info is provided
+        if due_time_obj.tzinfo is None:
+            due_time_obj = due_time_obj.replace(tzinfo=local_timezone)
+    except (ValueError, AttributeError):
+        return None, HTTPError(
+            "Invalid Due_Time format",
+            400,
+            data={
+                "Type": "ERR",
+                "Message": "Invalid Due_Time format"
+            },
+        )
+
+    # Convert to UTC for storage
+    due_time_obj = due_time_obj.astimezone(timezone.utc)
+
+    # Ensure Due_Time is in the future
+    now_utc = datetime.now(timezone.utc)
+
+    if due_time_obj <= now_utc:
+        return None, HTTPError(
+            "Due_Time must be in the future",
+            400,
+            data={
+                "Type": "ERR",
+                "Message": "Due_Time must be in the future"
+            },
+        )
+
+    return due_time_obj, None

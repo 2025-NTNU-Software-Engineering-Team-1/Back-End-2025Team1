@@ -81,9 +81,16 @@ from uuid import uuid4
 @login_required
 def get_tokens(user):
     tokens = []
-    pat_objects = PersonalAccessToken.objects(owner=user.username)
-    for pat in pat_objects:
-        tokens.append(_clean_token(pat))
+
+    # Admin can view all tokens
+    if user.role == Role.ADMIN:
+        pat_objects = PersonalAccessToken.objects()
+        for pat in pat_objects:
+            tokens.append(_clean_token(pat))
+    else:
+        pat_objects = PersonalAccessToken.objects(owner=user.username)
+        for pat in pat_objects:
+            tokens.append(_clean_token(pat))
     return HTTPResponse("OK", data={"Tokens": tokens})
 
 
