@@ -129,8 +129,13 @@ def pat_required(*required_scopes: str) -> Callable[[Callable], Callable]:
                 return HTTPError('Token has been manually revoked', 401)
 
             # 4. Status Check: Automatic Expiration
-            if pat_record.due_time and datetime.now(
-                    timezone.utc) > pat_record.due_time:
+            now_aware = datetime.now(timezone.utc)
+            due_time_aware = pat_record.due_time
+            if due_time_aware.tzinfo is None or due_time_aware.tzinfo.utcoffset(
+                    due_time_aware) is None:
+                # Force timezone awareness to UTC if not set
+                due_time_aware = due_time_aware.replace(tzinfo=timezone.utc)
+            if now_aware > due_time_aware:
                 return HTTPError('Token Expired', 401)
 
             # 5. Scope Verification
