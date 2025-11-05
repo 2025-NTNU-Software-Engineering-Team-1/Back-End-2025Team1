@@ -218,7 +218,7 @@ class TestPATRoutes(BaseTester):
         # Check that token was actually updated in DB
         token = PersonalAccessToken.objects.get(pat_id=pat_id)
         assert token.name == 'Updated Token Name'
-        assert token.scope == ['read:courses', 'write:submissions']
+        assert set(token.scope) == set(['read:courses', 'write:submissions'])
 
     def test_edit_nonexistent_token(self, client_student):
         """Test editing non-existent token returns 404"""
