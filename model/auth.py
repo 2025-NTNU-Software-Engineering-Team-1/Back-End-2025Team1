@@ -113,7 +113,6 @@ def pat_required(*required_scopes: str) -> Callable[[Callable], Callable]:
                 return HTTPError(
                     'Authentication Required: Bearer token is missing', 401)
 
-            pdb.set_trace()
             pat_token = auth_header.split(' ', 1)[1]
 
             # 2. Hash Calculation and DB Lookup
