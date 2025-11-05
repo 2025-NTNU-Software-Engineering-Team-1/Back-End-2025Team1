@@ -7,6 +7,15 @@ from datetime import datetime, timezone, timedelta
 from mongo.engine import PersonalAccessToken, TAIPEI_TIMEZONE
 from . import HTTPError
 
+__all__ = [
+    'hash_pat_token',
+    'get_pat_status',
+    'add_pat_to_database',
+    '_clean_token',
+    'validate_scope_for_role',
+    'validate_pat_due_time',
+]
+
 
 def hash_pat_token(pat_token: str) -> str:
     """Computes SHA-256 hash for the Personal Access Token."""
