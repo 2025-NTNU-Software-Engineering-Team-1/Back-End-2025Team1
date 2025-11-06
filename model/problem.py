@@ -463,20 +463,49 @@ def problem_stats(user: User, problem: Problem):
     if not problem.permission(user=user, req=problem.Permission.ONLINE):
         return online_error_response()
     ret = {}
-    students = []
+    # gather unique students from all related courses
+    student_usernames = set()
     for course in problem.courses:
-        students += [User(name) for name in course.student_nicknames.keys()]
-    students_high_scores = [problem.get_high_score(user=u) for u in students]
+        student_usernames.update(course.student_nicknames.keys())
+    students = []
+    for username in student_usernames:
+        user_obj = User(username)
+        if user_obj:
+            students.append(user_obj)
+    total_students = len(students)
+    students_high_scores = [
+        problem.get_high_score(user=u) for u in students
+    ]
+
     # These score statistics are only counting the scores of the students in the course.
-    ret['acUserRatio'] = [problem.get_ac_user_count(), len(students)]
-    ret['triedUserCount'] = problem.get_tried_user_count()
-    ret['average'] = None if len(students) == 0 else statistics.mean(
+    if total_students:
+        student_docs = [u.obj for u in students]
+        ac_users = len(
+            engine.Submission.objects(
+                problem=problem.id,
+                status=0,
+                user__in=student_docs,
+            ).distinct('user'))
+        tried_users = len(
+            engine.Submission.objects(problem=problem.id,
+                                      user__in=student_docs).distinct('user'))
+    else:
+        ac_users = 0
+        tried_users = 0
+    ret['acUserRatio'] = [ac_users, total_students]
+    ret['triedUserCount'] = tried_users
+    ret['average'] = None if total_students == 0 else statistics.mean(
         students_high_scores)
-    ret['std'] = None if len(students) <= 1 else statistics.pstdev(
+    ret['std'] = None if total_students <= 1 else statistics.pstdev(
         students_high_scores)
     ret['scoreDistribution'] = students_high_scores
-    # However, submissions include the submissions of teacher and admin.
-    ret['statusCount'] = problem.get_submission_status()
+
+    # Submission status counts (including zero counts for -1..7)
+    status_count = {str(code): 0 for code in range(-1, 8)}
+    for key, value in problem.get_submission_status().items():
+        status_key = str(key)
+        status_count[status_key] = value
+    ret['statusCount'] = status_count
     params = {
         'user': user,
         'offset': 0,

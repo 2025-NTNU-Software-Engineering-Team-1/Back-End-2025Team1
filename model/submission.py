@@ -1,7 +1,6 @@
 import io
 from typing import Optional
 import requests as rq
-import random
 import secrets
 import json
 from flask import (
@@ -127,7 +126,7 @@ def create_submission(user, language_type, problem_id):
 @submission_api.route('/', methods=['GET'])
 @login_required
 @Request.args('offset', 'count', 'problem_id', 'username', 'status',
-              'language_type', 'course', 'before', 'after', 'ip_addr')
+              'language_type', 'course')
 def get_submission_list(
     user,
     offset,
@@ -136,10 +135,7 @@ def get_submission_list(
     username,
     status,
     course,
-    before,
-    after,
     language_type,
-    ip_addr,
 ):
     '''
     get the list of submission data
@@ -161,13 +157,28 @@ def get_submission_list(
         except ValueError:
             raise ValueError(f'can not convert {name} to string')
 
-    def parse_timestamp(val: Optional[int], name: str):
+    def parse_status(val: Optional[str]) -> Optional[int]:
+        '''
+        Parse status parameter, accepts both status code string and status name
+        '''
         if val is None:
             return None
+        # Status code mapping
+        status_map = {
+            'AC': 0, 'WA': 1, 'CE': 2, 'TLE': 3,
+            'MLE': 4, 'RE': 5, 'JE': 6, 'OLE': 7,
+        }
+        # If it's a status name string (AC, WA, etc.)
+        if val.upper() in status_map:
+            return status_map[val.upper()]
+        # If it's a numeric string
         try:
-            return datetime.fromtimestamp(val)
+            status_code = int(val)
+            if 0 <= status_code <= 7:
+                return status_code
+            raise ValueError(f'status code must be between 0 and 7, got {status_code}')
         except ValueError:
-            raise ValueError(f'can not convert {name} to timestamp')
+            raise ValueError(f'invalid status value: {val}')
 
     cache_key = (
         'SUBMISSION_LIST_API',
@@ -179,8 +190,6 @@ def get_submission_list(
         course,
         offset,
         count,
-        before,
-        after,
     )
 
     cache_key = '_'.join(map(str, cache_key))
@@ -195,10 +204,7 @@ def get_submission_list(
         offset = parse_int(offset, 'offset')
         count = parse_int(count, 'count')
         problem_id = parse_int(problem_id, 'problemId')
-        status = parse_int(status, 'status')
-        before = parse_timestamp(before, 'before')
-        after = parse_timestamp(after, 'after')
-        ip_addr = parse_str(ip_addr, 'ip_addr')
+        status = parse_status(status)
 
         if language_type is not None:
             try:
@@ -221,9 +227,6 @@ def get_submission_list(
                 'status': status,
                 'language_type': language_type,
                 'course': course,
-                'before': before,
-                'after': after,
-                'ip_addr': ip_addr
             })
             submissions, submission_count = Submission.filter(
                 **params,
@@ -238,15 +241,7 @@ def get_submission_list(
                 }), 15)
         except ValueError as e:
             return HTTPError(str(e), 400)
-    # unicorn gifs
-    unicorns = [
-        'https://media.giphy.com/media/xTiTnLmaxrlBHxsMMg/giphy.gif',
-        'https://media.giphy.com/media/26AHG5KGFxSkUWw1i/giphy.gif',
-        'https://media.giphy.com/media/g6i1lEax9Pa24/giphy.gif',
-        'https://media.giphy.com/media/tTyTbFF9uEbPW/giphy.gif',
-    ]
     ret = {
-        'unicorn': random.choice(unicorns),
         'submissions': submissions,
         'submissionCount': submission_count,
     }
@@ -276,11 +271,22 @@ def get_submission(user, submission: Submission):
     has_code = not submission.handwritten and user_feedback_perm
     has_output = submission.problem.can_view_stdout
     ret = submission.to_dict()
+    
+    # Always include code field (required by API spec)
+    # - Has permission and not handwritten: return actual code
+    # - Decode error or not found: return empty string
+    # - No permission or handwritten: return empty string (code not accessible)
     if has_code:
         try:
-            ret['code'] = submission.get_main_code()
-        except UnicodeDecodeError:
-            ret['code'] = False
+            code = submission.get_main_code()
+            ret['code'] = code if code is not None else ''
+        except (UnicodeDecodeError, SubmissionCodeNotFound):
+            ret['code'] = ''
+    else:
+        # No permission or handwritten submission - code field present but empty
+        ret['code'] = ''
+    
+    # Add tasks
     if has_output:
         ret['tasks'] = submission.get_detailed_result()
     else:
@@ -455,13 +461,14 @@ def rejudge(user, submission: Submission):
     except ValueError as e:
         return HTTPError(str(e), 400)
     except JudgeQueueFullError as e:
-        return HTTPResponse(str(e), 202)
+        return HTTPResponse(str(e), 202, data={'ok': False})
     except ValidationError as e:
         return HTTPError(str(e), 422, data=e.to_dict())
-    if success:
-        return HTTPResponse(f'{submission} is sent to judgement.')
-    else:
+    
+    # Check explicit False (not None or other falsy values)
+    if success is False:
         return HTTPError('Some error occurred, please contact the admin', 500)
+    return HTTPResponse('', data={'ok': True})
 
 
 @submission_api.route('/config', methods=['GET', 'PUT'])

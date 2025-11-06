@@ -88,7 +88,7 @@ class TestUserGetSubmission(SubmissionTester):
             f'/submission?offset=0&count={self.init_submission_count}',
         )
         assert rv.status_code == 200, rv_json
-        assert 'unicorn' in rv_data
+        assert 'submissionCount' in rv_data
         assert len(rv_data['submissions']) == self.init_submission_count // 2
         excepted_field_names = {
             'submissionId',
@@ -100,6 +100,7 @@ class TestUserGetSubmission(SubmissionTester):
             'memoryUsage',
             'languageType',
             'timestamp',
+            'lastSend',
             'ipAddr',
         }
         for s in rv_data['submissions']:

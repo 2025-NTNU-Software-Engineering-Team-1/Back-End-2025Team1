@@ -759,9 +759,14 @@ class Submission(MongoBase, engine=engine.Submission):
     def _to_dict(self) -> SON:
         ret = self.to_mongo()
         _ret = {
+            'submissionId': str(self.id),
             'problemId': ret['problem'],
             'user': self.user.info,
-            'submissionId': str(self.id),
+            'status': self.status,
+            'score': self.score,
+            'runTime': self.exec_time,
+            'memoryUsage': self.memory_usage,
+            'languageType': self.language,
             'timestamp': self.timestamp.timestamp(),
             'lastSend': self.last_send.timestamp(),
             'ipAddr': self.ip_addr,
@@ -773,10 +778,16 @@ class Submission(MongoBase, engine=engine.Submission):
             'comment',
             'tasks',
             'ip_addr',
+            'status',
+            'score',
+            'runTime',
+            'memoryUsage',
+            'languageType',
         ]
         # delete old keys
         for o in old:
-            del ret[o]
+            if o in ret:
+                del ret[o]
         # insert new keys
         ret.update(**_ret)
         return ret
@@ -786,23 +797,50 @@ class Submission(MongoBase, engine=engine.Submission):
         Get results without output
         '''
         tasks = [task.to_mongo() for task in self.tasks]
+        result = []
+        allowed_case_fields = {'execTime', 'memoryUsage', 'status'}
+        
         for task in tasks:
-            for case in task['cases']:
-                del case['output']
-        return [task.to_dict() for task in tasks]
+            # Filter case fields - only keep allowed fields
+            filtered_cases = [
+                {k: case[k] for k in allowed_case_fields if k in case}
+                for case in task['cases']
+            ]
+            # Filter task fields
+            filtered_task = {
+                'status': task.get('status'),
+                'execTime': task.get('execTime'),
+                'memoryUsage': task.get('memoryUsage'),
+                'score': task.get('score'),
+                'cases': filtered_cases,
+            }
+            result.append(filtered_task)
+        return result
 
     def get_detailed_result(self) -> List[Dict[str, Any]]:
         '''
-        Get all results (including stdout/stderr) of this submission
+        Get task results with only execTime, memoryUsage, status for each case
         '''
         tasks = [task.to_mongo() for task in self.tasks]
-        for i, task in enumerate(tasks):
-            for j, case in enumerate(task.cases):
-                output = self.get_single_output(i, j)
-                case['stdout'] = output['stdout']
-                case['stderr'] = output['stderr']
-                del case['output']  # non-serializable field
-        return [task.to_dict() for task in tasks]
+        result = []
+        allowed_case_fields = {'execTime', 'memoryUsage', 'status'}
+        
+        for task in tasks:
+            # Filter case fields - only keep allowed fields
+            filtered_cases = [
+                {k: case[k] for k in allowed_case_fields if k in case}
+                for case in task['cases']
+            ]
+            # Filter task fields
+            filtered_task = {
+                'status': task.get('status'),
+                'execTime': task.get('execTime'),
+                'memoryUsage': task.get('memoryUsage'),
+                'score': task.get('score'),
+                'cases': filtered_cases,
+            }
+            result.append(filtered_task)
+        return result
 
     def _get_code_raw(self):
         if self.code.grid_id is None and self.code_minio_path is None:
