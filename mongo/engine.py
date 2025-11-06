@@ -4,10 +4,12 @@ import mongoengine
 import os
 import html
 from enum import IntEnum
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from zipfile import ZipFile, BadZipFile
 
 __all__ = [*mongoengine.__all__]
+
+TAIPEI_TIMEZONE = timezone(timedelta(hours=8))
 
 MONGO_HOST = os.environ.get('MONGO_HOST', 'mongomock://localhost')
 
@@ -531,7 +533,8 @@ class PersonalAccessToken(Document):
 
     # === Time and Usage Tracking ===
     due_time = DateTimeField(
-        required=False, db_field='dueTime')  # The expiration time of the PAT
+        required=False, db_field='dueTime',
+        utc_timezone=True)  # The expiration time of the PAT
     created_time = DateTimeField(
         default=datetime.now(timezone.utc),
         required=True,

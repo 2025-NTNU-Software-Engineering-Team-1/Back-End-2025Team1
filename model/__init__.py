@@ -25,6 +25,7 @@ from .post import *
 from .copycat import *
 from .health import *
 from .user import *
+from .pat import *
 
 __all__ = [
     *auth.__all__,
@@ -40,4 +41,5 @@ __all__ = [
     *copycat.__all__,
     *health.__all__,
     *user.__all__,
+    *pat.__all__,
 ]

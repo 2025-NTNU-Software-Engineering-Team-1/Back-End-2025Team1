@@ -17,7 +17,7 @@ import re
 if TYPE_CHECKING:
     from .course import Course  # pragma: no cover
 
-__all__ = ['User', 'jwt_decode']
+__all__ = ['User', 'jwt_decode', 'Role']
 
 JWT_EXP = timedelta(days=int(os.environ.get('JWT_EXP', '30')))
 JWT_ISS = os.environ.get('JWT_ISS', 'test.test')
@@ -41,6 +41,7 @@ TA_SCOPES = [
     *STUDENT_SCOPES,  # Inherits all STUDENT privileges
     'write:submissions',  # Create and modify submissions
     'read:submissions:all',  # Read all submissions (required for grading)
+    'read:userips',  # Access to user login IP addresses
 ]
 ROLE_SCOPE_MAP[Role.TA] = TA_SCOPES
 
@@ -51,6 +52,7 @@ TEACHER_SCOPES = [
     'write:problems',  # Create and modify problems
     'read:submissions:all',  # Read all student submissions (required for grading)
     'grade:submissions',  # Perform grading operation (non-CRUD action)
+    'read:userips',  # Access to user login IP addresses
 ]
 ROLE_SCOPE_MAP[Role.TEACHER] = TEACHER_SCOPES
 
