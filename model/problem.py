@@ -108,10 +108,10 @@ def view_problem(user: User, problem: Problem):
         'allowedLanguage',
         'courses',
         'quota',
-        'ACUser',             # <-- 新增
-        'submitter',          # <-- 新增
-        'canViewStdout',      # <-- 新增
-        'config',             # <-- 新增 (用於 Extra 設定)
+        'ACUser',  # <-- 新增
+        'submitter',  # <-- 新增
+        'canViewStdout',  # <-- 新增
+        'config',  # <-- 新增 (用於 Extra 設定)
         defaultCode='defaultCode',
         status='problemStatus',
         type='problemType',
@@ -246,14 +246,14 @@ def manage_problem(user: User, problem: Problem):
             'pipeline': p_ks.pop('pipeline', None),
             'Test_Mode': p_ks.pop('Test_Mode', None),
         }
-        
+
         # 2. 呼叫我們剛剛在 mongo/problem.py 新增的函式
         Problem.edit_problem(
             user=user,
             problem_id=problem.id,
-            **drop_none(kwargs), # drop_none 實現「部分更新」
+            **drop_none(kwargs),  # drop_none 實現「部分更新」
         )
-        
+
         # 3. 回傳 200 { ok: true }
         return HTTPResponse()
 
@@ -473,9 +473,7 @@ def problem_stats(user: User, problem: Problem):
         if user_obj:
             students.append(user_obj)
     total_students = len(students)
-    students_high_scores = [
-        problem.get_high_score(user=u) for u in students
-    ]
+    students_high_scores = [problem.get_high_score(user=u) for u in students]
 
     # These score statistics are only counting the scores of the students in the course.
     if total_students:
