@@ -4,7 +4,7 @@ from random import SystemRandom
 from typing import Set, Callable, Any, Optional
 import csv
 import io
-from datetime import timezone
+from datetime import timezone, datetime
 # Related third party imports
 from flask import Blueprint, request, current_app, url_for
 # Local application
@@ -21,6 +21,7 @@ __all__ = (
     'login_required',
     'identity_verify',
     'get_verify_link',
+    'pat_required',
 )
 
 auth_api = Blueprint('auth_api', __name__)
@@ -128,9 +129,16 @@ def pat_required(*required_scopes: str) -> Callable[[Callable], Callable]:
                 return HTTPError('Token has been manually revoked', 401)
 
             # 4. Status Check: Automatic Expiration
-            if pat_record.due_time and datetime.now(
-                    timezone.utc) > pat_record.due_time:
-                return HTTPError('Token Expired', 401)
+            if pat_record.due_time is not None:
+                now_aware = datetime.now(timezone.utc)
+                due_time_aware = pat_record.due_time
+                if due_time_aware.tzinfo is None or due_time_aware.tzinfo.utcoffset(
+                        due_time_aware) is None:
+                    # Force timezone awareness to UTC if not set
+                    due_time_aware = due_time_aware.replace(
+                        tzinfo=timezone.utc)
+                if now_aware > due_time_aware:
+                    return HTTPError('Token Expired', 401)
 
             # 5. Scope Verification
             # Using set comparisons
