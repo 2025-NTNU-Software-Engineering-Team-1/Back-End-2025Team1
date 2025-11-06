@@ -133,6 +133,56 @@ class Duration(EmbeddedDocument):
         return self.start <= other <= self.end
 
 
+class UploadPolicy(EmbeddedDocument):
+    """
+    UploadMode:
+        Code: One code file. Normal execution code submission.
+        Zip: A zip file containing multiple files. Suitable for complex projects. Need makefile.
+        Function: Single function submission. Used in function-based problems.
+        Interactive: Run with student's and teacher's binaries for interaction.
+    """
+
+    class UploadMode(IntEnum):
+        CODE = 0
+        ZIP = 1
+        FUNCTION = 2
+        INTERACTIVE = 3
+
+    mode = IntEnumField(enum=UploadMode, required=True)
+    required_files = ListField(StringField(max_length=256), default=list)
+
+    # ====== Teacher Artifacts Path (Optional)======
+    # MinIO path
+    compile_artifacts_path = StringField(max_length=256,
+                                         required=False,
+                                         default='')
+    static_analysis_artifacts_path = StringField(max_length=256,
+                                                 required=False,
+                                                 default='')
+    judger_artifacts_path = StringField(max_length=256,
+                                        required=False,
+                                        default='')
+    checker_artifacts_path = StringField(max_length=256,
+                                         required=False,
+                                         default='')
+    scorer_artifacts_path = StringField(max_length=256,
+                                        required=False,
+                                        default='')
+    # ==============================================
+
+
+class Pipeline(EmbeddedDocument):
+    """
+    upload_policy        ：mode（code/zip/function）、requiredFiles（Makefile、a.out）、teacherArtifacts 路徑。
+    network_policy       ：外網白/黑名單、Local service 允許列表。
+    static_analysis_policies：黑白名單、JE 自動終止策略。
+    interaction_config   ：教師/學生 Binary 名稱、執行順序、stdin/stdout 配置、Checker 需求。
+    custom_scoring       ：是否啟用、自訂 Score.py 路徑、I/O 介面描述。
+    artifact_manifest    ：可提供下載的產物種類。
+    test_case_policy     ：命名規則（legacy/ssttnn）、允許的輸入/輸出模式（stdin/fopen、stdout/fwrite）。
+    """
+
+
 class User(Document):
 
     class Role(IntEnum):
