@@ -58,8 +58,8 @@ def get_course_user_ips(user, course_name: str):
             seen.add(rid)
             login_records.append(r)
 
-    # Submission 全撈後以成員名單過濾
-    submission_records = engine.Submission.objects()
+    # Submission 只撈取成員名單的 username
+    submission_records = engine.Submission.objects(username__in=list(member_usernames))
 
     output = io.StringIO()
     writer = csv.writer(output)
