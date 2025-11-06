@@ -22,35 +22,6 @@ def api_ping():
 # =========================== get user ips of a course ===========================
 
 
-def extract_submission_username(record, member_usernames) -> str | None:
-    """
-    Extracts the username from a submission record using multiple fallbacks:
-    1. record.username attribute
-    2. record.user.username attribute, or str(record.user)
-    3. User(record.user_id).username
-    Returns the username if found and valid, else None.
-    """
-    uname = getattr(record, 'username', None)
-    if uname is not None and uname in member_usernames:
-        return uname
-    if hasattr(record, 'user'):
-        val = getattr(record, 'user')
-        try:
-            candidate = getattr(val, 'username', None) or str(val)
-        except Exception:
-            candidate = str(val)
-        if candidate in member_usernames:
-            return candidate
-    if hasattr(record, 'user_id'):
-        try:
-            candidate = User(getattr(record, 'user_id')).username
-            if candidate in member_usernames:
-                return candidate
-        except Exception:
-            pass
-    return None
-
-
 @pat_api.route('/userips/<course_name>', methods=['GET'])
 @pat_required('read:userips')
 def get_course_user_ips(user, course_name: str):
@@ -89,7 +60,7 @@ def get_course_user_ips(user, course_name: str):
 
     # Submission 只撈取成員名單的 username
     submission_records = engine.Submission.objects(
-        username__in=list(member_usernames))
+        user__in=list(member_users_docs))
 
     output = io.StringIO()
     writer = csv.writer(output)
@@ -113,8 +84,8 @@ def get_course_user_ips(user, course_name: str):
         ])
 
     for record in submission_records:
-        uname = extract_submission_username(record, member_usernames)
-        if not uname:
+        uname = record.user.username
+        if not uname or uname not in member_usernames:
             continue
 
         writer.writerow([
