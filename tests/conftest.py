@@ -52,6 +52,7 @@ def clean_db_after_module():
         try:
             model.drop_collection()
         except Exception:
+            # Ignore errors during cleanup
             pass
 
 

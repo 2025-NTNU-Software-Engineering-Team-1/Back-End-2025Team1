@@ -65,9 +65,9 @@ def add_pat_to_database(pat_id,
 
 def _clean_token(pat_obj, timezone=TAIPEI_TIMEZONE):
     """
-        Convert PersonalAccessToken MongoDB object to API response format.
-        
-        Timestamps will convert to TAIPEI timezone (UTC+8) in ISO 8601 format by default.
+    Convert PersonalAccessToken MongoDB object to API response format.
+    
+    Timestamps will convert to TAIPEI timezone (UTC+8) in ISO 8601 format by default.
     """
     status = get_pat_status(pat_obj)
     created_time = pat_obj.created_time.astimezone(

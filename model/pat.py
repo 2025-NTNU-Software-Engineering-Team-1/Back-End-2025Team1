@@ -1,7 +1,6 @@
-from flask import Blueprint
+from flask import Blueprint, Response
 import csv
 import io
-from flask import Blueprint, Response
 
 from mongo import *
 from .auth import *
@@ -95,6 +94,7 @@ def get_course_user_ips(user, course_name: str):
             try:
                 uname = User(getattr(record, 'user_id')).username
             except Exception:
+                # Ignore errors during user lookup
                 pass
 
         if not uname or uname not in member_usernames:

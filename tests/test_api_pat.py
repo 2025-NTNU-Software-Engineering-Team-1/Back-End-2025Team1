@@ -2,7 +2,6 @@ from mongo import engine, User
 from tests.base_tester import BaseTester
 from tests import utils
 import secrets
-import pytest
 from datetime import datetime
 
 
