@@ -70,7 +70,6 @@ def edit_config(user, font_size, theme, indent_type, tab_size, language):
     return HTTPResponse('Uploaded.', cookies=cookies)
 
 
-# ======================== pat ========================
 from model.utils.pat import (add_pat_to_database, _clean_token)
 
 import secrets
@@ -82,7 +81,6 @@ from uuid import uuid4
 def get_tokens(user):
     tokens = []
 
-    # Admin can view all tokens
     if user.role == Role.ADMIN:
         pat_objects = PersonalAccessToken.objects()
     else:
@@ -106,24 +104,20 @@ def get_scope(user):
 def create_token(user, Name, Scope):
     pat_id = uuid4().hex[:16]
     secret = secrets.token_urlsafe(32)
-    # Build the presented token string first, then hash the entire token
     presented_token = f"noj_pat_{secret}"
     hash_val = hash_pat_token(presented_token)
 
-    # Request.json不能處理Due_Time，所以這裡手動處理
     data = request.get_json()
     Due_Time = data.get("Due_Time", None)
 
-    # Convert Due_Time string to datetime if provided
     due_time_obj = None
     if Due_Time and Due_Time is not None:
         try:
             due_time_obj = datetime.fromisoformat(
                 Due_Time.replace("Z", "+00:00"))
         except (ValueError, AttributeError):
-            due_time_obj = None  # Invalid format defaults to no expiration
+            due_time_obj = None
 
-    # Ensure Due_Time is in the future if provided
     if due_time_obj:
         now = datetime.now(timezone.utc)
         if due_time_obj.tzinfo is None:
@@ -138,10 +132,8 @@ def create_token(user, Name, Scope):
                 },
             )
 
-    # Ensure Scope is a list of unique values
     Scope_Set = list(set(Scope)) if Scope else []
 
-    # Validate scope
     if not validate_scope_for_role(Scope_Set, user.role, ROLE_SCOPE_MAP):
         return HTTPError("Invalid Scope",
                          400,
@@ -150,7 +142,6 @@ def create_token(user, Name, Scope):
                              "Message": "Invalid Scope"
                          })
 
-    # Create new PersonalAccessToken in MongoDB
     try:
         pat = add_pat_to_database(
             pat_id=pat_id,
@@ -210,7 +201,6 @@ def edit_token(user, pat_id, data):
                              "Message": "Not token owner"
                          })
 
-    # Update fields if provided
     update_data = {}
     if "Name" in data:
         update_data["name"] = data["Name"]
@@ -302,6 +292,3 @@ def deactivate_token(user, pat_id):
                 "Message": f"Database error: {str(e)}"
             },
         )
-
-
-# ======================== pat ends ========================

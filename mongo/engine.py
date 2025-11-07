@@ -317,6 +317,35 @@ class Problem(Document):
         ProblemDescription,
         default=ProblemDescription,
     )
+    # New fields for API compatibility (can coexist with description)
+    input_description = StringField(
+        db_field='inputDescription',
+        default='',
+        max_length=100000,
+    )
+    output_description = StringField(
+        db_field='outputDescription',
+        default='',
+        max_length=100000,
+    )
+    hint = StringField(
+        default='',
+        max_length=100000,
+    )
+    sample_input = ListField(
+        StringField(max_length=1024),
+        default=list,
+        db_field='sampleInput',
+    )
+    sample_output = ListField(
+        StringField(max_length=1024),
+        default=list,
+        db_field='sampleOutput',
+    )
+    config = DictField(
+        default=dict,
+        null=True,
+    )
     owner = StringField(max_length=16, required=True)
     # pdf =
     tags = ListField(StringField(max_length=16))
@@ -416,6 +445,12 @@ class Submission(Document):
         null=True,
         max_length=256,
         db_field='codeMinioPath',
+    )
+    compiled_binary = FileField(default=None, null=True)
+    compiled_binary_minio_path = StringField(
+        null=True,
+        max_length=256,
+        db_field='compiledBinaryMinioPath',
     )
     last_send = DateTimeField(db_field='lastSend', default=datetime.now)
     comment = FileField(default=None, null=True)

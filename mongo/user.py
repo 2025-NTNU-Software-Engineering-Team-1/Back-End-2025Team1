@@ -25,7 +25,6 @@ JWT_SECRET = os.environ.get('JWT_SECRET', 'SuperSecretString')
 
 ROLE_SCOPE_MAP = {}
 
-# Student/Standard User Scopes
 STUDENT_SCOPES = [
     'read:user',
     'write:user',
@@ -36,33 +35,30 @@ STUDENT_SCOPES = [
 ]
 ROLE_SCOPE_MAP[Role.STUDENT] = STUDENT_SCOPES
 
-# Teacher Assistant Scopes
 TA_SCOPES = [
-    *STUDENT_SCOPES,  # Inherits all STUDENT privileges
-    'write:submissions',  # Create and modify submissions
-    'read:submissions:all',  # Read all submissions (required for grading)
-    'read:userips',  # Access to user login IP addresses
+    *STUDENT_SCOPES,
+    'write:submissions',
+    'read:submissions:all',
+    'read:userips',
 ]
 ROLE_SCOPE_MAP[Role.TA] = TA_SCOPES
 
-# Teacher/Advanced User Scopes
 TEACHER_SCOPES = [
-    *STUDENT_SCOPES,  # Inherits all STUDENT privileges
-    'write:courses',  # Create and modify courses
-    'write:problems',  # Create and modify problems
-    'read:submissions:all',  # Read all student submissions (required for grading)
-    'grade:submissions',  # Perform grading operation (non-CRUD action)
-    'read:userips',  # Access to user login IP addresses
+    *STUDENT_SCOPES,
+    'write:courses',
+    'write:problems',
+    'read:submissions:all',
+    'grade:submissions',
+    'read:userips',
 ]
 ROLE_SCOPE_MAP[Role.TEACHER] = TEACHER_SCOPES
 
-# System Administrator Scopes
 ADMIN_SCOPES = [
-    *TEACHER_SCOPES,  # Inherits all TEACHER privileges
-    'read:user:all',  # Read all user information in the system
-    'write:user:all',  # Modify any user's information (including roles)
-    'revoke:pat:all',  # Ability to revoke any user's PAT Token (for deactivation)
-    'admin:system',  # Access to system configuration and maintenance APIs
+    *TEACHER_SCOPES,
+    'read:user:all',
+    'write:user:all',
+    'revoke:pat:all',
+    'admin:system',
 ]
 ROLE_SCOPE_MAP[Role.ADMIN] = ADMIN_SCOPES
 
@@ -76,7 +72,7 @@ class User(MongoBase, engine=engine.User):
         password: str,
         email: str,
     ):
-        if re.match(r'^[a-zA-Z0-9_\-]+$', username) is None:
+        if username is None or re.match(r'^[a-zA-Z0-9_\-]+$', username) is None:
             raise ValueError(f'Invalid username [username={username}]')
         user_id = hash_id(username, password)
         email = email.lower().strip()

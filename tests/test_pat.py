@@ -14,7 +14,6 @@ class TestPATHelpers:
     def setup_method(self):
         """Reset PATs in DB before each test"""
         PersonalAccessToken.objects().delete()
-        # Use hash_pat_token with full token string
         test_token = "noj_pat_test_secret"
         PersonalAccessToken(
             pat_id='test_001',
@@ -33,12 +32,10 @@ class TestPATHelpers:
         hash_val = hash_pat_token(token)
 
         assert isinstance(hash_val, str)
-        assert len(hash_val) == 64  # SHA-256 hex digest is 64 chars
+        assert len(hash_val) == 64
 
-        # Same token should produce same hash
         assert hash_pat_token(token) == hash_val
 
-        # Different token should produce different hash
         assert hash_pat_token("noj_pat_different_secret") != hash_val
 
     def test_clean_token(self):
@@ -51,18 +48,15 @@ class TestPATHelpers:
         assert cleaned['Owner'] == 'test_user'
         assert cleaned['Status'] == 'Active'
         assert cleaned['Scope'] == ['read', 'write']
-        # Internal fields should not be present in mapping
         assert 'Hash' not in cleaned
         assert 'Is_Revoked' not in cleaned
 
     def test_clean_token_with_status(self):
         """Test _clean_token includes correct status"""
-        # Test active token
         pat = PersonalAccessToken.objects.get(pat_id='test_001')
         cleaned = _clean_token(pat)
         assert cleaned['Status'] == 'Active'
 
-        # Test revoked token
         pat.update(is_revoked=True)
         pat.reload()
         cleaned = _clean_token(pat)
@@ -82,7 +76,6 @@ class TestPATHelpers:
             is_revoked=False,
         ).save()
 
-        # Should now have 2 tokens in database
         all_tokens = PersonalAccessToken.objects()
         assert len(all_tokens) == 2
 
@@ -92,14 +85,12 @@ class TestPATHelpers:
 
     def test_token_revocation_simulation(self):
         """Test simulating token revocation"""
-        # Revoke the test token in DB
         pat = PersonalAccessToken.objects.get(pat_id='test_001')
         pat.update(is_revoked=True,
                    revoked_by='admin',
                    revoked_time=datetime.now(timezone.utc))
         pat.reload()
 
-        # Clean token mapping should reflect status change
         cleaned = _clean_token(pat)
         assert cleaned['Status'] == 'Deactivated'
 
@@ -137,7 +128,6 @@ class TestPATRoutes(BaseTester):
         assert tokens[0]['Name'] == 'Student PAT'
         assert tokens[0]['Owner'] == 'student'
 
-        # Should not contain internal fields
         assert 'Hash' not in tokens[0]
         assert 'Is_Revoked' not in tokens[0]
 
@@ -177,14 +167,11 @@ class TestPATRoutes(BaseTester):
         assert data['Message'] == 'Token Created'
         assert 'Token' in data
 
-        # Token should be in format "noj_pat_<secret>"
         token = data['Token']
         assert token.startswith('noj_pat_')
 
-        # Should now have 2 tokens for this owner in DB
         assert PersonalAccessToken.objects(owner='student').count() == 2
 
-        # Find the new token by excluding the existing one
         new_tokens = PersonalAccessToken.objects(owner='student',
                                                  pat_id__ne='student_001')
         assert len(new_tokens) == 1
@@ -215,7 +202,6 @@ class TestPATRoutes(BaseTester):
         assert data['Type'] == 'OK'
         assert data['Message'] == 'Token updated'
 
-        # Check that token was actually updated in DB
         token = PersonalAccessToken.objects.get(pat_id=pat_id)
         assert token.name == 'Updated Token Name'
         assert token.scope == ['read:courses', 'write:submissions']
@@ -251,14 +237,12 @@ class TestPATRoutes(BaseTester):
         assert data['Type'] == 'OK'
         assert data['Message'] == 'Token revoked'
 
-        # Check that token was actually revoked in DB
         token = PersonalAccessToken.objects.get(pat_id=pat_id)
         assert token.is_revoked is True
         assert token.revoked_by == 'student'
 
     def test_deactivate_already_revoked_token(self, client_student):
         """Test deactivating already revoked token returns 400"""
-        # First revoke the token in DB
         PersonalAccessToken.objects(pat_id='student_001').update(
             is_revoked=True)
 
@@ -288,11 +272,10 @@ class TestPATRoutes(BaseTester):
             elif method == 'PATCH':
                 rv = client.patch(endpoint, json={})
 
-            assert rv.status_code == 403  # Should require login
+            assert rv.status_code == 403
 
     def test_cross_user_token_access(self, app):
         """Test that users can't access each other's tokens"""
-        # Reset and set up specific tokens for this test in DB
         PersonalAccessToken.objects().delete()
         student_token = "noj_pat_student_secret"
         teacher_token = "noj_pat_teacher_secret"
@@ -317,36 +300,30 @@ class TestPATRoutes(BaseTester):
             is_revoked=False,
         ).save()
 
-        # Create separate client instances to avoid cookie interference
         from mongo import User
 
-        # Student client
         client_student = app.test_client()
         client_student.set_cookie('piann',
                                   User('student').secret,
                                   domain='test.test')
 
-        # Teacher client
         client_teacher = app.test_client()
         client_teacher.set_cookie('piann',
                                   User('teacher').secret,
                                   domain='test.test')
 
-        # Student should only see their own token
         rv = client_student.get('/profile/api_token')
         json_data = rv.get_json()
         tokens = json_data['data']['Tokens']
         assert len(tokens) == 1
         assert tokens[0]['Owner'] == 'student'
 
-        # Teacher should only see their own token
         rv = client_teacher.get('/profile/api_token')
         json_data = rv.get_json()
         tokens = json_data['data']['Tokens']
         assert len(tokens) == 1
         assert tokens[0]['Owner'] == 'teacher'
 
-        # Student shouldn't be able to edit teacher's token
         rv = client_student.patch('/profile/api_token/edit/teacher_001',
                                   json={'data': {
                                       'Name': 'Hacked'

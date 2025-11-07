@@ -20,7 +20,7 @@ from bson.son import SON
 from flask import current_app
 from tempfile import NamedTemporaryFile
 from datetime import date, datetime
-from zipfile import ZipFile, is_zipfile
+from zipfile import ZipFile, is_zipfile, ZIP_DEFLATED
 from ulid import ULID
 
 from . import engine
@@ -225,6 +225,52 @@ class Submission(MongoBase, engine=engine.Submission):
         # fallback to gridfs
         return case.output
 
+    def _artifact_task_indices(self) -> List[int]:
+        '''
+        Return the list of task indices that are allowed to expose artifacts.
+        '''
+        config = getattr(self.problem, 'config', {}) or {}
+        artifact_collection = config.get('artifactCollection') or []
+        indices: List[int] = []
+        for item in artifact_collection:
+            try:
+                index = int(item)
+            except (TypeError, ValueError):
+                continue
+            if index >= 0:
+                indices.append(index)
+        return indices
+
+    def is_artifact_enabled(self, task_index: int) -> bool:
+        return task_index in self._artifact_task_indices()
+
+    def build_task_artifact_zip(self, task_index: int) -> io.BytesIO:
+        if task_index < 0:
+            raise FileNotFoundError('task not exist')
+        try:
+            task = self.tasks[task_index]
+        except IndexError:
+            raise FileNotFoundError('task not exist')
+
+        if not task.cases:
+            raise FileNotFoundError('task has no cases')
+
+        buffer = io.BytesIO()
+        with ZipFile(buffer, 'w', compression=ZIP_DEFLATED) as archive:
+            for case_index, case in enumerate(task.cases):
+                raw = self._get_output_raw(case)
+                if raw is None:
+                    raise FileNotFoundError('artifact not found')
+                raw.seek(0)
+                with ZipFile(raw) as source_zip:
+                    for member in source_zip.namelist():
+                        archive.writestr(
+                            f'task_{task_index:02d}/case_{case_index:02d}/{member}',
+                            source_zip.read(member),
+                        )
+        buffer.seek(0)
+        return buffer
+
     def delete_output(self, *args):
         '''
         delete stdout/stderr of this submission
@@ -349,6 +395,9 @@ class Submission(MongoBase, engine=engine.Submission):
         '''
         # delete output file
         self.delete_output()
+        # delete compiled binary artifact
+        if self.has_compiled_binary():
+            self.delete_compiled_binary()
         # turn back to haven't be judged
         self.update(
             status=-1,
@@ -544,6 +593,81 @@ class Submission(MongoBase, engine=engine.Submission):
         generate a output file path for minio
         '''
         return f'submissions/task{task_no:02d}_case{case_no:02d}_{ULID()}.zip'
+
+    def _generate_compiled_binary_minio_path(self) -> str:
+        return f'submissions/compiled/{ULID()}.bin'
+
+    def _upload_compiled_binary_to_minio(self, data: bytes) -> str:
+        minio_client = MinioClient()
+        path = self._generate_compiled_binary_minio_path()
+        stream = io.BytesIO(data)
+        minio_client.client.put_object(
+            minio_client.bucket,
+            path,
+            stream,
+            len(data),
+            part_size=5 * 1024 * 1024,
+            content_type='application/octet-stream',
+        )
+        return path
+
+    def delete_compiled_binary(self):
+        '''
+        Remove compiled binary artifacts from both MinIO and GridFS.
+        '''
+        minio_path = self.compiled_binary_minio_path
+        if minio_path:
+            minio_client = MinioClient()
+            try:
+                minio_client.client.remove_object(minio_client.bucket,
+                                                  minio_path)
+            except Exception:
+                self.logger.warning(
+                    f'failed to remove compiled binary {minio_path} in minio')
+        if getattr(self.compiled_binary, 'grid_id', None) is not None:
+            self.compiled_binary.delete()
+        self.update(compiled_binary_minio_path=None)
+        self.reload('compiled_binary', 'compiled_binary_minio_path')
+
+    def set_compiled_binary(self, data: bytes):
+        '''
+        Store compiled binary data for this submission.
+        '''
+        if data is None or len(data) == 0:
+            raise ValueError('compiled binary data is empty')
+        # clear previous artifact
+        if self.has_compiled_binary():
+            self.delete_compiled_binary()
+
+        if getattr(self.compiled_binary, 'grid_id', None) is None:
+            write_func = self.compiled_binary.put
+        else:
+            write_func = self.compiled_binary.replace
+        write_func(data)
+        path = self._upload_compiled_binary_to_minio(data)
+        self.update(compiled_binary_minio_path=path)
+        self.reload('compiled_binary', 'compiled_binary_minio_path')
+
+    def has_compiled_binary(self) -> bool:
+        return bool(getattr(self.compiled_binary, 'grid_id', None)
+                    or self.compiled_binary_minio_path)
+
+    def get_compiled_binary(self) -> io.BytesIO:
+        if self.compiled_binary_minio_path is not None:
+            minio_client = MinioClient()
+            try:
+                resp = minio_client.client.get_object(
+                    minio_client.bucket,
+                    self.compiled_binary_minio_path,
+                )
+                return io.BytesIO(resp.read())
+            finally:
+                if 'resp' in locals():
+                    resp.close()
+                    resp.release_conn()
+        if getattr(self.compiled_binary, 'grid_id', None) is not None:
+            return io.BytesIO(self.compiled_binary.read())
+        raise FileNotFoundError('compiled binary not found')
 
     def finish_judging(self):
         # update user's submission
@@ -799,13 +923,13 @@ class Submission(MongoBase, engine=engine.Submission):
         tasks = [task.to_mongo() for task in self.tasks]
         result = []
         allowed_case_fields = {'execTime', 'memoryUsage', 'status'}
-        
+
         for task in tasks:
             # Filter case fields - only keep allowed fields
-            filtered_cases = [
-                {k: case[k] for k in allowed_case_fields if k in case}
-                for case in task['cases']
-            ]
+            filtered_cases = [{
+                k: case[k]
+                for k in allowed_case_fields if k in case
+            } for case in task['cases']]
             # Filter task fields
             filtered_task = {
                 'status': task.get('status'),
@@ -824,13 +948,13 @@ class Submission(MongoBase, engine=engine.Submission):
         tasks = [task.to_mongo() for task in self.tasks]
         result = []
         allowed_case_fields = {'execTime', 'memoryUsage', 'status'}
-        
+
         for task in tasks:
             # Filter case fields - only keep allowed fields
-            filtered_cases = [
-                {k: case[k] for k in allowed_case_fields if k in case}
-                for case in task['cases']
-            ]
+            filtered_cases = [{
+                k: case[k]
+                for k in allowed_case_fields if k in case
+            } for case in task['cases']]
             # Filter task fields
             filtered_task = {
                 'status': task.get('status'),

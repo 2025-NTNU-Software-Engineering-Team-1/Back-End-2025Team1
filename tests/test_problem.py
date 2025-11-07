@@ -98,6 +98,9 @@ class TestProblem(BaseTester):
 
     # add a offline problem
     def test_add_offline_problem(self, client_admin):
+        # Create course first
+        utils.course.create_course(teacher='admin', name='English')
+        
         request_json = {
             'courses': ['English'],
             'status': 1,
@@ -133,6 +136,9 @@ class TestProblem(BaseTester):
 
     # add a online problem
     def test_add_online_problem(self, client_admin):
+        # Create course first
+        utils.course.create_course(teacher='admin', name='math')
+        
         request_json = {
             'courses': ['math'],
             'status': 0,
@@ -320,6 +326,7 @@ class TestProblem(BaseTester):
         assert json['status'] == 'ok'
         assert json['message'] == 'Problem can view.'
         assert json['data'] == {
+            'ACUser': 0,
             'status':
             1,
             'type':
@@ -334,6 +341,22 @@ class TestProblem(BaseTester):
             'courses': ['English'],
             'allowedLanguage':
             7,
+            'canViewStdout': True,
+            'config': {
+                'acceptedFormat': 'code',
+                'aiVTuber': False,
+                'artifactCollection': [],
+                'compilation': False,
+                'customChecker': False,
+                'executionMode': 'general',
+                'fopen': False,
+                'fwrite': False,
+                'scoringScript': {'custom': False},
+                'staticAnalys': {'custom': False},
+                'teacherFirst': False,
+                'testMode': False,
+                'testModeQuotaPerStudent': 0,
+            },
             'testCase': [
                 {
                     'caseCount': 1,
@@ -346,6 +369,7 @@ class TestProblem(BaseTester):
             -1,
             'submitCount':
             0,
+            'submitter': 0,
             'defaultCode':
             '',
             'highScore':
@@ -367,6 +391,7 @@ class TestProblem(BaseTester):
         assert json['status'] == 'ok'
         assert json['message'] == 'Problem can view.'
         assert json['data'] == {
+            'ACUser': 0,
             'status':
             0,
             'type':
@@ -381,6 +406,22 @@ class TestProblem(BaseTester):
             'courses': ['math'],
             'allowedLanguage':
             7,
+            'canViewStdout': True,
+            'config': {
+                'acceptedFormat': 'code',
+                'aiVTuber': False,
+                'artifactCollection': [],
+                'compilation': False,
+                'customChecker': False,
+                'executionMode': 'general',
+                'fopen': False,
+                'fwrite': False,
+                'scoringScript': {'custom': False},
+                'staticAnalys': {'custom': False},
+                'teacherFirst': False,
+                'testMode': False,
+                'testModeQuotaPerStudent': 0,
+            },
             'testCase': [
                 {
                     'caseCount': 1,
@@ -393,6 +434,7 @@ class TestProblem(BaseTester):
             -1,
             'submitCount':
             0,
+            'submitter': 0,
             'defaultCode':
             '',
             'highScore':
@@ -601,6 +643,21 @@ class TestProblem(BaseTester):
             'submitter': 0,
             'allowedLanguage': 7,
             'canViewStdout': Problem(pid).can_view_stdout,
+            'config': {
+                'acceptedFormat': 'code',
+                'aiVTuber': False,
+                'artifactCollection': [],
+                'compilation': False,
+                'customChecker': False,
+                'executionMode': 'general',
+                'fopen': False,
+                'fwrite': False,
+                'scoringScript': {'custom': False},
+                'staticAnalys': {'custom': False},
+                'teacherFirst': False,
+                'testMode': False,
+                'testModeQuotaPerStudent': 0,
+            },
             'quota': -1,
             'submitCount': 0
         }
@@ -646,6 +703,26 @@ class TestProblem(BaseTester):
         rv = client_student.get('/problem/3/testcase')
         assert rv.status_code == 403, rv.get_json()
         assert rv.get_json()['message'] == 'Not enough permission'
+
+    def test_teacher_can_download_problem_test_case(
+            self, client_teacher, monkeypatch):
+        course = utils.course.create_course(teacher='teacher')
+        problem = utils.problem.create_problem(course=course, owner='admin')
+        monkeypatch.setattr(
+            Problem, 'get_test_case',
+            lambda *_: get_file('bogay/test_case.zip')['case'][0])
+        rv = client_teacher.get(f'/problem/{problem.id}/testcase')
+        assert rv.status_code == 200
+        with ZipFile(io.BytesIO(rv.data)) as zf:
+            ns = sorted(zf.namelist())
+            in_ns = ns[::2]
+            out_ns = ns[1::2]
+            ns = zip(in_ns, out_ns)
+            _io = [(
+                zf.read(in_n),
+                zf.read(out_n),
+            ) for in_n, out_n in ns]
+        assert _io == [(b'I AM A TEAPOT\n', b'I AM A TEAPOT\n')]
 
     def test_admin_update_problem_test_case(self, client_admin, monkeypatch):
         # FIXME: it should be impl in mock

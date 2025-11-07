@@ -112,13 +112,11 @@ def client_student(forge_client: ForgeClient):
 
 @pytest.fixture
 def test_token():
-    # Token for user: test
     return User('test').secret
 
 
 @pytest.fixture
 def test2_token():
-    # Token for user: test2
     return User('test2').secret
 
 

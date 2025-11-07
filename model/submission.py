@@ -165,8 +165,14 @@ def get_submission_list(
             return None
         # Status code mapping
         status_map = {
-            'AC': 0, 'WA': 1, 'CE': 2, 'TLE': 3,
-            'MLE': 4, 'RE': 5, 'JE': 6, 'OLE': 7,
+            'AC': 0,
+            'WA': 1,
+            'CE': 2,
+            'TLE': 3,
+            'MLE': 4,
+            'RE': 5,
+            'JE': 6,
+            'OLE': 7,
         }
         # If it's a status name string (AC, WA, etc.)
         if val.upper() in status_map:
@@ -176,7 +182,8 @@ def get_submission_list(
             status_code = int(val)
             if 0 <= status_code <= 7:
                 return status_code
-            raise ValueError(f'status code must be between 0 and 7, got {status_code}')
+            raise ValueError(
+                f'status code must be between 0 and 7, got {status_code}')
         except ValueError:
             raise ValueError(f'invalid status value: {val}')
 
@@ -271,7 +278,7 @@ def get_submission(user, submission: Submission):
     has_code = not submission.handwritten and user_feedback_perm
     has_output = submission.problem.can_view_stdout
     ret = submission.to_dict()
-    
+
     # Always include code field (required by API spec)
     # - Has permission and not handwritten: return actual code
     # - Decode error or not found: return empty string
@@ -285,7 +292,7 @@ def get_submission(user, submission: Submission):
     else:
         # No permission or handwritten submission - code field present but empty
         ret['code'] = ''
-    
+
     # Add tasks
     if has_output:
         ret['tasks'] = submission.get_detailed_result()
@@ -312,6 +319,60 @@ def get_submission_output(
     except AttributeError as e:
         return HTTPError(str(e), 102)
     return HTTPResponse('ok', data=output)
+
+
+@submission_api.get('/<submission>/artifact/zip/<int:task_index>')
+@login_required
+@Request.doc('submission', Submission)
+def download_submission_task_artifact(
+    user,
+    submission: Submission,
+    task_index: int,
+):
+    if not submission.permission(user, Submission.Permission.VIEW_OUTPUT):
+        return HTTPError('permission denied', 403)
+    if task_index < 0 or task_index >= len(submission.tasks):
+        return HTTPError('task not exist', 404)
+    if not submission.is_artifact_enabled(task_index):
+        return HTTPError('artifact not available for this task', 404)
+    try:
+        artifact = submission.build_task_artifact_zip(task_index)
+    except FileNotFoundError as e:
+        return HTTPError(str(e), 404)
+    return send_file(
+        artifact,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=
+        f'submission-{submission.id}-task-{task_index:02d}-artifact.zip',
+    )
+
+
+@submission_api.get('/<submission>/artifact/compiledBinary')
+@login_required
+@Request.doc('submission', Submission)
+def download_submission_compiled_binary(user, submission: Submission):
+    problem = Problem(submission.problem_id)
+    has_permission = (
+        submission.permission(user, Submission.Permission.VIEW_OUTPUT)
+        or user.username == submission.username)
+    if not has_permission:
+        return HTTPError('permission denied', 403)
+    if not (problem.config or {}).get('compilation'):
+        return HTTPError('compiled binary not available', 404)
+    if not submission.has_compiled_binary():
+        return HTTPError('compiled binary not found', 404)
+    try:
+        binary_stream = submission.get_compiled_binary()
+    except FileNotFoundError as e:
+        return HTTPError(str(e), 404)
+    binary_stream.seek(0)
+    return send_file(
+        binary_stream,
+        mimetype='application/octet-stream',
+        as_attachment=True,
+        download_name=f'submission-{submission.id}-compiled.bin',
+    )
 
 
 @submission_api.route('/<submission>/pdf/<item>', methods=['GET'])
@@ -464,7 +525,7 @@ def rejudge(user, submission: Submission):
         return HTTPResponse(str(e), 202, data={'ok': False})
     except ValidationError as e:
         return HTTPError(str(e), 422, data=e.to_dict())
-    
+
     # Check explicit False (not None or other falsy values)
     if success is False:
         return HTTPError('Some error occurred, please contact the admin', 500)

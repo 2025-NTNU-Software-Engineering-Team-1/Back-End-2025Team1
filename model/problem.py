@@ -108,10 +108,10 @@ def view_problem(user: User, problem: Problem):
         'allowedLanguage',
         'courses',
         'quota',
-        'ACUser',  # <-- 新增
-        'submitter',  # <-- 新增
-        'canViewStdout',  # <-- 新增
-        'config',  # <-- 新增 (用於 Extra 設定)
+        'ACUser',
+        'submitter',
+        'canViewStdout',
+        'config',
         defaultCode='defaultCode',
         status='problemStatus',
         type='problemType',
@@ -161,7 +161,6 @@ def get_problem_detailed(user, problem: Problem):
 @problem_api.route('/manage', methods=['POST'])
 @identity_verify(0, 1)
 @Request.json(
-    'type',
     'courses: list',
     'status',
     'type',
@@ -173,11 +172,14 @@ def get_problem_detailed(user, problem: Problem):
     'can_view_stdout',
     'allowed_language',
     'default_code',
-    'config: dict',
-    'pipeline: dict',
-    'Test_Mode: dict',
 )
 def create_problem(user: User, **ks):
+    # Get optional parameters from request.json
+    data = request.json or {}
+    ks['config'] = data.get('config')
+    ks['pipeline'] = data.get('pipeline')
+    ks['test_mode'] = data.get('Test_Mode')  # Note: Test_Mode in request, test_mode in code
+    
     try:
         pid = Problem.add(user=user, **ks)
     except ValidationError as e:
@@ -211,7 +213,6 @@ def delete_problem(user: User, problem: Problem):
 def manage_problem(user: User, problem: Problem):
 
     @Request.json(
-        # (API 需求的欄位名稱)
         'problemName',
         'description: dict',
         'courses: list',
@@ -228,8 +229,6 @@ def manage_problem(user: User, problem: Problem):
         'Test_Mode: dict',
     )
     def modify_problem(**p_ks):
-        # 1. 轉換參數名稱
-        # (將 API 的 'problemName' 轉為 Model 的 'problem_name')
         kwargs = {
             'problem_name': p_ks.pop('problemName', None),
             'description': p_ks.pop('description', None),
@@ -247,14 +246,12 @@ def manage_problem(user: User, problem: Problem):
             'Test_Mode': p_ks.pop('Test_Mode', None),
         }
 
-        # 2. 呼叫我們剛剛在 mongo/problem.py 新增的函式
         Problem.edit_problem(
             user=user,
             problem_id=problem.id,
-            **drop_none(kwargs),  # drop_none 實現「部分更新」
+            **drop_none(kwargs),
         )
 
-        # 3. 回傳 200 { ok: true }
         return HTTPResponse()
 
     @Request.files('case')
@@ -349,7 +346,8 @@ def complete_test_case_upload(
 @login_required
 @Request.doc('problem_id', 'problem', Problem)
 def get_test_case(user: User, problem: Problem):
-    if not problem.permission(user, problem.Permission.MANAGE):
+    can_manage = problem.permission(user, problem.Permission.MANAGE)
+    if not can_manage and not problem.has_course_modify_permission(user):
         return permission_error_response()
     if not problem.permission(user=user, req=problem.Permission.ONLINE):
         return online_error_response()
@@ -498,11 +496,10 @@ def problem_stats(user: User, problem: Problem):
         students_high_scores)
     ret['scoreDistribution'] = students_high_scores
 
-    # Submission status counts (including zero counts for -1..7)
-    status_count = {str(code): 0 for code in range(-1, 8)}
+    # Submission status counts (only include statuses that actually exist)
+    status_count = {}
     for key, value in problem.get_submission_status().items():
-        status_key = str(key)
-        status_count[status_key] = value
+        status_count[str(key)] = value
     ret['statusCount'] = status_count
     params = {
         'user': user,

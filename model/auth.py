@@ -1,13 +1,10 @@
-# Standard library
 from functools import wraps
 from random import SystemRandom
 from typing import Set, Callable, Any, Optional
 import csv
 import io
 from datetime import timezone, datetime
-# Related third party imports
 from flask import Blueprint, request, current_app, url_for
-# Local application
 from mongo import *
 from mongo import engine
 from mongo.utils import hash_id
@@ -106,7 +103,6 @@ def pat_required(*required_scopes: str) -> Callable[[Callable], Callable]:
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
 
-            # 1. Parse Header: Authorization: Bearer <token>
             auth_header = request.headers.get('Authorization')
             if not auth_header or not auth_header.lower().startswith(
                     'bearer '):
@@ -115,7 +111,6 @@ def pat_required(*required_scopes: str) -> Callable[[Callable], Callable]:
 
             pat_token = auth_header.split(' ', 1)[1]
 
-            # 2. Hash Calculation and DB Lookup
             token_hash = hash_pat_token(pat_token)
 
             try:
@@ -124,24 +119,19 @@ def pat_required(*required_scopes: str) -> Callable[[Callable], Callable]:
             except engine.DoesNotExist:
                 return HTTPError('Token Invalid or Not Found', 401)
 
-            # 3. Status Check: Manual Revocation
             if pat_record.is_revoked:
                 return HTTPError('Token has been manually revoked', 401)
 
-            # 4. Status Check: Automatic Expiration
             if pat_record.due_time is not None:
                 now_aware = datetime.now(timezone.utc)
                 due_time_aware = pat_record.due_time
                 if due_time_aware.tzinfo is None or due_time_aware.tzinfo.utcoffset(
                         due_time_aware) is None:
-                    # Force timezone awareness to UTC if not set
                     due_time_aware = due_time_aware.replace(
                         tzinfo=timezone.utc)
                 if now_aware > due_time_aware:
                     return HTTPError('Token Expired', 401)
 
-            # 5. Scope Verification
-            # Using set comparisons
             token_scopes: Set[str] = set(pat_record.scope)
             required_set: Set[str] = set(required_scopes)
 
@@ -150,21 +140,16 @@ def pat_required(*required_scopes: str) -> Callable[[Callable], Callable]:
                 return HTTPError(
                     f'Insufficient Scopes Required: {missing_scopes}', 403)
 
-            # 6. Inject User Object
             try:
                 user: User = User.get_by_username(pat_record.owner)
             except engine.DoesNotExist:
-                return HTTPError(
-                    'Token owner not found',
-                    403)  # Token is valid but owner does not exist
+                return HTTPError('Token owner not found', 403)
 
             kwargs['user'] = user
 
-            # 7. Update Usage Record
             pat_record.modify(last_used_time=datetime.now(timezone.utc),
                               last_used_scope=list(required_set))
 
-            # 8. Proceed to Original Function
             return func(*args, **kwargs)
 
         return wrapper

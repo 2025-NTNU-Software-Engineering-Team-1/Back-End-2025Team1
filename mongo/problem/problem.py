@@ -35,13 +35,7 @@ class UploadInfo:
 
 
 class Problem(MongoBase, engine=engine.Problem):
-    input_description = engine.StringField(default='')
-    output_description = engine.StringField(default='')
-    hint = engine.StringField(default='')
-    sample_input = engine.ListField(engine.StringField(), default=[])
-    sample_output = engine.ListField(engine.StringField(), default=[])
 
-    config = engine.DictField(null=True)
     class Permission(enum.IntFlag):
         VIEW = enum.auto()  # user view permission
         ONLINE = enum.auto()  # user can view problem or not
@@ -204,6 +198,16 @@ class Problem(MongoBase, engine=engine.Problem):
 
         return user_cap
 
+    def has_course_modify_permission(self, user: User) -> bool:
+        """
+        return True if the user can modify at least one course the
+        problem belongs to. Typically used to allow course teachers
+        to perform privileged problem actions.
+        """
+        return any(
+            course.permission(user, Course.Permission.MODIFY)
+            for course in map(Course, self.courses))
+
     def permission(self, user: User, req: Permission) -> bool:
         """
         check whether user own `req` permission
@@ -293,31 +297,48 @@ class Problem(MongoBase, engine=engine.Problem):
             'scoringScript': pipeline.get('scoringScrip', {'custom': False}),
             'testModeQuotaPerStudent': test_mode.get('Quota_Per_Student', 0),
         }
-        
-        # 2. (修改) 更新 problem_args
-        description_dict = description or {} # (舊的 description 參數)
+
+        description_dict = description or {}
         problem_args = drop_none({
-            'courses': course_objs,
-            'problem_status': status,
-            'problem_type': type,
-            'problem_name': problem_name,
-            
-            # (修改) 拆分 description 欄位
-            'description': description_dict.get('description', ''),
-            'input_description': description_dict.get('input', ''),
-            'output_description': description_dict.get('output', ''),
-            'hint': description_dict.get('hint', ''),
-            'sample_input': description_dict.get('sampleInput', []),
-            'sample_output': description_dict.get('sampleOutput', []),
-            
-            'owner': user.username,
-            'tags': tags,
-            'quota': quota,
-            'default_code': default_code,
-            
-            # (新增) 加入 config
-            'config': full_config,
+            'courses':
+            course_objs,
+            'problem_status':
+            status,
+            'problem_type':
+            type,
+            'problem_name':
+            problem_name,
+            'input_description':
+            description_dict.get('input', ''),
+            'output_description':
+            description_dict.get('output', ''),
+            'hint':
+            description_dict.get('hint', ''),
+            'sample_input':
+            description_dict.get('sampleInput', []),
+            'sample_output':
+            description_dict.get('sampleOutput', []),
+            'owner':
+            user.username,
+            'tags':
+            tags,
+            'quota':
+            quota,
+            'default_code':
+            default_code,
+            'config':
+            full_config,
         })
+        # Create ProblemDescription for the embedded document field
+        if description_dict:
+            problem_args['description'] = engine.ProblemDescription(
+                description=description_dict.get('description', ''),
+                input=description_dict.get('input', ''),
+                output=description_dict.get('output', ''),
+                hint=description_dict.get('hint', ''),
+                sample_input=description_dict.get('sampleInput', []),
+                sample_output=description_dict.get('sampleOutput', []),
+            )
         problem = cls.engine(**problem_args).save()
         programming_problem_args = drop_none({
             'test_case':
@@ -330,95 +351,121 @@ class Problem(MongoBase, engine=engine.Problem):
         if programming_problem_args and type != 2:
             problem.update(**programming_problem_args)
         return problem.problem_id
-    
+
     @classmethod
     def edit_problem(
         cls,
         user: User,
         problem_id: int,
-        **kwargs,  # 改為接受 **kwargs，才能實現「部分更新」
+        **kwargs,
     ):
         """
         編輯現有題目 (部分更新)
         """
-        from mongo import Course  # 確保 Course 被匯入
+        from mongo import Course
 
-        # 1. 取得要編輯的題目
+        # Convert parameter names to match database field names
+        if 'status' in kwargs:
+            kwargs['problem_status'] = kwargs.pop('status')
+        if 'type' in kwargs:
+            kwargs['problem_type'] = kwargs.pop('type')
+
         problem = cls(problem_id)
         if not problem.obj:
             raise engine.DoesNotExist(f'Problem {problem_id} not found')
 
-        # 2. 權限檢查
-        # (我們使用 Problem class 自己的 .permission() 函式)
         if not problem.permission(user, cls.Permission.MANAGE):
-            # (cls.Permission.MANAGE 
-            #  會檢查 user.role == 0 或是 problem.owner == user.username 
-            # )
-            raise PermissionError('Not enough permission to manage this problem')
+            raise PermissionError(
+                'Not enough permission to manage this problem')
 
-        # 3. 處理課程驗證 (如果 courses 欄位有被傳入)
         if 'courses' in kwargs and kwargs.get('courses') is not None:
             course_objs = []
             for name in kwargs['courses']:
                 if not (course := Course(name)):
                     raise engine.DoesNotExist(f'Course {name} not found')
                 course_objs.append(course.obj)
-            kwargs['courses'] = course_objs # 將字串列表換成物件列表
+            kwargs['courses'] = course_objs
 
-        # 4. 處理 Description 字典 (如果 description 欄位有被傳入)
         if 'description' in kwargs and kwargs.get('description') is not None:
-            desc_dict = kwargs.pop('description')
-            kwargs['description'] = desc_dict.get('description')
-            kwargs['input_description'] = desc_dict.get('input')
-            kwargs['output_description'] = desc_dict.get('output')
-            kwargs['hint'] = desc_dict.get('hint')
-            kwargs['sample_input'] = desc_dict.get('sampleInput')
-            kwargs['sample_output'] = desc_dict.get('sampleOutput')
+            desc = kwargs.pop('description')
+            # Handle both dict and ProblemDescription object
+            if isinstance(desc, engine.ProblemDescription):
+                # Already a ProblemDescription, just use it
+                kwargs['description'] = desc
+                kwargs['input_description'] = desc.input
+                kwargs['output_description'] = desc.output
+                kwargs['hint'] = desc.hint
+                kwargs['sample_input'] = desc.sample_input
+                kwargs['sample_output'] = desc.sample_output
+            elif isinstance(desc, dict):
+                # Convert dict to ProblemDescription
+                kwargs['description'] = engine.ProblemDescription(
+                    description=desc.get('description', ''),
+                    input=desc.get('input', ''),
+                    output=desc.get('output', ''),
+                    hint=desc.get('hint', ''),
+                    sample_input=desc.get('sampleInput', []),
+                    sample_output=desc.get('sampleOutput', []),
+                )
+                kwargs['input_description'] = desc.get('input')
+                kwargs['output_description'] = desc.get('output')
+                kwargs['hint'] = desc.get('hint')
+                kwargs['sample_input'] = desc.get('sampleInput')
+                kwargs['sample_output'] = desc.get('sampleOutput')
 
-        # 5. 處理 Config / Pipeline / Test_Mode 的「合併」邏輯
         if 'config' in kwargs or 'pipeline' in kwargs or 'Test_Mode' in kwargs:
-            full_config = problem.obj.config or {} # 取得現有 config
+            full_config = problem.obj.config or {}
 
             if 'config' in kwargs and kwargs.get('config') is not None:
                 full_config.update(kwargs.pop('config'))
-                
+
             if 'pipeline' in kwargs and kwargs.get('pipeline') is not None:
                 pipeline = kwargs.pop('pipeline')
-                if 'fopen' in pipeline: full_config['fopen'] = pipeline['fopen']
-                if 'fwrite' in pipeline: full_config['fwrite'] = pipeline['fwrite']
-                if 'executionMode' in pipeline: full_config['executionMode'] = pipeline['executionMode']
-                if 'customChecker' in pipeline: full_config['customChecker'] = pipeline['customChecker']
-                if 'teacherFirst' in pipeline: full_config['teacherFirst'] = pipeline['teacherFirst']
-                if 'scoringScrip' in pipeline: full_config['scoringScript'] = pipeline['scoringScrip']
+                if 'fopen' in pipeline:
+                    full_config['fopen'] = pipeline['fopen']
+                if 'fwrite' in pipeline:
+                    full_config['fwrite'] = pipeline['fwrite']
+                if 'executionMode' in pipeline:
+                    full_config['executionMode'] = pipeline['executionMode']
+                if 'customChecker' in pipeline:
+                    full_config['customChecker'] = pipeline['customChecker']
+                if 'teacherFirst' in pipeline:
+                    full_config['teacherFirst'] = pipeline['teacherFirst']
+                if 'scoringScrip' in pipeline:
+                    full_config['scoringScript'] = pipeline['scoringScrip']
 
             if 'Test_Mode' in kwargs and kwargs.get('Test_Mode') is not None:
                 test_mode = kwargs.pop('Test_Mode')
-                if 'Enabled' in test_mode: full_config['testMode'] = test_mode['Enabled']
-                if 'Quota_Per_Student' in test_mode: full_config['testModeQuotaPerStudent'] = test_mode['Quota_Per_Student']
-            
-            kwargs['config'] = full_config # 將合併後的 config 放回 kwargs
+                if 'Enabled' in test_mode:
+                    full_config['testMode'] = test_mode['Enabled']
+                if 'Quota_Per_Student' in test_mode:
+                    full_config['testModeQuotaPerStudent'] = test_mode[
+                        'Quota_Per_Student']
 
-        # 6. 處理 TestCase (如果 test_case_info 欄位有被傳入)
-        if 'test_case_info' in kwargs and kwargs.get('test_case_info') is not None:
+            kwargs['config'] = full_config
+
+        if 'test_case_info' in kwargs and kwargs.get(
+                'test_case_info') is not None:
             test_case_info = kwargs.pop('test_case_info')
-            
+
             problem_type = kwargs.get('type', problem.obj.problem_type)
             if problem_type != 2:
-                score = sum(t['taskScore'] for t in test_case_info.get('tasks', []))
+                score = sum(t['taskScore']
+                            for t in test_case_info.get('tasks', []))
                 if score != 100:
                     raise ValueError("Cases' scores should be 100 in total")
 
-            # 建立 TestCase 物件 (複製 Problem.add 中的邏輯)
             tasks = []
             for task in test_case_info.get('tasks', []):
-                tasks.append(engine.Task(
-                    task_score=task.get('taskScore', 0),
-                    case_count=task.get('caseCount', 1),
-                    memory_limit=task.get('memoryLimit', 256),
-                    time_limit=task.get('timeLimit', 1000),
-                ))
-            
-            test_case = engine.TestCase(
+                tasks.append(
+                    engine.ProblemCase(
+                        task_score=task.get('taskScore', 0),
+                        case_count=task.get('caseCount', 1),
+                        memory_limit=task.get('memoryLimit', 256),
+                        time_limit=task.get('timeLimit', 1000),
+                    ))
+
+            test_case = engine.ProblemTestCase(
                 language=test_case_info.get('language', 0),
                 fill_in_template=test_case_info.get('fillInTemplate', ''),
                 tasks=tasks,
@@ -427,67 +474,13 @@ class Problem(MongoBase, engine=engine.Problem):
             if problem.obj.test_case:
                 test_case.case_zip = problem.obj.test_case.case_zip
                 test_case.case_zip_minio_path = problem.obj.test_case.case_zip_minio_path
-            
+
             kwargs['test_case'] = test_case
-        
-        # 7. 套用所有更新
+
         problem.obj.update(**drop_none(kwargs))
         problem.obj.reload()
         return problem
 
-    '''
-    @classmethod
-    def edit_problem(
-        cls,
-        user: User,
-        problem_id: int,
-        courses: List[str],
-        status: int,
-        problem_name: str,
-        description: Dict[str, Any],
-        tags: List[str],
-        type,
-        test_case_info: Optional[Dict[str, Any]] = None,
-        allowed_language: int = 7,
-        can_view_stdout: bool = False,
-        quota: int = -1,
-        default_code: str = '',
-    ):
-        if type != 2:
-            score = sum(t['taskScore'] for t in test_case_info['tasks'])
-            if score != 100:
-                raise ValueError("Cases' scores should be 100 in total")
-        problem = Problem(problem_id).obj
-        course_objs = []
-        for name in courses:
-            if not (course := Course(name)):
-                raise engine.DoesNotExist
-            course_objs.append(course.obj)
-        problem.update(
-            courses=course_objs,
-            problem_status=status,
-            problem_type=type,
-            problem_name=problem_name,
-            description=description,
-            owner=user.username,
-            tags=tags,
-            quota=quota,
-            default_code=default_code,
-        )
-        if type != 2:
-            # preprocess test case
-            test_case = problem.test_case
-            if test_case_info:
-                test_case = engine.ProblemTestCase.from_json(
-                    json.dumps(test_case_info))
-                test_case.case_zip = problem.test_case.case_zip
-                test_case.case_zip_minio_path = problem.test_case.case_zip_minio_path
-            problem.update(
-                allowed_language=allowed_language,
-                can_view_stdout=can_view_stdout,
-                test_case=test_case,
-            )
-    '''
     def update_test_case(self, test_case: BinaryIO):
         '''
         edit problem's testcase

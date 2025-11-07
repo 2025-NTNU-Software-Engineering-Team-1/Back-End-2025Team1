@@ -1,3 +1,5 @@
+import io
+from zipfile import ZipFile
 from typing import Optional
 import pytest
 import itertools
@@ -5,6 +7,7 @@ import pathlib
 from pprint import pprint
 from mongo import *
 from mongo import engine
+from mongo.utils import MinioClient
 from .base_tester import BaseTester
 from .utils import *
 from tests import utils
@@ -1094,3 +1097,197 @@ def test_cannot_view_output_out_of_index(app, forge_client):
     rv = client.get(f'/submission/{submission.id}/output/100/100')
     assert rv.status_code == 400, rv.get_json()
     assert rv.get_json()['message'] == 'task not exist'
+
+
+def _create_submission_with_artifact(app, artifact_tasks):
+    with app.app_context():
+        owner = utils.user.create_user(role=1)
+        course = utils.course.create_course(teacher=owner)
+        student = utils.user.create_user(course=course)
+        test_case_info = utils.problem.create_test_case_info(
+            language=0,
+            task_len=1,
+            case_count_range=(2, 2),
+        )
+        description = {
+            'description': 'artifact problem',
+            'input': '',
+            'output': '',
+            'hint': '',
+            'sampleInput': [],
+            'sampleOutput': [],
+        }
+        problem_id = Problem.add(
+            user=owner,
+            courses=[course.course_name],
+            problem_name='artifact-problem',
+            status=0,
+            description=description,
+            tags=[],
+            type=0,
+            test_case_info=test_case_info,
+        )
+        problem = Problem(problem_id)
+        problem.config['artifactCollection'] = artifact_tasks
+        problem.save()
+        problem.reload('config')
+        submission = utils.submission.create_submission(
+            user=student,
+            problem=problem,
+            status=0,
+        )
+        artifact_data = io.BytesIO()
+        with ZipFile(artifact_data, 'w') as zf:
+            zf.writestr('stdout', b'stdout')
+            zf.writestr('stderr', b'stderr')
+        artifact_data.seek(0)
+        minio_client = MinioClient()
+        output_path = submission._generate_output_minio_path(0, 0)
+        data = artifact_data.getvalue()
+        minio_client.client.put_object(
+            minio_client.bucket,
+            output_path,
+            io.BytesIO(data),
+            len(data),
+            part_size=5 * 1024 * 1024,
+            content_type='application/zip',
+        )
+        case = engine.CaseResult(
+            status=0,
+            exec_time=10,
+            memory_usage=128,
+            output_minio_path=output_path,
+        )
+        task = engine.TaskResult(
+            status=0,
+            exec_time=10,
+            memory_usage=128,
+            score=100,
+            cases=[case],
+        )
+        submission.tasks = [task]
+        submission.status = 0
+        submission.score = 100
+        submission.exec_time = 10
+        submission.memory_usage = 128
+        submission.save()
+        submission.reload()
+        return submission, student, course, owner
+
+
+def _create_submission_with_compiled_binary(
+    app,
+    *,
+    enable_compilation=True,
+    with_binary=True,
+):
+    with app.app_context():
+        owner = utils.user.create_user(role=1)
+        course = utils.course.create_course(teacher=owner)
+        student = utils.user.create_user(course=course)
+        test_case_info = utils.problem.create_test_case_info(
+            language=0,
+            task_len=1,
+            case_count_range=(1, 1),
+        )
+        description = {
+            'description': 'compiled binary problem',
+            'input': '',
+            'output': '',
+            'hint': '',
+            'sampleInput': [],
+            'sampleOutput': [],
+        }
+        problem_id = Problem.add(
+            user=owner,
+            courses=[course.course_name],
+            problem_name='compiled-binary-problem',
+            status=0,
+            description=description,
+            tags=[],
+            type=0,
+            test_case_info=test_case_info,
+            config={'compilation': enable_compilation},
+        )
+        problem = Problem(problem_id)
+        submission = utils.submission.create_submission(
+            user=student,
+            problem=problem,
+            status=0,
+        )
+        if with_binary:
+            submission.set_compiled_binary(b'\x00compiled-binary')
+        submission.reload()
+        return submission, student, owner
+
+
+def test_download_task_artifact_zip_success(app, forge_client):
+    submission, _, _, owner = _create_submission_with_artifact(app, [0])
+    client = forge_client(owner.username)
+    rv = client.get(f'/submission/{submission.id}/artifact/zip/0')
+    assert rv.status_code == 200, rv.get_json()
+    with ZipFile(io.BytesIO(rv.data)) as zf:
+        names = sorted(zf.namelist())
+    assert 'task_00/case_00/stdout' in names
+    assert 'task_00/case_00/stderr' in names
+    assert all(name.startswith('task_00/') for name in names)
+
+
+def test_download_task_artifact_zip_disabled(app, forge_client):
+    submission, _, _, owner = _create_submission_with_artifact(app, [])
+    client = forge_client(owner.username)
+    rv = client.get(f'/submission/{submission.id}/artifact/zip/0')
+    assert rv.status_code == 404, rv.get_json()
+    assert rv.get_json()['message'] == 'artifact not available for this task'
+
+
+def test_download_task_artifact_zip_permission_denied(app, forge_client):
+    submission, student, _, _ = _create_submission_with_artifact(app, [0])
+    stranger = utils.user.create_user()
+    client = forge_client(stranger.username)
+    rv = client.get(f'/submission/{submission.id}/artifact/zip/0')
+    assert rv.status_code == 403, rv.get_json()
+
+
+def test_download_task_artifact_zip_invalid_task(app, forge_client):
+    submission, _, _, owner = _create_submission_with_artifact(app, [0])
+    client = forge_client(owner.username)
+    rv = client.get(f'/submission/{submission.id}/artifact/zip/5')
+    assert rv.status_code == 404, rv.get_json()
+    assert rv.get_json()['message'] == 'task not exist'
+
+
+def test_download_compiled_binary_success(app, forge_client):
+    submission, student, _ = _create_submission_with_compiled_binary(
+        app, enable_compilation=True, with_binary=True)
+    client = forge_client(student.username)
+    rv = client.get(f'/submission/{submission.id}/artifact/compiledBinary')
+    assert rv.status_code == 200, rv.get_json()
+    assert rv.data == b'\x00compiled-binary'
+
+
+def test_download_compiled_binary_not_enabled(app, forge_client):
+    submission, student, _ = _create_submission_with_compiled_binary(
+        app, enable_compilation=False, with_binary=True)
+    client = forge_client(student.username)
+    rv = client.get(f'/submission/{submission.id}/artifact/compiledBinary')
+    assert rv.status_code == 404, rv.get_json()
+    assert rv.get_json()['message'] == 'compiled binary not available'
+
+
+def test_download_compiled_binary_not_found(app, forge_client):
+    submission, student, _ = _create_submission_with_compiled_binary(
+        app, enable_compilation=True, with_binary=False)
+    client = forge_client(student.username)
+    rv = client.get(f'/submission/{submission.id}/artifact/compiledBinary')
+    assert rv.status_code == 404, rv.get_json()
+    assert rv.get_json()['message'] == 'compiled binary not found'
+
+
+def test_download_compiled_binary_permission_denied(app, forge_client):
+    submission, _, owner = _create_submission_with_compiled_binary(
+        app, enable_compilation=True, with_binary=True)
+    stranger = utils.user.create_user()
+    client = forge_client(stranger.username)
+    rv = client.get(f'/submission/{submission.id}/artifact/compiledBinary')
+    assert rv.status_code == 403, rv.get_json()
