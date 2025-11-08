@@ -4,6 +4,7 @@ import itertools
 import pathlib
 import io
 import zipfile
+import inspect
 from datetime import datetime
 from pprint import pprint
 from mongo import *
@@ -85,7 +86,13 @@ class FakeSizedBytesIO:
     def __init__(self, data: bytes, fake_size: int):
         self._buf = io.BytesIO(data)
         self._fake_size = fake_size
-        self._use_fake = False
+        self._last_seek_fake = False
+
+    def _should_fake(self):
+        for frame in inspect.stack():
+            if frame.function == '_check_zip_submission_payload':
+                return True
+        return False
 
     def read(self, *args, **kwargs):
         return self._buf.read(*args, **kwargs)
@@ -94,14 +101,16 @@ class FakeSizedBytesIO:
         return self._buf.readinto(b)
 
     def seek(self, offset: int, whence: int = io.SEEK_SET):
+        if whence == io.SEEK_END and offset == 0 and self._should_fake():
+            self._buf.seek(0, io.SEEK_END)
+            self._last_seek_fake = True
+            return self._fake_size
         res = self._buf.seek(offset, whence)
-        self._use_fake = (whence == io.SEEK_END and offset == 0)
-        if whence == io.SEEK_SET and offset == 0:
-            self._use_fake = False
+        self._last_seek_fake = False
         return res
 
     def tell(self) -> int:
-        if self._use_fake:
+        if self._last_seek_fake:
             return self._fake_size
         return self._buf.tell()
 
