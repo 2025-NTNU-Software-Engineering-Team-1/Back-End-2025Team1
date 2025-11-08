@@ -287,6 +287,11 @@ class ProblemTestCase(EmbeddedDocument):
         ProblemCase,
         default=list,
     )
+    submission_mode = IntField(
+        choices=[0, 1],
+        default=0,
+        db_field='submissionMode',
+    )
     # zip file contains testcase input/output
     case_zip = ZipField(
         db_field='caseZip',

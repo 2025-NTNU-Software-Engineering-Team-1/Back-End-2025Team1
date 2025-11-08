@@ -19,7 +19,7 @@ from hashlib import md5
 from bson.son import SON
 from flask import current_app
 from tempfile import NamedTemporaryFile
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zipfile import ZipFile, is_zipfile
 from ulid import ULID
 import abc
@@ -167,10 +167,20 @@ class BaseSubmission(abc.ABC):
         lang2ext = {0: '.c', 1: '.cpp', 2: '.py', 3: '.pdf'}
         return lang2ext[self.language]
 
+    @property
+    def submission_mode(self) -> int:
+        return getattr(self.problem.test_case, 'submission_mode', 0) or 0
+
+    @property
+    def is_zip_mode(self) -> bool:
+        return self.submission_mode == 1
+
     def main_code_path(self) -> str:
         # handwritten submission didn't provide this function
         if self.handwritten:
             return
+        if self.is_zip_mode:
+            return self.get_code_download_url()
         # get excepted code name & temp path
         ext = self.main_code_ext
         path = self.tmp_dir / f'main{ext}'
@@ -331,9 +341,20 @@ class BaseSubmission(abc.ABC):
         if not file:
             return 'no file'
         if not is_zipfile(file):
+            try:
+                file.seek(0)
+            except (OSError, AttributeError):
+                pass
             return 'not a valid zip file'
+        try:
+            file.seek(0)
+        except (OSError, AttributeError):
+            pass
+        if self.is_zip_mode:
+            return self._check_zip_submission_payload(file)
+        return self._check_standard_submission_payload(file)
 
-        # HACK: hard-coded config
+    def _check_standard_submission_payload(self, file):
         MAX_SIZE = 10**7
         with ZipFile(file) as zf:
             infos = zf.infolist()
@@ -354,6 +375,26 @@ class BaseSubmission(abc.ABC):
                     if pdf.read(5) != b'%PDF-':
                         return 'only accept PDF file.'
         file.seek(0)
+        return None
+
+    def _check_zip_submission_payload(self, file):
+        limit = 1024 * 1024 * 1024  # 1GB
+        try:
+            file.seek(0, os.SEEK_END)
+            size = file.tell()
+        except (OSError, AttributeError):
+            size = None
+        finally:
+            try:
+                file.seek(0)
+            except (OSError, AttributeError):
+                pass
+        if size is not None and size > limit:
+            return 'code file size too large (limit 1GB)'
+        try:
+            file.seek(0)
+        except (OSError, AttributeError):
+            pass
         return None
 
     def rejudge(self) -> bool:
@@ -393,6 +434,31 @@ class BaseSubmission(abc.ABC):
             content_type='application/zip',
         )
         return path
+
+    def _ensure_code_minio_path(self) -> Optional[str]:
+        if self.code_minio_path:
+            return self.code_minio_path
+        raw = self._get_code_raw()
+        if raw is None:
+            return None
+        buf = io.BytesIO(b"".join(raw))
+        path = self._put_code(buf)
+        self.update(code_minio_path=path)
+        self.reload()
+        return path
+
+    def get_code_download_url(
+        self, expires: timedelta = timedelta(minutes=10)) -> Optional[str]:
+        path = self._ensure_code_minio_path()
+        if path is None:
+            return None
+        minio_client = MinioClient()
+        return minio_client.client.get_presigned_url(
+            'GET',
+            minio_client.bucket,
+            path,
+            expires=expires,
+        )
 
     @abc.abstractmethod
     def submit(self, *args, **kwargs) -> bool:
@@ -690,6 +756,8 @@ class BaseSubmission(abc.ABC):
         '''
         Get source code user submitted
         '''
+        if self.is_zip_mode:
+            return self.get_code_download_url()
         ext = self.main_code_ext
         return self.get_code(f'main{ext}')
 
