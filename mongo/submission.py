@@ -1049,12 +1049,26 @@ class Submission(MongoBase, engine=engine.Submission):
         cache.set(key, cap.value, 60)
         return cap
 
-    def permission(self, user, req: Permission):
-        """
-        check whether user own `req` permission
-        """
-
-        return bool(self.own_permission(user) & req)
+    def permission(self, user: User, req: 'Submission.Permission') -> bool:
+        '''
+        Check submission viewing permission
+        '''
+        # Own submission
+        if self.user.id == user.id:
+            return True
+        
+        # Problem owner/teacher
+        if self.problem.permission(user, self.problem.Permission.MANAGE):
+            return True
+        
+        # Course teacher
+        if any(
+            course.permission(user, course.Permission.TEACH)
+            for course in self.problem.courses
+        ):
+            return True
+        
+        return False
 
     def migrate_code_to_minio(self):
         """
