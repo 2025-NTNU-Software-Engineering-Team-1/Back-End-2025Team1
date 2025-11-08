@@ -277,10 +277,14 @@ def get_submission(user, submission: Submission):
     has_output = submission.problem.can_view_stdout
     ret = submission.to_dict()
     if has_code:
-        try:
-            ret['code'] = submission.get_main_code()
-        except UnicodeDecodeError:
-            ret['code'] = False
+        if submission.is_zip_mode:
+            ret['code'] = None
+            ret['codeDownloadUrl'] = submission.get_code_download_url()
+        else:
+            try:
+                ret['code'] = submission.get_main_code()
+            except UnicodeDecodeError:
+                ret['code'] = False
     if has_output:
         ret['tasks'] = submission.get_detailed_result()
     else:

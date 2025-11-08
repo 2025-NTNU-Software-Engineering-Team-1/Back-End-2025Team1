@@ -2,6 +2,9 @@ from typing import Optional
 import pytest
 import itertools
 import pathlib
+import io
+import zipfile
+from datetime import datetime
 from pprint import pprint
 from mongo import *
 from mongo import engine
@@ -51,6 +54,50 @@ class SubmissionTester:
     # all submission count
     init_submission_count = 8
     submissions = []
+
+
+@pytest.fixture
+def zip_problem(problem_ids):
+    pid = problem_ids('teacher', 1, True)[0]
+    prob = Problem(pid)
+    prob.update(test_case__submission_mode=1)
+    prob.reload('test_case')
+    return pid
+
+
+def _write_zip(path: pathlib.Path, files: dict[str, str]):
+    with zipfile.ZipFile(path, 'w') as zf:
+        for name, content in files.items():
+            zf.writestr(name, content)
+    return path
+
+
+def _zip_bytes(files: dict[str, str]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w') as zf:
+        for name, content in files.items():
+            zf.writestr(name, content)
+    return buf.getvalue()
+
+
+class FakeSizedBytesIO(io.BytesIO):
+
+    def __init__(self, data: bytes, fake_size: int):
+        super().__init__(data)
+        self._fake_size = fake_size
+        self._use_fake = False
+
+    def seek(self, offset: int, whence: int = io.SEEK_SET):
+        res = super().seek(offset, whence)
+        self._use_fake = (whence == io.SEEK_END and offset == 0)
+        if whence == io.SEEK_SET and offset == 0:
+            self._use_fake = False
+        return res
+
+    def tell(self) -> int:
+        if self._use_fake:
+            return self._fake_size
+        return super().tell()
 
 
 class TestUserGetSubmission(SubmissionTester):
@@ -1036,6 +1083,71 @@ class TestSubmissionConfig(SubmissionTester):
                 'token': 'AAAAA',
             }]
         }
+
+
+class TestZipSubmissionMode:
+
+    def test_zip_submission_returns_download_url(
+        self,
+        app,
+        client_student,
+        zip_problem,
+        tmp_path,
+    ):
+        archive = _write_zip(
+            tmp_path / 'zip-src.zip',
+            {
+                'Makefile': 'all:\n\t@true\n',
+                'main.c': 'int main(){return 0;}',
+            },
+        )
+        with app.app_context():
+            submission = Submission.add(
+                problem_id=zip_problem,
+                username='student',
+                lang=0,
+                timestamp=datetime.now(),
+                ip_addr='127.0.0.1',
+            )
+            with archive.open('rb') as fp:
+                assert submission.submit(fp) is True
+            submission_id = submission.id
+        rv, _, data = BaseTester.request(
+            client_student,
+            'get',
+            f'/submission/{submission_id}',
+        )
+        assert rv.status_code == 200
+        assert 'codeDownloadUrl' in data
+        assert data['code'] is None
+        assert isinstance(data['codeDownloadUrl'],
+                          str) and data['codeDownloadUrl'].startswith('http')
+        with app.app_context():
+            direct_url = Submission(submission_id).get_main_code()
+            assert isinstance(direct_url,
+                              str) and direct_url.startswith('http')
+
+    def test_zip_submission_rejects_large_archive(
+        self,
+        app,
+        zip_problem,
+    ):
+        with app.app_context():
+            submission = Submission.add(
+                problem_id=zip_problem,
+                username='student',
+                lang=0,
+                timestamp=datetime.now(),
+                ip_addr='127.0.0.1',
+            )
+            data = _zip_bytes({'main.c': 'int main(){return 0;}'})
+            large_file = FakeSizedBytesIO(
+                data,
+                fake_size=1024 * 1024 * 1024 + 1,
+            )
+            with pytest.raises(ValueError) as exc:
+                submission.submit(large_file)
+            assert 'code file size too large' in str(exc.value)
 
 
 def test_student_cannot_view_WA_submission_output(forge_client, app):
