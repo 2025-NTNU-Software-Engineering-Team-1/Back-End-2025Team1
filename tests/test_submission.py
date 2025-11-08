@@ -80,15 +80,21 @@ def _zip_bytes(files: dict[str, str]) -> bytes:
     return buf.getvalue()
 
 
-class FakeSizedBytesIO(io.BytesIO):
+class FakeSizedBytesIO:
 
     def __init__(self, data: bytes, fake_size: int):
-        super().__init__(data)
+        self._buf = io.BytesIO(data)
         self._fake_size = fake_size
         self._use_fake = False
 
+    def read(self, *args, **kwargs):
+        return self._buf.read(*args, **kwargs)
+
+    def readinto(self, b):
+        return self._buf.readinto(b)
+
     def seek(self, offset: int, whence: int = io.SEEK_SET):
-        res = super().seek(offset, whence)
+        res = self._buf.seek(offset, whence)
         self._use_fake = (whence == io.SEEK_END and offset == 0)
         if whence == io.SEEK_SET and offset == 0:
             self._use_fake = False
@@ -97,7 +103,16 @@ class FakeSizedBytesIO(io.BytesIO):
     def tell(self) -> int:
         if self._use_fake:
             return self._fake_size
-        return super().tell()
+        return self._buf.tell()
+
+    def readable(self):
+        return True
+
+    def seekable(self):
+        return True
+
+    def close(self):
+        self._buf.close()
 
 
 class TestUserGetSubmission(SubmissionTester):
