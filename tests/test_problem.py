@@ -549,6 +549,7 @@ class TestProblem(BaseTester):
         assert rv.status_code == 404
 
     def test_edit_problem_with_course_does_not_exist(self, client_admin):
+        prob = utils.problem.create_problem()
         request_json = {
             'courses': ['CourseDoesNotExist'],
             'status': 1,
@@ -569,11 +570,12 @@ class TestProblem(BaseTester):
                 }]
             }
         }
-        rv = client_admin.put('/problem/manage/3', json=request_json)
+        rv = client_admin.put(f'/problem/manage/{prob.id}', json=request_json)
         assert rv.status_code == 404, rv.get_json()
         assert rv.get_json()['message'] == 'Course not found.'
 
     def test_edit_problem_with_name_is_too_long(self, client_admin):
+        prob = utils.problem.create_problem()
         oo = 'o' * 64
         request_json = {
             'courses': [],
@@ -595,12 +597,13 @@ class TestProblem(BaseTester):
                 }]
             }
         }
-        rv = client_admin.put('/problem/manage/3', json=request_json)
+        rv = client_admin.put(f'/problem/manage/{prob.id}', json=request_json)
         assert rv.status_code == 400, rv.get_json()
         assert rv.get_json()['message'] == 'Invalid or missing arguments.'
 
     # admin change the name of a problem (PUT /problem/manage/<problem_id>)
     def test_admin_edit_problem(self, client_admin):
+        prob = utils.problem.create_problem()
         request_json = {
             'courses': [],
             'status': 1,
@@ -621,7 +624,7 @@ class TestProblem(BaseTester):
                 }]
             }
         }
-        rv = client_admin.put('/problem/manage/3', json=request_json)
+        rv = client_admin.put(f'/problem/manage/{prob.id}', json=request_json)
         json = rv.get_json()
         print(json)
         assert rv.status_code == 200
@@ -629,8 +632,42 @@ class TestProblem(BaseTester):
 
     # admin get information of a problem (GET /problem/manage/<problem_id>)
     def test_admin_manage_problem(self, client_admin):
-        pid = 3
-        rv = client_admin.get(f'/problem/manage/{pid}')
+        # Create course first
+        utils.course.create_course(teacher='admin', name='English')
+        
+        prob = utils.problem.create_problem(
+            name='Offline problem',
+            course='English',
+            owner='admin',
+            status=1,
+            type=0,
+        )
+        # First edit it
+        request_json = {
+            'courses': [],
+            'status': 1,
+            'type': 0,
+            'problemName': 'Offline problem (edit)',
+            'description': description_dict(),
+            'tags': [],
+            'testCaseInfo': {
+                'language':
+                1,
+                'fillInTemplate':
+                '',
+                'tasks': [{
+                    'caseCount': 1,
+                    'taskScore': 100,
+                    'memoryLimit': 1000,
+                    'timeLimit': 1000
+                }]
+            }
+        }
+        rv = client_admin.put(f'/problem/manage/{prob.id}', json=request_json)
+        assert rv.status_code == 200
+        
+        # Then get it
+        rv = client_admin.get(f'/problem/manage/{prob.id}')
         json = rv.get_json()
         assert rv.status_code == 200
         assert json['status'] == 'ok'
@@ -658,7 +695,7 @@ class TestProblem(BaseTester):
             'ACUser': 0,
             'submitter': 0,
             'allowedLanguage': 7,
-            'canViewStdout': Problem(pid).can_view_stdout,
+            'canViewStdout': Problem(prob.id).can_view_stdout,
             'config': {
                 'acceptedFormat': 'code',
                 'aiVTuber': False,
