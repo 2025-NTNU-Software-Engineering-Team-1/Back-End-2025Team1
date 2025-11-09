@@ -2,14 +2,18 @@ import json
 import hashlib
 import statistics
 from dataclasses import asdict
+import zipfile
+import io
+from datetime import datetime
 from flask import Blueprint, request, send_file
 from urllib import parse
 from zipfile import BadZipFile
 from mongo import *
 from mongo import engine
 from mongo import sandbox
-from mongo.utils import drop_none
+from mongo.utils import drop_none, MinioClient
 from mongo.problem import *
+from mongo.submission import TrialSubmission
 from .auth import *
 from .utils import *
 
@@ -472,3 +476,152 @@ def problem_migrate_test_case(user: User, problem: Problem):
         return permission_error_response()
     problem.migrate_gridfs_to_minio()
     return HTTPResponse('Success.')
+
+
+@problem_api.get("/<int:problem_id>/public-testcases")
+@login_required
+def get_public_testcases(user, problem_id: int):
+    # Load problem
+    problem = Problem(problem_id)
+    if not problem or not getattr(problem, "obj", None):
+        return HTTPError("Problem not found.", 404)
+
+    # Enforce test mode: if field exists and is False -> forbid
+    if hasattr(problem.obj, "test_mode_enabled") and not getattr(
+            problem.obj, "test_mode_enabled", False):
+        return HTTPError("Test mode disabled.", 403)
+
+    zip_path = getattr(problem, "public_cases_zip_minio_path", None)
+    if not zip_path:
+        return HTTPError("No public testcases.", 404)
+
+    # Fetch ZIP from MinIO
+    minio = MinioClient()
+    try:
+        obj = minio.client.get_object(minio.bucket, zip_path)
+        raw = obj.read()
+    except Exception as e:
+        return HTTPError(f"Failed to load testcases: {e}", 500)
+    finally:
+        try:
+            obj.close()
+            obj.release_conn()
+        except Exception:
+            pass
+
+    # Defaults from first task (if exists)
+    default_mem = None
+    default_time = None
+    try:
+        if getattr(problem, "test_case", None) and problem.test_case.tasks:
+            default_mem = problem.test_case.tasks[0].memory_limit
+            default_time = problem.test_case.tasks[0].time_limit
+    except Exception:
+        pass
+
+    # Parse ZIP
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(raw))
+    except zipfile.BadZipFile:
+        return HTTPError("Invalid ZIP content.", 500)
+
+    names = set(zf.namelist())
+    ins = [n for n in names if n.lower().endswith(".in")]
+    cases = []
+    for name in sorted(ins):
+        base = name[:-3]  # strip '.in'
+        out_name = base + ".out"
+        try:
+            inp = zf.read(name).decode("utf-8", errors="replace")
+        except Exception:
+            inp = ""
+        try:
+            outp = (zf.read(out_name).decode("utf-8", errors="replace")
+                    if out_name in names else "")
+        except Exception:
+            outp = ""
+        cases.append({
+            "File_Name": base,
+            "Memory_Limit": default_mem,
+            "Time_Limit": default_time,
+            "Input_Content": inp,
+            "Output_Content": outp,
+        })
+
+    return HTTPResponse("OK", data={"Trial_Cases": cases})
+
+
+@problem_api.post("/<int:problem_id>/trial/request")
+@login_required
+@Request.json(
+    "languageType: int",
+    "useDefaultCase: bool?",
+)
+def request_trial_submission(user,
+                             problem_id: int,
+                             languageType: int,
+                             useDefaultCase: bool = True):
+    """
+    Create a trial submission request
+    
+    Returns:
+        Trial_Submission_Id if successful
+    """
+    # Load problem
+    problem = Problem(problem_id)
+    if not problem or not getattr(problem, "obj", None):
+        return HTTPError("Problem not found.", 404)
+
+    # Validate language type (0: C, 1: C++, 2: Python)
+    if languageType not in [0, 1, 2]:
+        return HTTPError(
+            "Invalid language type. Must be 0 (C), 1: C++, 2: Python).", 400)
+
+    # Check if user has permission to submit
+    user_obj = User(user.username)
+    if not user_obj:
+        return HTTPError("User not found.", 404)
+
+    # Check permission
+    has_permission = False
+
+    # Teachers and TAs have permission
+    if user_obj.role == Role.TA or user_obj.role == Role.TEACHER:
+        has_permission = True
+    else:
+        # For students, check if they are in any of the problem's courses
+        for course_obj in problem.courses:
+            try:
+                course_name = course_obj.course_name
+                course = Course(course_name)
+                if course and user.username in course.student_nicknames:
+                    has_permission = True
+                    break
+            except Exception:
+                continue
+
+    if not has_permission:
+        return HTTPError(
+            "You don't have permission to submit to this problem.", 403)
+
+    # Use TrialSubmission.add() instead of creating engine object directly
+    try:
+        trial_submission = TrialSubmission.add(
+            problem_id=problem_id,
+            username=user.username,
+            lang=languageType,
+            timestamp=datetime.now(),
+            ip_addr=request.remote_addr,
+        )
+
+        # Update use_default_case field
+        trial_submission.obj.use_default_case = useDefaultCase
+        trial_submission.obj.save()
+
+        return HTTPResponse(
+            "Trial submission created successfully.",
+            data={"Trial_Submission_Id": str(trial_submission.id)})
+    except PermissionError as e:
+        return HTTPError(str(e), 403)
+    except Exception as e:
+        return HTTPError(f"Failed to create trial submission: {str(e)}", 500)

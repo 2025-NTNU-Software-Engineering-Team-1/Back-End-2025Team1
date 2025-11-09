@@ -1,7 +1,8 @@
 import io
+import zipfile
 import pytest
 from zipfile import ZipFile
-from tests.base_tester import BaseTester
+from tests.base_tester import BaseTester, random_string
 from mongo import *
 from tests import utils
 
@@ -944,3 +945,313 @@ class TestProblem(BaseTester):
     def test_publish(self, client_admin):
         rv = client_admin.post('/problem/publish', json={'problemId': 3})
         assert rv.status_code == 200
+
+
+class TestTrialSubmissionAPI(BaseTester):
+    """
+    Test cases for trial submission API endpoints
+    """
+
+    @pytest.fixture(scope='function')
+    def setup_problem_with_testcases(self):
+        """Create a problem with public test cases"""
+        # Create a teacher and problem with unique course name
+        teacher = User('teacher')
+        course_name = f'TestCourse_{random_string()}'
+        Course.add_course(course_name, teacher.username)
+        course = Course(course_name)  # Get the course object after creation
+
+        # Add student to the course
+        student = User('student')
+        course.obj.student_nicknames[student.username] = student.username
+        course.obj.save()
+        course.reload()
+
+        # Create problem (Problem.add returns problem_id)
+        problem_name = f'TestProblem_{random_string()}'
+        problem_id = Problem.add(
+            user=teacher,
+            courses=[course_name],
+            problem_name=problem_name,
+            test_case_info={
+                'language':
+                2,
+                'fill_in_template':
+                '',
+                'tasks': [{
+                    'caseCount': 1,
+                    'taskScore': 100,
+                    'memoryLimit': 256000,  # KB
+                    'timeLimit': 1000,  # ms
+                }]
+            },
+        )
+        problem = Problem(problem_id)
+        problem.reload()
+
+        # Enable trial mode + allow all languages (bitmask 7 = C/C++/Python)
+        try:
+            problem.obj.test_mode_enabled = True
+        except Exception:
+            pass
+        try:
+            problem.obj.allowed_language = 7
+        except Exception:
+            pass
+        try:
+            problem.obj.save()
+            problem.reload()
+        except Exception:
+            pass
+
+        # Upload public testcases zip to MinIO
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr('case1.in', '1 2\n')
+            zf.writestr('case1.out', '3\n')
+            zf.writestr('case2.in', '5 7\n')
+            zf.writestr('case2.out', '12\n')
+        zip_buffer.seek(0)
+
+        from mongo.utils import MinioClient
+        minio = MinioClient()
+        path = f'test/public_cases_{random_string()}.zip'
+        minio.client.put_object(minio.bucket,
+                                path,
+                                zip_buffer,
+                                length=len(zip_buffer.getvalue()))
+
+        # Update problem with minio path
+        problem.update(public_cases_zip_minio_path=path)
+        problem.reload()
+
+        yield problem, course
+
+        # Cleanup
+        try:
+            minio.client.remove_object(minio.bucket, path)
+        except:
+            pass
+        try:
+            problem.obj.delete()
+        except:
+            pass
+        try:
+            course.obj.delete()
+        except:
+            pass
+
+    def test_get_public_testcases_success(self, forge_client,
+                                          setup_problem_with_testcases):
+        problem, _ = setup_problem_with_testcases
+        client = forge_client('student')
+
+        rv = client.get(f'/problem/{problem.problem_id}/public-testcases')
+        assert rv.status_code == 200
+
+        data = rv.get_json()
+        assert data['status'] == 'ok'
+        assert 'Trial_Cases' in data['data']
+
+        cases = data['data']['Trial_Cases']
+        assert len(cases) == 2
+        assert cases[0]['File_Name'] == 'case1'
+        assert cases[0]['Input_Content'] == '1 2\n'
+        assert cases[0]['Output_Content'] == '3\n'
+        assert cases[0]['Memory_Limit'] == 256000
+        assert cases[0]['Time_Limit'] == 1000
+        assert cases[1]['File_Name'] == 'case2'
+        assert cases[1]['Input_Content'] == '5 7\n'
+        assert cases[1]['Output_Content'] == '12\n'
+
+    def test_get_public_testcases_problem_not_found(self, forge_client):
+        client = forge_client('student')
+        rv = client.get('/problem/999999/public-testcases')
+        assert rv.status_code == 404
+        assert 'Problem not found' in rv.get_json()['message']
+
+    def test_get_public_testcases_test_mode_disabled(
+            self, forge_client, setup_problem_with_testcases):
+        problem, _ = setup_problem_with_testcases
+        if hasattr(problem.obj, "test_mode_enabled"):
+            problem.obj.test_mode_enabled = False
+            problem.obj.save()
+            problem.reload()
+
+        client = forge_client('student')
+        rv = client.get(f'/problem/{problem.problem_id}/public-testcases')
+        assert rv.status_code == 403
+        json = rv.get_json()
+        assert json['status'] == 'err'
+        assert 'Test mode disabled' in json['message']
+
+    def test_get_public_testcases_no_zip_uploaded(
+            self, forge_client, setup_problem_with_testcases):
+        problem, _ = setup_problem_with_testcases
+        problem.update(public_cases_zip_minio_path=None)
+        problem.reload()
+
+        client = forge_client('student')
+        rv = client.get(f'/problem/{problem.problem_id}/public-testcases')
+        assert rv.status_code == 404
+        assert 'No public testcases' in rv.get_json()['message']
+
+    def test_get_public_testcases_unauthorized(self, forge_client,
+                                               setup_problem_with_testcases):
+        problem, _ = setup_problem_with_testcases
+        client = forge_client(None)  # No user
+        rv = client.get(f'/problem/{problem.problem_id}/public-testcases')
+        assert rv.status_code == 403  # login_required returns 403
+
+    def test_get_public_testcases_missing_out_file(
+            self, forge_client, setup_problem_with_testcases):
+        problem, _ = setup_problem_with_testcases
+
+        # Create zip with only .in files
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr('case1.in', '1 2\n')
+        zip_buffer.seek(0)
+
+        from mongo.utils import MinioClient
+        minio = MinioClient()
+        path = f'test/incomplete_{random_string()}.zip'
+        minio.client.put_object(minio.bucket,
+                                path,
+                                zip_buffer,
+                                length=len(zip_buffer.getvalue()))
+
+        problem.update(public_cases_zip_minio_path=path)
+        problem.reload()
+
+        client = forge_client('student')
+        rv = client.get(f'/problem/{problem.problem_id}/public-testcases')
+        assert rv.status_code == 200
+
+        data = rv.get_json()
+        cases = data['data']['Trial_Cases']
+        assert len(cases) == 1
+        assert cases[0]['Input_Content'] == '1 2\n'
+        assert cases[0]['Output_Content'] == ''
+
+        try:
+            minio.client.remove_object(minio.bucket, path)
+        except:
+            pass
+
+    def test_get_public_testcases_invalid_zip(self, forge_client,
+                                              setup_problem_with_testcases):
+        problem, _ = setup_problem_with_testcases
+
+        from mongo.utils import MinioClient
+        minio = MinioClient()
+        path = f'test/invalid_{random_string()}.zip'
+        invalid_content = io.BytesIO(b'This is not a zip file')
+        minio.client.put_object(minio.bucket,
+                                path,
+                                invalid_content,
+                                length=len(invalid_content.getvalue()))
+
+        problem.update(public_cases_zip_minio_path=path)
+        problem.reload()
+
+        client = forge_client('student')
+        rv = client.get(f'/problem/{problem.problem_id}/public-testcases')
+        assert rv.status_code == 500
+        assert 'Invalid ZIP content' in rv.get_json()['message']
+
+        try:
+            minio.client.remove_object(minio.bucket, path)
+        except:
+            pass
+
+    def test_get_public_testcases_no_test_case_limits(
+            self, forge_client, setup_problem_with_testcases):
+        problem, _ = setup_problem_with_testcases
+        problem.update(test_case=None)
+        problem.reload()
+
+        client = forge_client('student')
+        rv = client.get(f'/problem/{problem.problem_id}/public-testcases')
+        assert rv.status_code == 200
+
+        data = rv.get_json()
+        cases = data['data']['Trial_Cases']
+        assert cases[0]['Memory_Limit'] is None
+        assert cases[0]['Time_Limit'] is None
+
+    def test_request_trial_submission_success(self, forge_client,
+                                              setup_problem_with_testcases):
+        problem, _ = setup_problem_with_testcases
+        client = forge_client('student')
+
+        rv = client.post(
+            f'/problem/{problem.problem_id}/trial/request',
+            json={
+                'languageType': 2,  # Python
+                'useDefaultCase': True
+            })
+        assert rv.status_code == 200
+        data = rv.get_json()
+        assert data['status'] == 'ok'
+        assert 'Trial_Submission_Id' in data['data']
+        trial_id = data['data']['Trial_Submission_Id']
+
+        # Verify record
+        from mongo.submission import TrialSubmission
+        ts = TrialSubmission(trial_id)
+        assert ts is not None
+        assert ts.problem_id == problem.problem_id
+        assert ts.language == 2
+        assert ts.use_default_case is True
+
+    def test_request_trial_submission_invalid_language(
+            self, forge_client, setup_problem_with_testcases):
+        problem, _ = setup_problem_with_testcases
+        client = forge_client('student')
+
+        rv = client.post(
+            f'/problem/{problem.problem_id}/trial/request',
+            json={
+                'languageType': 3,  # Not allowed for trial
+                'useDefaultCase': True
+            })
+        assert rv.status_code == 400
+        assert 'Invalid language type' in rv.get_json()['message']
+
+    def test_request_trial_submission_problem_not_found(self, forge_client):
+        client = forge_client('student')
+        rv = client.post('/problem/999999/trial/request',
+                         json={
+                             'languageType': 2,
+                             'useDefaultCase': True
+                         })
+        assert rv.status_code == 404
+        assert 'Problem not found' in rv.get_json()['message']
+
+    def test_request_trial_submission_no_permission(
+            self, forge_client, setup_problem_with_testcases):
+        problem, _ = setup_problem_with_testcases
+        client = forge_client(None)  # Unauthenticated
+        rv = client.post(f'/problem/{problem.problem_id}/trial/request',
+                         json={
+                             'languageType': 2,
+                             'useDefaultCase': True
+                         })
+        assert rv.status_code == 403
+
+    def test_request_trial_submission_with_custom_cases(
+            self, forge_client, setup_problem_with_testcases):
+        problem, _ = setup_problem_with_testcases
+        client = forge_client('student')
+
+        rv = client.post(
+            f'/problem/{problem.problem_id}/trial/request',
+            json={
+                'languageType': 0,  # C
+                'useDefaultCase': False
+            })
+        assert rv.status_code == 200
+        from mongo.submission import TrialSubmission
+        ts = TrialSubmission(rv.get_json()['data']['Trial_Submission_Id'])
+        assert ts.use_default_case is False
