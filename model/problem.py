@@ -126,11 +126,11 @@ def view_problem(user: User, problem: Problem):
     })
     return HTTPResponse('Problem can view.', data=data)
 
-
     try:
         # 獲取題目基本資訊
         problem_data = {
-            'problemName': problem.problem_name,
+            'problemName':
+            problem.problem_name,
             'description': {
                 'description': problem.description.get('description', ''),
                 'input': problem.description.get('input', ''),
@@ -139,81 +139,118 @@ def view_problem(user: User, problem: Problem):
                 'sampleInput': problem.description.get('sampleInput', []),
                 'sampleOutput': problem.description.get('sampleOutput', []),
             },
-            'courses': [course.course_name for course in problem.courses] if problem.courses else [],
-            'tags': problem.tags if problem.tags else [],
-            'allowedLanguage': problem.allowed_language,
-            'quota': problem.quota,
-            'type': problem.type,
-            'status': problem.status,
-            'testCase': [
-                {
-                    'taskScore': tc.get('taskScore', 0),
-                    'caseCount': tc.get('caseCount', 0),
-                    'memoryLimit': tc.get('memoryLimit', 0),
-                    'timeLimit': tc.get('timeLimit', 0),
-                }
-                for tc in problem.test_case
-            ] if problem.test_case else [],
-            'canViewStdout': problem.can_view_stdout,
-            'owner': problem.owner.username if problem.owner else '',
-            'defaultCode': problem.default_code if problem.default_code else '',
-            'submitCount': problem.submit_count(user),
-            'highScore': problem.get_high_score(user),
-            'ACUser': problem.get_ac_user_count(),
-            'submitter': problem.get_tried_user_count(),
+            'courses':
+            [course.course_name
+             for course in problem.courses] if problem.courses else [],
+            'tags':
+            problem.tags if problem.tags else [],
+            'allowedLanguage':
+            problem.allowed_language,
+            'quota':
+            problem.quota,
+            'type':
+            problem.type,
+            'status':
+            problem.status,
+            'testCase': [{
+                'taskScore': tc.get('taskScore', 0),
+                'caseCount': tc.get('caseCount', 0),
+                'memoryLimit': tc.get('memoryLimit', 0),
+                'timeLimit': tc.get('timeLimit', 0),
+            } for tc in problem.test_case] if problem.test_case else [],
+            'canViewStdout':
+            problem.can_view_stdout,
+            'owner':
+            problem.owner.username if problem.owner else '',
+            'defaultCode':
+            problem.default_code if problem.default_code else '',
+            'submitCount':
+            problem.submit_count(user),
+            'highScore':
+            problem.get_high_score(user),
+            'ACUser':
+            problem.get_ac_user_count(),
+            'submitter':
+            problem.get_tried_user_count(),
         }
-        
+
         # 添加 config 資訊（如果存在）
         if problem.config:
             problem_data['config'] = {
                 'compilation': problem.config.get('compilation', False),
                 'trialMode': problem.config.get('trialMode', False),
                 'aiVTuber': problem.config.get('aiVTuber', False),
-                'acceptedFormat': problem.config.get('acceptedFormat', 'code'),  # 關鍵：決定提交格式
+                'acceptedFormat': problem.config.get('acceptedFormat',
+                                                     'code'),  # 關鍵：決定提交格式
                 'staticAnalysis': {
-                    'custom': problem.config.get('staticAnalysis', {}).get('custom', False),
+                    'custom':
+                    problem.config.get('staticAnalysis',
+                                       {}).get('custom', False),
                 },
-                'artifactCollection': problem.config.get('artifactCollection', []),
+                'artifactCollection':
+                problem.config.get('artifactCollection', []),
             }
-            
+
             # 添加庫限制資訊
             static_analysis = problem.config.get('staticAnalysis', {})
             if static_analysis.get('libraryRestrictions'):
-                problem_data['config']['staticAnalysis']['libraryRestrictions'] = {
-                    'enabled': static_analysis['libraryRestrictions'].get('enabled', False),
-                    'whitelist': static_analysis['libraryRestrictions'].get('whitelist', []),
-                    'blacklist': static_analysis['libraryRestrictions'].get('blacklist', []),
-                }
-            
+                problem_data['config']['staticAnalysis'][
+                    'libraryRestrictions'] = {
+                        'enabled':
+                        static_analysis['libraryRestrictions'].get(
+                            'enabled', False),
+                        'whitelist':
+                        static_analysis['libraryRestrictions'].get(
+                            'whitelist', []),
+                        'blacklist':
+                        static_analysis['libraryRestrictions'].get(
+                            'blacklist', []),
+                    }
+
             # 添加網路限制資訊
             if static_analysis.get('networkAccessRestriction'):
                 network_config = static_analysis['networkAccessRestriction']
-                problem_data['config']['staticAnalysis']['networkAccessRestriction'] = {
-                    'enabled': network_config.get('enabled', False),
-                }
-                
+                problem_data['config']['staticAnalysis'][
+                    'networkAccessRestriction'] = {
+                        'enabled': network_config.get('enabled', False),
+                    }
+
                 if network_config.get('firewallExtranet'):
-                    problem_data['config']['staticAnalysis']['networkAccessRestriction']['firewallExtranet'] = {
-                        'enabled': network_config['firewallExtranet'].get('enabled', False),
-                        'whitelist': network_config['firewallExtranet'].get('whitelist', []),
-                        'blacklist': network_config['firewallExtranet'].get('blacklist', []),
-                    }
-                
+                    problem_data['config']['staticAnalysis'][
+                        'networkAccessRestriction']['firewallExtranet'] = {
+                            'enabled':
+                            network_config['firewallExtranet'].get(
+                                'enabled', False),
+                            'whitelist':
+                            network_config['firewallExtranet'].get(
+                                'whitelist', []),
+                            'blacklist':
+                            network_config['firewallExtranet'].get(
+                                'blacklist', []),
+                        }
+
                 if network_config.get('connectWithLocal'):
-                    problem_data['config']['staticAnalysis']['networkAccessRestriction']['connectWithLocal'] = {
-                        'enabled': network_config['connectWithLocal'].get('enabled', False),
-                        'whitelist': network_config['connectWithLocal'].get('whitelist', []),
-                        'blacklist': network_config['connectWithLocal'].get('blacklist', []),
-                        'localServiceZip': network_config['connectWithLocal'].get('localServiceZip'),
-                    }
-        
-        return HTTPResponse(
-            'Success.',
-            data=problem_data
-        )
-    
+                    problem_data['config']['staticAnalysis'][
+                        'networkAccessRestriction']['connectWithLocal'] = {
+                            'enabled':
+                            network_config['connectWithLocal'].get(
+                                'enabled', False),
+                            'whitelist':
+                            network_config['connectWithLocal'].get(
+                                'whitelist', []),
+                            'blacklist':
+                            network_config['connectWithLocal'].get(
+                                'blacklist', []),
+                            'localServiceZip':
+                            network_config['connectWithLocal'].get(
+                                'localServiceZip'),
+                        }
+
+        return HTTPResponse('Success.', data=problem_data)
+
     except Exception as e:
         return HTTPError(str(e), 400)
+
 
 @problem_api.route('/manage/<int:problem_id>', methods=['GET'])
 @Request.doc('problem_id', 'problem', Problem)
@@ -251,13 +288,12 @@ def get_problem_detailed(user, problem: Problem):
 @identity_verify(0, 1)
 @Request.doc('problem', Problem)
 def upload_problem_assets(user: User, problem: Problem):
-    
-    
+
     if not problem.permission(user, problem.Permission.MANAGE):
-        return permission_error_response() #
+        return permission_error_response()  #
     if not problem.permission(user=user, req=problem.Permission.ONLINE):
-        return online_error_response() #
-    
+        return online_error_response()  #
+
     try:
         files_data = {
             'case': request.files.get('case'),
@@ -268,22 +304,21 @@ def upload_problem_assets(user: User, problem: Problem):
             'score.json': request.files.get('score.json'),
             'local_service.zip': request.files.get('local_service.zip'),
         }
-        
+
         valid_files = {k: v for k, v in files_data.items() if v is not None}
-        
+
         if not valid_files:
             return HTTPError('No files provided', 400)
-        
-        problem.update_assets(
-            files_data=valid_files
-        )
-        
-        return HTTPResponse('Success.', data={'ok': True}) # (回傳 ok: true)
-    
+
+        problem.update_assets(files_data=valid_files)
+
+        return HTTPResponse('Success.', data={'ok': True})  # (回傳 ok: true)
+
     except BadZipFile as e:
         return HTTPError(f'Invalid zip file: {str(e)}', 400)
     except Exception as e:
         return HTTPError(str(e), 400)
+
 
 @problem_api.route('/manage', methods=['POST'])
 @identity_verify(0, 1)
@@ -305,8 +340,9 @@ def create_problem(user: User, **ks):
     data = request.json or {}
     ks['config'] = data.get('config')
     ks['pipeline'] = data.get('pipeline')
-    ks['test_mode'] = data.get('Test_Mode')  # Note: Test_Mode in request, test_mode in code
-    
+    ks['test_mode'] = data.get(
+        'Test_Mode')  # Note: Test_Mode in request, test_mode in code
+
     try:
         pid = Problem.add(user=user, **ks)
     except ValidationError as e:
@@ -439,18 +475,16 @@ def initiate_test_case_upload(
     try:
         if length <= 0 or part_size <= 0:
             return HTTPError('Invalid length or part_size', 400)
-        
+
         if part_size > length:
             return HTTPError('part_size cannot be greater than length', 400)
         upload_info = problem.generate_urls_for_uploading_test_case(
             length, part_size)
-        return HTTPResponse(
-            'Test case upload initiated',
-            data={
-                'upload_id': upload_info.upload_id,
-                'urls': upload_info.urls,
-            }
-        )
+        return HTTPResponse('Test case upload initiated',
+                            data={
+                                'upload_id': upload_info.upload_id,
+                                'urls': upload_info.urls,
+                            })
     except ValueError as e:
         return HTTPError(f'Invalid parameters: {str(e)}', 400)
     except Exception as e:
@@ -471,36 +505,33 @@ def complete_test_case_upload(
         return permission_error_response()
     if not problem.permission(user=user, req=problem.Permission.ONLINE):
         return online_error_response()
-    
+
     try:
         from minio.datatypes import Part
         if not isinstance(parts, list) or len(parts) == 0:
             return HTTPError('Invalid parts list', 400)
-        
+
         part_objects = []
         for part in parts:
-            if not isinstance(part, dict) or 'ETag' not in part or 'PartNumber' not in part:
+            if not isinstance(
+                    part,
+                    dict) or 'ETag' not in part or 'PartNumber' not in part:
                 return HTTPError('Invalid part format', 400)
-            
+
             part_objects.append(
-                Part(
-                    part_number=part['PartNumber'],
-                    etag=part['ETag']
-                )
-            )
+                Part(part_number=part['PartNumber'], etag=part['ETag']))
         problem.complete_test_case_upload(upload_id, part_objects)
-        return HTTPResponse(
-            'Test case upload completed',
-            data={'ok': True},
-            status_code=200
-        )
-    
+        return HTTPResponse('Test case upload completed',
+                            data={'ok': True},
+                            status_code=200)
+
     except BadTestCase as e:
         return HTTPError(str(e), 400)
     except ValueError as e:
         return HTTPError(f'Invalid parameters: {str(e)}', 400)
     except Exception as e:
         return HTTPError(str(e), 400)
+
 
 @problem_api.route('/<int:problem_id>/test-case', methods=['GET'])
 @problem_api.route('/<int:problem_id>/testcase', methods=['GET'])
@@ -695,7 +726,9 @@ def problem_migrate_test_case(user: User, problem: Problem):
     problem.migrate_gridfs_to_minio()
     return HTTPResponse('Success.')
 
+
 #
+
 
 @problem_api.route('/static-analysis/options', methods=['GET'])
 def get_static_analysis_options():
@@ -734,11 +767,9 @@ def get_static_analysis_options():
             'deque',
             'memory',
         ]
-        
-        return HTTPResponse(
-            'Success.',
-            data={'librarySymbols': library_symbols}
-        )
-    
+
+        return HTTPResponse('Success.',
+                            data={'librarySymbols': library_symbols})
+
     except Exception as e:
         return HTTPError(str(e), 400)

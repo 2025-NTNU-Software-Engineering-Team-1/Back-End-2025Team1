@@ -100,7 +100,7 @@ class TestProblem(BaseTester):
     def test_add_offline_problem(self, client_admin):
         # Create course first
         utils.course.create_course(teacher='admin', name='English')
-        
+
         request_json = {
             'courses': ['English'],
             'status': 1,
@@ -138,7 +138,7 @@ class TestProblem(BaseTester):
     def test_add_online_problem(self, client_admin):
         # Create course first
         utils.course.create_course(teacher='admin', name='math')
-        
+
         request_json = {
             'courses': ['math'],
             'status': 0,
@@ -326,7 +326,8 @@ class TestProblem(BaseTester):
         assert json['status'] == 'ok'
         assert json['message'] == 'Problem can view.'
         assert json['data'] == {
-            'ACUser': 0,
+            'ACUser':
+            0,
             'status':
             1,
             'type':
@@ -341,7 +342,8 @@ class TestProblem(BaseTester):
             'courses': ['English'],
             'allowedLanguage':
             7,
-            'canViewStdout': True,
+            'canViewStdout':
+            True,
             'config': {
                 'acceptedFormat': 'code',
                 'aiVTuber': False,
@@ -351,8 +353,12 @@ class TestProblem(BaseTester):
                 'executionMode': 'general',
                 'fopen': False,
                 'fwrite': False,
-                'scoringScript': {'custom': False},
-                'staticAnalys': {'custom': False},
+                'scoringScript': {
+                    'custom': False
+                },
+                'staticAnalys': {
+                    'custom': False
+                },
                 'teacherFirst': False,
                 'testMode': False,
                 'testModeQuotaPerStudent': 0,
@@ -369,7 +375,8 @@ class TestProblem(BaseTester):
             -1,
             'submitCount':
             0,
-            'submitter': 0,
+            'submitter':
+            0,
             'defaultCode':
             '',
             'highScore':
@@ -391,7 +398,8 @@ class TestProblem(BaseTester):
         assert json['status'] == 'ok'
         assert json['message'] == 'Problem can view.'
         assert json['data'] == {
-            'ACUser': 0,
+            'ACUser':
+            0,
             'status':
             0,
             'type':
@@ -406,7 +414,8 @@ class TestProblem(BaseTester):
             'courses': ['math'],
             'allowedLanguage':
             7,
-            'canViewStdout': True,
+            'canViewStdout':
+            True,
             'config': {
                 'acceptedFormat': 'code',
                 'aiVTuber': False,
@@ -416,8 +425,12 @@ class TestProblem(BaseTester):
                 'executionMode': 'general',
                 'fopen': False,
                 'fwrite': False,
-                'scoringScript': {'custom': False},
-                'staticAnalys': {'custom': False},
+                'scoringScript': {
+                    'custom': False
+                },
+                'staticAnalys': {
+                    'custom': False
+                },
                 'teacherFirst': False,
                 'testMode': False,
                 'testModeQuotaPerStudent': 0,
@@ -434,7 +447,8 @@ class TestProblem(BaseTester):
             -1,
             'submitCount':
             0,
-            'submitter': 0,
+            'submitter':
+            0,
             'defaultCode':
             '',
             'highScore':
@@ -654,8 +668,12 @@ class TestProblem(BaseTester):
                 'executionMode': 'general',
                 'fopen': False,
                 'fwrite': False,
-                'scoringScript': {'custom': False},
-                'staticAnalys': {'custom': False},
+                'scoringScript': {
+                    'custom': False
+                },
+                'staticAnalys': {
+                    'custom': False
+                },
                 'teacherFirst': False,
                 'testMode': False,
                 'testModeQuotaPerStudent': 0,
@@ -706,8 +724,8 @@ class TestProblem(BaseTester):
         assert rv.status_code == 403, rv.get_json()
         assert rv.get_json()['message'] == 'Not enough permission'
 
-    def test_teacher_can_download_problem_test_case(
-            self, client_teacher, monkeypatch):
+    def test_teacher_can_download_problem_test_case(self, client_teacher,
+                                                    monkeypatch):
         course = utils.course.create_course(teacher='teacher')
         problem = utils.problem.create_problem(course=course, owner='admin')
         monkeypatch.setattr(

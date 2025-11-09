@@ -72,7 +72,8 @@ class User(MongoBase, engine=engine.User):
         password: str,
         email: str,
     ):
-        if username is None or re.match(r'^[a-zA-Z0-9_\-]+$', username) is None:
+        if username is None or re.match(r'^[a-zA-Z0-9_\-]+$',
+                                        username) is None:
             raise ValueError(f'Invalid username [username={username}]')
         user_id = hash_id(username, password)
         email = email.lower().strip()

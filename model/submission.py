@@ -302,17 +302,17 @@ def get_submission(user, submission: Submission):
     return HTTPResponse(data=ret)
 
     if not submission.permission(user, submission.Permission.VIEW):
-            return HTTPError('Permission denied', 403)
-    
+        return HTTPError('Permission denied', 403)
+
     try:
         # Get source code
         code_content = ''
         try:
-            
-            code_content = submission.get_main_code() 
+
+            code_content = submission.get_main_code()
         except SubmissionCodeNotFound:
             code_content = ''
-        
+
         # Build task results
         tasks = []
         if submission.tasks:
@@ -324,49 +324,62 @@ def get_submission(user, submission: Submission):
                     'score': task.score or 0,
                     'status': task.status or -1,
                 }
-                
+
                 # Add individual case results
                 if task.cases:
                     for case in task.cases:
                         task_data['cases'].append({
-                            'execTime': case.exec_time or 0,
-                            'memoryUsage': case.memory_usage or 0,
-                            'status': case.status or -1,
+                            'execTime':
+                            case.exec_time or 0,
+                            'memoryUsage':
+                            case.memory_usage or 0,
+                            'status':
+                            case.status or -1,
                         })
-                
+
                 tasks.append(task_data)
-        
+
         # Build submission data
         submission_data = {
-            'submissionId': str(submission.id), #
-            'problemId': submission.problem.problem_id, #
+            'submissionId':
+            str(submission.id),  #
+            'problemId':
+            submission.problem.problem_id,  #
             'user': {
                 'username': submission.user.username,
                 'displayedName': submission.user.profile.displayed_name,
                 'role': submission.user.role,
             },
-            'status': submission.status,
-            'score': submission.score,
-            'runTime': submission.exec_time or 0,
-            'memoryUsage': submission.memory_usage or 0,
-            'languageType': submission.language, #
-            'timestamp': int(submission.timestamp.timestamp()) if submission.timestamp else 0,
-            'lastSend': int(submission.last_send.timestamp()) if submission.last_send else 0,
-            'ipAddr': submission.ip_addr or '',
-            'code': code_content,
-            'tasks': tasks,
+            'status':
+            submission.status,
+            'score':
+            submission.score,
+            'runTime':
+            submission.exec_time or 0,
+            'memoryUsage':
+            submission.memory_usage or 0,
+            'languageType':
+            submission.language,  #
+            'timestamp':
+            int(submission.timestamp.timestamp())
+            if submission.timestamp else 0,
+            'lastSend':
+            int(submission.last_send.timestamp())
+            if submission.last_send else 0,
+            'ipAddr':
+            submission.ip_addr or '',
+            'code':
+            code_content,
+            'tasks':
+            tasks,
         }
-        
-        return HTTPResponse(
-            'Success.',
-            data=submission_data
-        )
-    
+
+        return HTTPResponse('Success.', data=submission_data)
+
     except Exception as e:
         import traceback
         traceback.print_exc()
         return HTTPError(str(e), 400)
-
 
 
 @submission_api.get('/<submission>/output/<int:task_no>/<int:case_no>')
@@ -421,9 +434,9 @@ def download_submission_task_artifact(
 @Request.doc('submission', Submission)
 def download_submission_compiled_binary(user, submission: Submission):
     problem = Problem(submission.problem_id)
-    has_permission = (
-        submission.permission(user, Submission.Permission.VIEW_OUTPUT)
-        or user.username == submission.username)
+    has_permission = (submission.permission(user,
+                                            Submission.Permission.VIEW_OUTPUT)
+                      or user.username == submission.username)
     if not has_permission:
         return HTTPError('permission denied', 403)
     if not (problem.config or {}).get('compilation'):
@@ -534,8 +547,7 @@ def update_submission(user, submission: Submission, code):
         return HTTPResponse(
             f'{submission} {"is finished." if submission.handwritten else "send to judgement."}',
             data={'ok': True},
-            status_code=200
-        )
+            status_code=200)
     else:
         return HTTPError('Some error occurred, please contact the admin', 500)
 

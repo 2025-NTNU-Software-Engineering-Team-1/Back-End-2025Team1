@@ -199,7 +199,6 @@ class Problem(MongoBase, engine=engine.Problem):
 
         return user_cap
 
-
     def has_course_modify_permission(self, user: User) -> bool:
         """
         return True if the user can modify at least one course the
@@ -210,11 +209,9 @@ class Problem(MongoBase, engine=engine.Problem):
             course.permission(user, Course.Permission.MODIFY)
             for course in map(Course, self.courses))
 
-
-
     def update_assets(
         self,
-        user: User, 
+        user: User,
         files_data: Dict[str, Any],
         meta: Dict[str, Any],
     ):
@@ -223,7 +220,7 @@ class Problem(MongoBase, engine=engine.Problem):
         '''
         try:
             if files_data.get('case'):
-                self.update_test_case(files_data['case']) 
+                self.update_test_case(files_data['case'])
 
             minio_client = MinioClient()
             resource_files = {
@@ -234,31 +231,30 @@ class Problem(MongoBase, engine=engine.Problem):
                 'score.json': ('scoring_config', 'score.json'),
                 'local_service.zip': ('local_service', 'local_service.zip'),
             }
-            
+
             new_asset_paths = {}
             for key, (asset_type, filename) in resource_files.items():
                 file_obj = files_data.get(key)
                 if file_obj:
-                    path = self._save_asset_file(minio_client, file_obj, asset_type, filename)
+                    path = self._save_asset_file(minio_client, file_obj,
+                                                 asset_type, filename)
                     new_asset_paths[asset_type] = path
             kwargs_for_edit = {
                 'config': meta.get('config'),
                 'pipeline': meta.get('pipeline'),
             }
             if new_asset_paths:
-                current_config = self.obj.config or Problem.config.default() 
+                current_config = self.obj.config or Problem.config.default()
                 current_asset_paths = current_config.get('assetPaths', {})
                 current_asset_paths.update(new_asset_paths)
                 current_config['assetPaths'] = current_asset_paths
                 kwargs_for_edit['config'] = current_config
 
-            if kwargs_for_edit: 
-                self.edit_problem(
-                    user=user,
-                    problem_id=self.problem_id,
-                    **kwargs_for_edit
-                )
-            
+            if kwargs_for_edit:
+                self.edit_problem(user=user,
+                                  problem_id=self.problem_id,
+                                  **kwargs_for_edit)
+
         except BadZipFile as e:
             raise BadZipFile(f'Invalid zip file: {str(e)}')
         except Exception as e:
@@ -268,10 +264,10 @@ class Problem(MongoBase, engine=engine.Problem):
         self,
         minio_client: MinioClient,
         file_obj: BinaryIO,
-        asset_type: str,  
-        filename: str,    
+        asset_type: str,
+        filename: str,
     ) -> str:
-        
+
         if filename.endswith('.zip'):
             try:
                 from zipfile import ZipFile
@@ -279,9 +275,9 @@ class Problem(MongoBase, engine=engine.Problem):
                 ZipFile(file_obj).testzip()
             except Exception as e:
                 raise BadZipFile(f'Invalid zip file {filename}: {str(e)}')
-        
+
         path = f'problem/{self.problem_id}/{asset_type}/{filename}'
-        
+
         file_obj.seek(0)
         file_data = file_obj.read()
         file_size = len(file_data)
@@ -291,11 +287,10 @@ class Problem(MongoBase, engine=engine.Problem):
             minio_client.bucket,
             path,
             file_obj,
-            file_size, 
+            file_size,
             part_size=5 * 1024 * 1024,
         )
         return path
-    
 
     def permission(self, user: User, req: Permission) -> bool:
         """
