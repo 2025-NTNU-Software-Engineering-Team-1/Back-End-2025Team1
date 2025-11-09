@@ -634,7 +634,7 @@ class TestProblem(BaseTester):
     def test_admin_manage_problem(self, client_admin):
         # Create course first
         utils.course.create_course(teacher='admin', name='English')
-        
+
         prob = utils.problem.create_problem(
             name='Offline problem',
             course='English',
@@ -665,7 +665,7 @@ class TestProblem(BaseTester):
         }
         rv = client_admin.put(f'/problem/manage/{prob.id}', json=request_json)
         assert rv.status_code == 200
-        
+
         # Then get it
         rv = client_admin.get(f'/problem/manage/{prob.id}')
         json = rv.get_json()
