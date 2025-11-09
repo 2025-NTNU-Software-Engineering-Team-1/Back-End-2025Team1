@@ -543,9 +543,12 @@ def get_checksum(token: str, problem_id: int):
     problem = Problem(problem_id)
     if not problem:
         return HTTPError(f'{problem} not found', 404)
+    submission_mode = getattr(problem.test_case, 'submission_mode', 0) or 0
     meta = json.dumps({
         'tasks':
-        [json.loads(task.to_json()) for task in problem.test_case.tasks]
+        [json.loads(task.to_json()) for task in problem.test_case.tasks],
+        'submissionMode':
+        submission_mode,
     }).encode()
     # TODO: use etag of bucket object
     content = problem.get_test_case().read() + meta
@@ -561,9 +564,11 @@ def get_meta(token: str, problem_id: int):
     problem = Problem(problem_id)
     if not problem:
         return HTTPError(f'{problem} not found', 404)
+    submission_mode = getattr(problem.test_case, 'submission_mode', 0) or 0
     meta = {
         'tasks':
-        [json.loads(task.to_json()) for task in problem.test_case.tasks]
+        [json.loads(task.to_json()) for task in problem.test_case.tasks],
+        'submissionMode': submission_mode,
     }
     return HTTPResponse(data=meta)
 

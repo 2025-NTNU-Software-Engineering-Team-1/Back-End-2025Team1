@@ -25,9 +25,10 @@ def hash_pat_token(pat_token: str) -> str:
 def get_pat_status(pat_obj):
     """判斷 PAT token 的狀態"""
     if pat_obj.is_revoked:
-        return "deactivated"
+        return "deactivated"  # When revoked by Admin
 
     if pat_obj.due_time:
+        # Ensure both datetimes have timezone info for comparison
         now = datetime.now(timezone.utc)
         due_time = pat_obj.due_time
         if due_time.tzinfo is None:
@@ -79,7 +80,7 @@ def _clean_token(pat_obj, timezone=TAIPEI_TIMEZONE):
         "Name": pat_obj.name,
         "ID": pat_obj.pat_id,
         "Owner": pat_obj.owner,
-        "Status": status.capitalize(),
+        "Status": status.capitalize(),  # 'Active', 'Expired', 'Revoked'
         "Created": created_time,
         "Due_Time": due_time,
         "Last_Used": last_used_time,
@@ -87,6 +88,7 @@ def _clean_token(pat_obj, timezone=TAIPEI_TIMEZONE):
     }
 
 
+# Validate if Scope Set is allowed for the user's role
 def validate_scope_for_role(scope_set: list, user_role_key,
                             role_scope_map) -> bool:
     """Validate if all scopes in scope_set are allowed for the given user role."""
@@ -105,11 +107,12 @@ def validate_pat_due_time(due_time_str, local_timezone=TAIPEI_TIMEZONE):
     Then convert to UTC for storage.
     """
     if not due_time_str:
-        return None, None
+        return None, None  # No expiration is valid
 
     try:
         due_time_obj = datetime.fromisoformat(
             due_time_str.replace("Z", "+00:00"))
+        # Treat as TAIPEI timezone if no timezone info is provided
         if due_time_obj.tzinfo is None:
             due_time_obj = due_time_obj.replace(tzinfo=local_timezone)
     except (ValueError, AttributeError):
@@ -122,8 +125,10 @@ def validate_pat_due_time(due_time_str, local_timezone=TAIPEI_TIMEZONE):
             },
         )
 
+    # Convert to UTC for storage
     due_time_obj = due_time_obj.astimezone(timezone.utc)
 
+    # Ensure Due_Time is in the future
     now_utc = datetime.now(timezone.utc)
 
     if due_time_obj <= now_utc:

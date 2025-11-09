@@ -58,6 +58,7 @@ class TestAPIUserIPs(BaseTester):
         course = utils.course.create_course(teacher=teacher_user,
                                             students=[student_user])
 
+        # 偽造 LoginRecords（注意 user_id 用 username 字串）
         engine.LoginRecords(
             user_id=student_user.username,
             ip_addr='192.168.1.1',
@@ -65,6 +66,7 @@ class TestAPIUserIPs(BaseTester):
             timestamp=datetime.now(),
         ).save()
 
+        # 建立 problem 並偽造 Submission（最小必填欄位）
         problem = utils.problem.create_problem(owner=teacher_user,
                                                course=course.course_name)
         with app.app_context():

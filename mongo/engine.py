@@ -135,6 +135,56 @@ class Duration(EmbeddedDocument):
         return self.start <= other <= self.end
 
 
+class UploadPolicy(EmbeddedDocument):
+    """
+    UploadMode:
+        Code: One code file. Normal execution code submission.
+        Zip: A zip file containing multiple files. Suitable for complex projects. Need makefile.
+        Function: Single function submission. Used in function-based problems.
+        Interactive: Run with student's and teacher's binaries for interaction.
+    """
+
+    class UploadMode(IntEnum):
+        CODE = 0
+        ZIP = 1
+        FUNCTION = 2
+        INTERACTIVE = 3
+
+    mode = IntEnumField(enum=UploadMode, required=True)
+    required_files = ListField(StringField(max_length=256), default=list)
+
+    # ====== Teacher Artifacts Path (Optional)======
+    # MinIO path
+    compile_artifacts_path = StringField(max_length=256,
+                                         required=False,
+                                         default='')
+    static_analysis_artifacts_path = StringField(max_length=256,
+                                                 required=False,
+                                                 default='')
+    judger_artifacts_path = StringField(max_length=256,
+                                        required=False,
+                                        default='')
+    checker_artifacts_path = StringField(max_length=256,
+                                         required=False,
+                                         default='')
+    scorer_artifacts_path = StringField(max_length=256,
+                                        required=False,
+                                        default='')
+    # ==============================================
+
+
+class Pipeline(EmbeddedDocument):
+    """
+    upload_policy        ：mode（code/zip/function）、requiredFiles（Makefile、a.out）、teacherArtifacts 路徑。
+    network_policy       ：外網白/黑名單、Local service 允許列表。
+    static_analysis_policies：黑白名單、JE 自動終止策略。
+    interaction_config   ：教師/學生 Binary 名稱、執行順序、stdin/stdout 配置、Checker 需求。
+    custom_scoring       ：是否啟用、自訂 Score.py 路徑、I/O 介面描述。
+    artifact_manifest    ：可提供下載的產物種類。
+    test_case_policy     ：命名規則（legacy/ssttnn）、允許的輸入/輸出模式（stdin/fopen、stdout/fwrite）。
+    """
+
+
 class User(Document):
 
     class Role(IntEnum):
@@ -226,8 +276,8 @@ class Number(Document):
 class ProblemCase(EmbeddedDocument):
     task_score = IntField(required=True, db_field='taskScore')
     case_count = IntField(required=True, db_field='caseCount')
-    memory_limit = IntField(required=True, db_field='memoryLimit')
-    time_limit = IntField(required=True, db_field='timeLimit')
+    memory_limit = IntField(required=True, db_field='memoryLimit')  # in KB
+    time_limit = IntField(required=True, db_field='timeLimit')  # in ms
 
 
 class ProblemTestCase(EmbeddedDocument):
@@ -236,6 +286,11 @@ class ProblemTestCase(EmbeddedDocument):
     tasks = EmbeddedDocumentListField(
         ProblemCase,
         default=list,
+    )
+    submission_mode = IntField(
+        choices=[0, 1],
+        default=0,
+        db_field='submissionMode',
     )
     # zip file contains testcase input/output
     case_zip = ZipField(
@@ -387,6 +442,42 @@ class Problem(Document):
         default='',
     )
 
+    # === Test Mode Fields ===
+    test_mode_enabled = BooleanField(db_field='testModeEnabled', default=False)
+    test_submission_quota = IntField(
+        db_field='testSubmissionQuota',
+        default=-1  # -1 for unlimited
+    )
+
+    # Public test cases for Test Mode
+    public_cases_zip = ZipField(
+        db_field='publicCasesZip',
+        default=None,
+        null=True,
+    )
+    public_cases_zip_minio_path = StringField(
+        null=True,
+        max_length=256,
+        db_field='publicCasesZipMinioPath',
+    )
+
+    # AC Code for Test Mode
+    ac_code = ZipField(db_field='acCode', default=None, null=True)
+    ac_code_minio_path = StringField(
+        null=True,
+        max_length=256,
+        db_field='acCodeMinioPath',
+    )
+    ac_code_language = IntField(
+        db_field='acCodeLanguage',
+        null=True,
+    )
+
+    # Stats for Test Mode
+    # Dict[username, count]
+    test_submission_counts = DictField(db_field='testSubmissionCounts',
+                                       default={})
+
 
 class CaseResult(EmbeddedDocument):
     status = IntField(required=True)
@@ -412,20 +503,16 @@ class TaskResult(EmbeddedDocument):
     cases = EmbeddedDocumentListField(CaseResult, default=list)
 
 
-class Submission(Document):
+class BaseSubmissionDocument(Document):
     meta = {
+        'abstract': True,
         'indexes': [
-            (
-                'id',
-                'user',
-                'score',
-                'status',
-                'problem',
-                'language',
-                'timestamp',
-            ),
+            'problem',
+            'user',
+            ('problem', 'user', '-timestamp'),
         ]
     }
+
     problem = ReferenceField(Problem, required=True)
     user = ReferenceField(User, required=True)
     language = IntField(
@@ -453,8 +540,47 @@ class Submission(Document):
         db_field='compiledBinaryMinioPath',
     )
     last_send = DateTimeField(db_field='lastSend', default=datetime.now)
-    comment = FileField(default=None, null=True)
     ip_addr = StringField(default=None, null=True)
+
+
+class Submission(BaseSubmissionDocument):
+    meta = {'indexes': [('problem', 'user'), ('problem', '-score')]}
+    comment = FileField(default=None, null=True)
+
+
+class TrialSubmission(BaseSubmissionDocument):
+    """
+    Document for Test Mode Submissions.
+    These submissions are for testing against public/custom cases
+    and do not affect homework scores.
+    """
+    meta = {
+        'collection':
+        'test_submission',
+        'indexes': [
+            'problem',
+            'user',
+            ('problem', 'user', '-timestamp'),
+            {
+                'fields': ['timestamp'],
+                'expireAfterSeconds': 1209600  # 14 days Time-To-Live
+            },
+        ]
+    }
+
+    # True if using the problem's public test cases
+    use_default_case = BooleanField(db_field='useDefaultCase', default=True)
+
+    # Zip file of custom input cases (if use_default_case is False)
+    custom_input = ZipField(
+        null=True,
+        max_size=10**7  # 10MB limit for custom input
+    )
+    custom_input_minio_path = StringField(
+        null=True,
+        max_length=256,
+        db_field='customInputMinioPath',
+    )
 
 
 @escape_markdown.apply

@@ -632,6 +632,8 @@ class TestProblem(BaseTester):
                 1,
                 'fillInTemplate':
                 '',
+                'submissionMode':
+                0,
                 'tasks': [{
                     'caseCount': 1,
                     'taskScore': 100,
@@ -804,7 +806,7 @@ class TestProblem(BaseTester):
         monkeypatch.setattr(sandbox, 'find_by_token', lambda *_: True)
         rv = client.get('/problem/3/checksum?token=SandboxToken')
         assert rv.status_code == 200, rv.get_json()
-        assert rv.get_json()['data'] == 'b80aa4fad6b5dea9a5bca3237ac3ba89'
+        assert rv.get_json()['data'] == '710051d7e636d7c57add4ceb4a3138b3'
 
     def test_get_meta_with_invalid_token(self, client):
         rv = client.get('/problem/3/meta?token=InvalidToken8787')
@@ -831,6 +833,8 @@ class TestProblem(BaseTester):
         rv = client.get('/problem/3/meta?token=SandboxToken')
         assert rv.status_code == 200, rv.get_json()
         assert rv.get_json()['data'] == {
+            'submissionMode':
+            0,
             'tasks': [{
                 'caseCount': 1,
                 'memoryLimit': 1000,
