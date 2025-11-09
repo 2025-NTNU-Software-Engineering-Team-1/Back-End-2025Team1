@@ -182,10 +182,9 @@ def get_submission_list(
             status_code = int(val)
             if 0 <= status_code <= 7:
                 return status_code
-            raise ValueError(
-                f'status code must be between 0 and 7, got {status_code}')
+            return None
         except ValueError:
-            raise ValueError(f'invalid status value: {val}')
+            return None
 
     cache_key = (
         'SUBMISSION_LIST_API',
@@ -280,106 +279,22 @@ def get_submission(user, submission: Submission):
     has_output = submission.problem.can_view_stdout
     ret = submission.to_dict()
 
-    # Always include code field (required by API spec)
-    # - Has permission and not handwritten: return actual code
-    # - Decode error or not found: return empty string
-    # - No permission or handwritten: return empty string (code not accessible)
     if has_code:
         try:
             code = submission.get_main_code()
-            ret['code'] = code if code is not None else ''
+            if submission.is_zip_mode and code:
+                ret['codeDownloadUrl'] = code
+                ret['code'] = None
+            else:
+                ret['code'] = code if code is not None else ''
         except (UnicodeDecodeError, SubmissionCodeNotFound):
             ret['code'] = ''
-    else:
-        # No permission or handwritten submission - code field present but empty
-        ret['code'] = ''
 
-    # Add tasks
     if has_output:
         ret['tasks'] = submission.get_detailed_result()
     else:
         ret['tasks'] = submission.get_result()
     return HTTPResponse(data=ret)
-
-    if not submission.permission(user, submission.Permission.VIEW):
-        return HTTPError('Permission denied', 403)
-
-    try:
-        # Get source code
-        code_content = ''
-        try:
-
-            code_content = submission.get_main_code()
-        except SubmissionCodeNotFound:
-            code_content = ''
-
-        # Build task results
-        tasks = []
-        if submission.tasks:
-            for task in submission.tasks:
-                task_data = {
-                    'cases': [],
-                    'execTime': task.exec_time or 0,
-                    'memoryUsage': task.memory_usage or 0,
-                    'score': task.score or 0,
-                    'status': task.status or -1,
-                }
-
-                # Add individual case results
-                if task.cases:
-                    for case in task.cases:
-                        task_data['cases'].append({
-                            'execTime':
-                            case.exec_time or 0,
-                            'memoryUsage':
-                            case.memory_usage or 0,
-                            'status':
-                            case.status or -1,
-                        })
-
-                tasks.append(task_data)
-
-        # Build submission data
-        submission_data = {
-            'submissionId':
-            str(submission.id),  #
-            'problemId':
-            submission.problem.problem_id,  #
-            'user': {
-                'username': submission.user.username,
-                'displayedName': submission.user.profile.displayed_name,
-                'role': submission.user.role,
-            },
-            'status':
-            submission.status,
-            'score':
-            submission.score,
-            'runTime':
-            submission.exec_time or 0,
-            'memoryUsage':
-            submission.memory_usage or 0,
-            'languageType':
-            submission.language,  #
-            'timestamp':
-            int(submission.timestamp.timestamp())
-            if submission.timestamp else 0,
-            'lastSend':
-            int(submission.last_send.timestamp())
-            if submission.last_send else 0,
-            'ipAddr':
-            submission.ip_addr or '',
-            'code':
-            code_content,
-            'tasks':
-            tasks,
-        }
-
-        return HTTPResponse('Success.', data=submission_data)
-
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return HTTPError(str(e), 400)
 
 
 @submission_api.get('/<submission>/output/<int:task_no>/<int:case_no>')

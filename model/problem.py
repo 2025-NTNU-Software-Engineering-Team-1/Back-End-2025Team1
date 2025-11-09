@@ -274,6 +274,7 @@ def get_problem_detailed(user, problem: Problem):
         'allowedLanguage',
         'canViewStdout',
         'quota',
+        'config',
         status='problemStatus',
         type='problemType',
     )
@@ -376,7 +377,7 @@ def delete_problem(user: User, problem: Problem):
 def manage_problem(user: User, problem: Problem):
 
     @Request.json(
-        'problemName',
+        'problemName: str',
         'description: dict',
         'courses: list',
         'tags: list',
@@ -387,9 +388,9 @@ def manage_problem(user: User, problem: Problem):
         'testCaseInfo: dict',
         'canViewStdout: bool',
         'defaultCode',
-        'config: dict',
-        'pipeline: dict',
-        'Test_Mode: dict',
+        'config',
+        'pipeline',
+        'Test_Mode',
     )
     def modify_problem(**p_ks):
         kwargs = {

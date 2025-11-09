@@ -20,7 +20,7 @@ from bson.son import SON
 from flask import current_app
 from tempfile import NamedTemporaryFile
 from datetime import date, datetime, timedelta
-from zipfile import ZipFile, is_zipfile
+from zipfile import ZipFile, is_zipfile, BadZipFile
 from ulid import ULID
 import abc
 
@@ -1147,6 +1147,78 @@ class Submission(MongoBase, BaseSubmission, engine=engine.Submission):
             return submissions, submission_count
         return submissions
 
+    def is_artifact_enabled(self, task_index: int) -> bool:
+        try:
+            config = self.problem.config
+            if not config or not isinstance(config, dict):
+                return False
+            artifact_collection = config.get('artifactCollection', [])
+            return task_index in artifact_collection
+        except (AttributeError, KeyError):
+            return False
+
+    def build_task_artifact_zip(self, task_index: int) -> io.BytesIO:
+        if task_index < 0 or task_index >= len(self.tasks):
+            raise FileNotFoundError('task not exist')
+        task = self.tasks[task_index]
+        if not task.cases:
+            raise FileNotFoundError('case not exist')
+
+        minio_client = MinioClient()
+        artifact_buf = io.BytesIO()
+        wrote_any_file = False
+
+        with ZipFile(artifact_buf, 'w') as artifact_zip:
+            for case_index, case in enumerate(task.cases):
+                output_path = getattr(case, 'output_minio_path', None)
+                if not output_path:
+                    continue
+                data = minio_client.download_file(output_path)
+                try:
+                    with ZipFile(io.BytesIO(data)) as case_zip:
+                        for name in case_zip.namelist():
+                            arcname = (
+                                f'task_{task_index:02d}/case_{case_index:02d}/{name}'
+                            )
+                            artifact_zip.writestr(arcname, case_zip.read(name))
+                            wrote_any_file = True
+                except BadZipFile as exc:
+                    raise FileNotFoundError(
+                        f'invalid artifact archive: {exc}') from exc
+
+        if not wrote_any_file:
+            raise FileNotFoundError('artifact not available for this task')
+
+        artifact_buf.seek(0)
+        return artifact_buf
+
+    def set_compiled_binary(self, binary_data: bytes) -> None:
+        try:
+            minio_client = MinioClient()
+            object_name = f'compiled_binaries/{self.id}'
+            minio_client.upload_file_object(
+                io.BytesIO(binary_data),
+                object_name,
+                len(binary_data),
+            )
+            self.update(compiled_binary_minio_path=object_name)
+        except Exception as e:
+            self.logger.error(f'Failed to set compiled binary: {e}')
+            raise
+
+    def has_compiled_binary(self) -> bool:
+        try:
+            return bool(self.compiled_binary_minio_path)
+        except AttributeError:
+            return False
+
+    def get_compiled_binary(self) -> io.BytesIO:
+        if not self.compiled_binary_minio_path:
+            raise FileNotFoundError('compiled binary not found')
+        minio_client = MinioClient()
+        data = minio_client.download_file(self.compiled_binary_minio_path)
+        return io.BytesIO(data)
+
     @classmethod
     def add(
         cls,
@@ -1258,7 +1330,6 @@ class TrialSubmission(MongoBase, BaseSubmission,
             # custom_input_path = self._put_custom_input(custom_input_file)
             self.logger.warning(
                 f"Custom input for {self} is not yet implemented.")
-            # For now, we'll just store the code.
 
         self.update(
             status=-1,
@@ -1335,8 +1406,6 @@ class TrialSubmission(MongoBase, BaseSubmission,
             f"TrialSubmission.send() is a placeholder and needs sandbox API integration."
         )
 
-        # TODO: Remove this placeholder and uncomment rq.post when sandbox is ready
-        # For now, simulate a sandbox error
         self.logger.error("Test submission sandbox endpoint not implemented.")
         return False
 

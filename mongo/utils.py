@@ -2,7 +2,7 @@ import abc
 import hashlib
 import os
 from functools import wraps
-from typing import Dict, Optional, Any, TYPE_CHECKING
+from typing import Dict, Optional, Any, TYPE_CHECKING, BinaryIO
 from flask import current_app
 from minio import Minio
 import redis
@@ -183,3 +183,40 @@ class MinioClient:
             secure=not config.FLASK_DEBUG,
         )
         self.bucket = config.MINIO_BUCKET
+
+    def upload_file_object(
+        self,
+        file_obj: BinaryIO,
+        object_name: str,
+        length: int,
+        *,
+        content_type: str = 'application/octet-stream',
+        part_size: int = 5 * 1024 * 1024,
+    ):
+        """
+        將檔案物件上傳至 MinIO，並自動處理檔案指標/分段大小設定。
+        """
+        try:
+            file_obj.seek(0)
+        except (AttributeError, OSError, ValueError):
+            pass
+
+        self.client.put_object(
+            self.bucket,
+            object_name,
+            file_obj,
+            length if length is not None else -1,
+            part_size=part_size,
+            content_type=content_type,
+        )
+
+    def download_file(self, object_name: str) -> bytes:
+        """
+        從 MinIO 下載檔案並以 bytes 回傳。
+        """
+        response = self.client.get_object(self.bucket, object_name)
+        try:
+            return response.read()
+        finally:
+            response.close()
+            response.release_conn()
