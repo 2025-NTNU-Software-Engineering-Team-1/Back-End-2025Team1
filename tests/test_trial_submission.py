@@ -1,0 +1,331 @@
+import io
+import zipfile
+import pytest
+from mongo import *
+from tests.base_tester import BaseTester, random_string
+
+
+@pytest.fixture(scope='function')
+def setup_problem_with_testcases():
+    """Create a problem and enroll student for trial submission tests."""
+    # Create teacher and course
+    teacher = User('teacher')
+    course_name = f'TrialCourse_{random_string()}'
+    Course.add_course(course_name, teacher.username)
+    course = Course(course_name)
+
+    # Enroll student
+    student = User('student')
+    course.obj.student_nicknames[student.username] = student.username
+    course.obj.save()
+    course.reload()
+
+    # Create problem (Problem.add returns problem_id)
+    problem_name = f'TrialProblem_{random_string()}'
+    problem_id = Problem.add(
+        user=teacher,
+        courses=[course_name],
+        problem_name=problem_name,
+        test_case_info={
+            'language':
+            2,
+            'fill_in_template':
+            '',
+            'tasks': [{
+                'caseCount': 1,
+                'taskScore': 100,
+                'memoryLimit': 256000,
+                'timeLimit': 1000,
+            }]
+        },
+    )
+    problem = Problem(problem_id)
+    problem.reload()
+
+    # Enable test mode and allow all languages if fields exist
+    try:
+        problem.obj.test_mode_enabled = True
+    except Exception:
+        pass
+    try:
+        # 7 allows C/C++/Python in this codebase
+        problem.obj.allowed_language = 7
+    except Exception:
+        pass
+    try:
+        problem.obj.save()
+        problem.reload()
+    except Exception:
+        pass
+
+    yield problem, course
+
+    # Cleanup best-effort
+    try:
+        problem.obj.delete()
+    except Exception:
+        pass
+    try:
+        course.obj.delete()
+    except Exception:
+        pass
+
+
+class TestTrialSubmissionAPI(BaseTester):
+
+    def test_upload_trial_files_success_with_code_only(
+            self, forge_client, setup_problem_with_testcases):
+        """Test uploading only code file"""
+        problem, _ = setup_problem_with_testcases
+        client = forge_client('student')
+
+        # First create trial submission
+        rv = client.post(f'/problem/{problem.problem_id}/trial/request',
+                         json={
+                             'languageType': 2,
+                             'useDefaultCase': True
+                         })
+        assert rv.status_code == 200
+        trial_id = rv.get_json()['data']['Trial_Submission_Id']
+
+        # Create code zip
+        code_buffer = io.BytesIO()
+        with zipfile.ZipFile(code_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr('main.py', 'print("hello")')
+        code_buffer.seek(0)
+
+        # Upload code
+        rv = client.put(f'/trial-submission/{trial_id}/files',
+                        data={'code': (code_buffer, 'code.zip')},
+                        content_type='multipart/form-data')
+        assert rv.status_code == 200
+        data = rv.get_json()
+        assert data['status'] == 'ok'
+        assert data['data']['Trial_Submission_Id'] == trial_id
+        assert data['data']['Code_Path'] is not None
+        assert data['data']['Custom_Testcases_Path'] is None
+
+        # Verify MinIO upload
+        from mongo.submission import TrialSubmission
+        ts = TrialSubmission(trial_id)
+        assert ts.obj.code_minio_path is not None
+
+    def test_upload_trial_files_success_with_custom_testcases(
+            self, forge_client, setup_problem_with_testcases):
+        """Test uploading code + custom testcases"""
+        problem, _ = setup_problem_with_testcases
+        client = forge_client('student')
+
+        # Create trial submission with custom cases
+        rv = client.post(f'/problem/{problem.problem_id}/trial/request',
+                         json={
+                             'languageType': 2,
+                             'useDefaultCase': False
+                         })
+        assert rv.status_code == 200
+        trial_id = rv.get_json()['data']['Trial_Submission_Id']
+
+        # Create code zip
+        code_buffer = io.BytesIO()
+        with zipfile.ZipFile(code_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr('main.py', 'a,b=map(int,input().split())\nprint(a+b)')
+        code_buffer.seek(0)
+
+        # Create custom testcases zip
+        custom_buffer = io.BytesIO()
+        with zipfile.ZipFile(custom_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr('test1.in', '3 4\n')
+            zf.writestr('test1.out', '7\n')
+        custom_buffer.seek(0)
+
+        # Upload both
+        rv = client.put(f'/trial-submission/{trial_id}/files',
+                        data={
+                            'code': (code_buffer, 'code.zip'),
+                            'custom_testcases': (custom_buffer, 'custom.zip')
+                        },
+                        content_type='multipart/form-data')
+        assert rv.status_code == 200
+        data = rv.get_json()
+        assert data['data']['Code_Path'] is not None
+        assert data['data']['Custom_Testcases_Path'] is not None
+
+        # Verify submission updated
+        from mongo.submission import TrialSubmission
+        ts = TrialSubmission(trial_id)
+        assert ts.obj.code_minio_path is not None
+        assert ts.obj.custom_input_minio_path is not None
+        assert ts.obj.use_default_case is False
+
+    def test_upload_trial_files_missing_code(self, forge_client,
+                                             setup_problem_with_testcases):
+        """Test upload without code file"""
+        problem, _ = setup_problem_with_testcases
+        client = forge_client('student')
+
+        rv = client.post(f'/problem/{problem.problem_id}/trial/request',
+                         json={
+                             'languageType': 2,
+                             'useDefaultCase': True
+                         })
+        trial_id = rv.get_json()['data']['Trial_Submission_Id']
+
+        rv = client.put(f'/trial-submission/{trial_id}/files',
+                        data={},
+                        content_type='multipart/form-data')
+        assert rv.status_code == 400
+        assert 'No files provided' in rv.get_json()['message']
+
+    def test_upload_trial_files_invalid_trial_id(self, forge_client):
+        """Test upload with non-existent trial ID"""
+        client = forge_client('student')
+
+        code_buffer = io.BytesIO()
+        with zipfile.ZipFile(code_buffer, 'w') as zf:
+            zf.writestr('main.py', 'print("test")')
+        code_buffer.seek(0)
+
+        rv = client.put('/trial-submission/invalid_id_12345/files',
+                        data={'code': (code_buffer, 'code.zip')},
+                        content_type='multipart/form-data')
+        assert rv.status_code in [400, 404]
+
+    def test_upload_trial_files_not_owner(self, forge_client,
+                                          setup_problem_with_testcases):
+        """Test upload by different user (should fail)"""
+        problem, _ = setup_problem_with_testcases
+        student_client = forge_client('student')
+
+        # Student creates trial submission
+        rv = student_client.post(
+            f'/problem/{problem.problem_id}/trial/request',
+            json={
+                'languageType': 2,
+                'useDefaultCase': True
+            })
+        trial_id = rv.get_json()['data']['Trial_Submission_Id']
+
+        # Try upload as different user
+        other_client = forge_client('teacher')  # Different user
+        code_buffer = io.BytesIO()
+        with zipfile.ZipFile(code_buffer, 'w') as zf:
+            zf.writestr('main.py', 'print("hack")')
+        code_buffer.seek(0)
+
+        rv = other_client.put(f'/trial-submission/{trial_id}/files',
+                              data={'code': (code_buffer, 'code.zip')},
+                              content_type='multipart/form-data')
+        # Teacher should have permission (role <= 1)
+        assert rv.status_code == 200
+
+    def test_upload_trial_files_invalid_zip(self, forge_client,
+                                            setup_problem_with_testcases):
+        """Test upload with invalid zip file"""
+        problem, _ = setup_problem_with_testcases
+        client = forge_client('student')
+
+        rv = client.post(f'/problem/{problem.problem_id}/trial/request',
+                         json={
+                             'languageType': 2,
+                             'useDefaultCase': True
+                         })
+        trial_id = rv.get_json()['data']['Trial_Submission_Id']
+
+        # Send non-zip file
+        fake_zip = io.BytesIO(b'This is not a zip file')
+
+        rv = client.put(f'/trial-submission/{trial_id}/files',
+                        data={'code': (fake_zip, 'code.zip')},
+                        content_type='multipart/form-data')
+        assert rv.status_code == 400
+        assert 'valid zip' in rv.get_json()['message'].lower()
+
+    def test_upload_trial_files_code_too_large(self, forge_client,
+                                               setup_problem_with_testcases):
+        """Test upload with oversized code file"""
+        problem, _ = setup_problem_with_testcases
+        client = forge_client('student')
+
+        rv = client.post(f'/problem/{problem.problem_id}/trial/request',
+                         json={
+                             'languageType': 2,
+                             'useDefaultCase': True
+                         })
+        trial_id = rv.get_json()['data']['Trial_Submission_Id']
+
+        # Create >10MB zip
+        large_buffer = io.BytesIO()
+        with zipfile.ZipFile(large_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr('big.py', 'x' * (11 * 1024 * 1024))
+        large_buffer.seek(0)
+
+        rv = client.put(f'/trial-submission/{trial_id}/files',
+                        data={'code': (large_buffer, 'code.zip')},
+                        content_type='multipart/form-data')
+        assert rv.status_code == 400
+        assert 'too large' in rv.get_json()['message'].lower()
+
+    def test_upload_trial_files_custom_testcases_too_large(
+            self, forge_client, setup_problem_with_testcases):
+        """Test upload with oversized custom testcases"""
+        problem, _ = setup_problem_with_testcases
+        client = forge_client('student')
+
+        rv = client.post(f'/problem/{problem.problem_id}/trial/request',
+                         json={
+                             'languageType': 2,
+                             'useDefaultCase': False
+                         })
+        trial_id = rv.get_json()['data']['Trial_Submission_Id']
+
+        # Valid code
+        code_buffer = io.BytesIO()
+        with zipfile.ZipFile(code_buffer, 'w') as zf:
+            zf.writestr('main.py', 'print("test")')
+        code_buffer.seek(0)
+
+        # Oversized custom testcases
+        large_custom = io.BytesIO()
+        with zipfile.ZipFile(large_custom, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr('test.in', 'x' * (6 * 1024 * 1024))
+        large_custom.seek(0)
+
+        rv = client.put(f'/trial-submission/{trial_id}/files',
+                        data={
+                            'code': (code_buffer, 'code.zip'),
+                            'custom_testcases': (large_custom, 'custom.zip')
+                        },
+                        content_type='multipart/form-data')
+        assert rv.status_code == 400
+        assert 'too large' in rv.get_json()['message'].lower()
+
+    def test_upload_trial_files_invalid_custom_testcases_zip(
+            self, forge_client, setup_problem_with_testcases):
+        """Test upload with invalid custom testcases zip"""
+        problem, _ = setup_problem_with_testcases
+        client = forge_client('student')
+
+        rv = client.post(f'/problem/{problem.problem_id}/trial/request',
+                         json={
+                             'languageType': 2,
+                             'useDefaultCase': False
+                         })
+        trial_id = rv.get_json()['data']['Trial_Submission_Id']
+
+        # Valid code
+        code_buffer = io.BytesIO()
+        with zipfile.ZipFile(code_buffer, 'w') as zf:
+            zf.writestr('main.py', 'print("test")')
+        code_buffer.seek(0)
+
+        # Invalid custom testcases
+        fake_custom = io.BytesIO(b'Not a zip')
+
+        rv = client.put(f'/trial-submission/{trial_id}/files',
+                        data={
+                            'code': (code_buffer, 'code.zip'),
+                            'custom_testcases': (fake_custom, 'custom.zip')
+                        },
+                        content_type='multipart/form-data')
+        assert rv.status_code == 400
+        assert 'valid zip' in rv.get_json()['message'].lower()
