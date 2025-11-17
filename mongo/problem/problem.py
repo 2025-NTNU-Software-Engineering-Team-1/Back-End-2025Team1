@@ -12,6 +12,7 @@ from typing import (
 )
 from dataclasses import dataclass
 from io import BytesIO
+from zipfile import BadZipFile
 from ulid import ULID
 from .. import engine
 from ..base import MongoBase
@@ -242,16 +243,30 @@ class Problem(MongoBase, engine=engine.Problem):
                     path = self._save_asset_file(minio_client, file_obj,
                                                  asset_type, filename)
                     new_asset_paths[asset_type] = path
-            kwargs_for_edit = drop_none({
-                'config': meta.get('config'),
-                'pipeline': meta.get('pipeline'),
-            })
+
+            meta = meta or {}
+            pipeline_payload = meta.get('pipeline') or {}
+            meta_config = meta.get('config') or {}
+            current_config = copy.deepcopy(self.obj.config
+                                           or Problem.config.default())
+            current_config.update(meta_config)
             if new_asset_paths:
-                current_config = self.obj.config or Problem.config.default()
                 current_asset_paths = current_config.get('assetPaths', {})
                 current_asset_paths.update(new_asset_paths)
                 current_config['assetPaths'] = current_asset_paths
+            kwargs_for_edit = {}
+            if meta_config or new_asset_paths:
                 kwargs_for_edit['config'] = current_config
+            if pipeline_payload:
+                kwargs_for_edit['pipeline'] = pipeline_payload
+
+            execution_mode = (pipeline_payload.get('executionMode') or
+                              current_config.get('executionMode', 'general'))
+            asset_paths = current_config.get('assetPaths', {})
+            if execution_mode == 'functionOnly' and 'makefile' not in asset_paths:
+                raise ValueError('functionOnly mode requires makefile.zip')
+            if execution_mode == 'interactive' and 'teacher_file' not in asset_paths:
+                raise ValueError('interactive mode requires Teacher_file')
 
             if kwargs_for_edit and user:
                 self.edit_problem(user=user,

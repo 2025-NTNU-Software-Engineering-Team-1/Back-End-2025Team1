@@ -3,13 +3,14 @@ import json
 import hashlib
 import statistics
 from dataclasses import asdict
+from io import BytesIO
 from flask import Blueprint, request, send_file
 from urllib import parse
 from zipfile import BadZipFile
 from mongo import *
 from mongo import engine
 from mongo import sandbox
-from mongo.utils import drop_none
+from mongo.utils import drop_none, MinioClient
 from mongo.problem import *
 from .auth import *
 from .utils import *
@@ -161,66 +162,12 @@ def view_problem(user: User, problem: Problem):
         'submitCount': problem.submit_count(user),
         'highScore': problem.get_high_score(user=user),
     })
+    config_payload, pipeline_payload = _build_config_and_pipeline(problem)
+    if config_payload:
+        data['config'] = config_payload
+    if pipeline_payload:
+        data['pipeline'] = pipeline_payload
     return HTTPResponse('Problem can view.', data=data)
-
-    try:
-        # 獲取題目基本資訊
-        problem_data = {
-            'problemName':
-            problem.problem_name,
-            'description': {
-                'description': problem.description.get('description', ''),
-                'input': problem.description.get('input', ''),
-                'output': problem.description.get('output', ''),
-                'hint': problem.description.get('hint', ''),
-                'sampleInput': problem.description.get('sampleInput', []),
-                'sampleOutput': problem.description.get('sampleOutput', []),
-            },
-            'courses':
-            [course.course_name
-             for course in problem.courses] if problem.courses else [],
-            'tags':
-            problem.tags if problem.tags else [],
-            'allowedLanguage':
-            problem.allowed_language,
-            'quota':
-            problem.quota,
-            'type':
-            problem.type,
-            'status':
-            problem.status,
-            'testCase': [{
-                'taskScore': tc.get('taskScore', 0),
-                'caseCount': tc.get('caseCount', 0),
-                'memoryLimit': tc.get('memoryLimit', 0),
-                'timeLimit': tc.get('timeLimit', 0),
-            } for tc in problem.test_case] if problem.test_case else [],
-            'canViewStdout':
-            problem.can_view_stdout,
-            'owner':
-            problem.owner.username if problem.owner else '',
-            'defaultCode':
-            problem.default_code if problem.default_code else '',
-            'submitCount':
-            problem.submit_count(user),
-            'highScore':
-            problem.get_high_score(user),
-            'ACUser':
-            problem.get_ac_user_count(),
-            'submitter':
-            problem.get_tried_user_count(),
-        }
-
-        config_payload, pipeline_payload = _build_config_and_pipeline(problem)
-        if config_payload:
-            problem_data['config'] = config_payload
-        if pipeline_payload:
-            problem_data['pipeline'] = pipeline_payload
-
-        return HTTPResponse('Success.', data=problem_data)
-
-    except Exception as e:
-        return HTTPError(str(e), 400)
 
 
 @problem_api.route('/manage/<int:problem_id>', methods=['GET'])
@@ -715,6 +662,7 @@ def get_checksum(token: str, problem_id: int):
 @problem_api.route('/<int:problem_id>/meta', methods=['GET'])
 @Request.args('token: str')
 def get_meta(token: str, problem_id: int):
+    """Serve sandbox metadata (tasks, submission/execution modes, assets)."""
     if sandbox.find_by_token(token) is None:
         return HTTPError('Invalid sandbox token', 401)
     problem = Problem(problem_id)
@@ -739,6 +687,40 @@ def get_meta(token: str, problem_id: int):
     if network_cfg:
         meta['networkAccessRestriction'] = network_cfg
     return HTTPResponse(data=meta)
+
+
+@problem_api.route('/<int:problem_id>/asset/<asset_type>', methods=['GET'])
+@Request.args('token: str')
+def download_problem_asset(token: str, problem_id: int, asset_type: str):
+    """Allow sandbox to download teacher-provided assets via assetPaths."""
+    if sandbox.find_by_token(token) is None:
+        return HTTPError('Invalid sandbox token', 401)
+    problem = Problem(problem_id)
+    if not problem:
+        return HTTPError(f'{problem} not found', 404)
+    asset_paths = (problem.config or {}).get('assetPaths', {})
+    path = asset_paths.get(asset_type)
+    if not path:
+        return HTTPError('Asset not found', 404)
+    minio_client = MinioClient()
+    try:
+        obj = minio_client.client.get_object(minio_client.bucket, path)
+        data = obj.read()
+    except Exception as exc:
+        return HTTPError(str(exc), 404)
+    finally:
+        try:
+            obj.close()
+            obj.release_conn()
+        except Exception:
+            pass
+    filename = path.split('/')[-1] or f'{asset_type}'
+    return send_file(
+        BytesIO(data),
+        mimetype='application/octet-stream',
+        as_attachment=True,
+        download_name=filename,
+    )
 
 
 @problem_api.route('/<int:problem_id>/high-score', methods=['GET'])

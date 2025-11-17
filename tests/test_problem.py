@@ -989,9 +989,15 @@ class TestProblem(BaseTester):
                 'teacherFirst': True,
             },
         }
+        buf = io.BytesIO()
+        with ZipFile(buf, 'w') as zf:
+            zf.writestr('Makefile', 'all:\n\t@touch a.out\n')
+            zf.writestr('function.h', '// template')
+        buf.seek(0)
         data = {
             'meta': json.dumps(meta_payload),
             'checker.py': (io.BytesIO(b'print("ok")'), 'checker.py'),
+            'makefile.zip': (buf, 'makefile.zip'),
         }
         rv = client_admin.put(
             f'/problem/{prob.problem_id}/assets',
@@ -1004,6 +1010,76 @@ class TestProblem(BaseTester):
         assert updated.config['teacherFirst'] is True
         assert updated.config['networkAccessRestriction']['enabled'] is True
         assert 'checker' in updated.config.get('assetPaths', {})
+
+    def test_upload_function_only_requires_makefile(self, client_admin):
+        prob = utils.problem.create_problem()
+        meta_payload = {
+            'pipeline': {
+                'executionMode': 'functionOnly',
+            },
+        }
+        data = {
+            'meta': json.dumps(meta_payload),
+        }
+        rv = client_admin.put(
+            f'/problem/{prob.problem_id}/assets',
+            data=data,
+            content_type='multipart/form-data',
+        )
+        assert rv.status_code == 400, rv.get_json()
+
+    def test_upload_function_only_with_makefile(self, client_admin):
+        prob = utils.problem.create_problem()
+        buf = io.BytesIO()
+        with ZipFile(buf, 'w') as zf:
+            zf.writestr('Makefile', 'all:\n\t@touch a.out\n')
+            zf.writestr('function.h', '// template')
+        buf.seek(0)
+        meta_payload = {
+            'pipeline': {
+                'executionMode': 'functionOnly',
+            },
+        }
+        data = {
+            'meta': json.dumps(meta_payload),
+            'makefile.zip': (buf, 'makefile.zip'),
+        }
+        rv = client_admin.put(
+            f'/problem/{prob.problem_id}/assets',
+            data=data,
+            content_type='multipart/form-data',
+        )
+        assert rv.status_code == 200, rv.get_json()
+        updated = Problem(prob.problem_id)
+        assert updated.config['executionMode'] == 'functionOnly'
+        assert 'makefile' in updated.config.get('assetPaths', {})
+
+    def test_get_problem_asset(self, client, client_admin, monkeypatch):
+        prob = utils.problem.create_problem()
+        buf = io.BytesIO()
+        with ZipFile(buf, 'w') as zf:
+            zf.writestr('Makefile', 'all:\n\t@touch a.out\n')
+            zf.writestr('function.h', '// template')
+        buf.seek(0)
+        data = {
+            'meta': json.dumps({'pipeline': {
+                'executionMode': 'functionOnly'
+            }}),
+            'makefile.zip': (buf, 'makefile.zip'),
+        }
+        rv = client_admin.put(
+            f'/problem/{prob.problem_id}/assets',
+            data=data,
+            content_type='multipart/form-data',
+        )
+        assert rv.status_code == 200
+
+        from model.problem import sandbox
+        monkeypatch.setattr(sandbox, 'find_by_token', lambda *_: True)
+        rv = client.get(
+            f'/problem/{prob.problem_id}/asset/makefile?token=SandboxToken')
+        assert rv.status_code == 200, rv.get_json()
+        assert rv.data[:2] == b'PK'
 
     def test_view_problem_returns_pipeline_and_network(self, client_admin):
         prob = utils.problem.create_problem()

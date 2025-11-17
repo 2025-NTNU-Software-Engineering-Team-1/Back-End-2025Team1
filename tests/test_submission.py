@@ -700,6 +700,36 @@ class TestCreateSubmission(SubmissionTester):
 
         assert rv.status_code == 403, rv_json
 
+    def test_function_only_zip_mode_conflict(
+        self,
+        forge_client,
+        get_source,
+        problem_ids,
+    ):
+        pid = problem_ids('teacher', 1, True)[0]
+        prob = Problem(pid)
+        prob.update(test_case__submission_mode=1)
+        prob.reload('test_case')
+        prob.update(config__executionMode='functionOnly')
+        client = forge_client('student')
+        rv, rv_json, rv_data = BaseTester.request(
+            client,
+            'post',
+            '/submission',
+            json=self.post_payload(problem_id=pid),
+        )
+        files = {
+            'code': (
+                get_source('base.c'),
+                'code',
+            )
+        }
+        rv = client.put(
+            f'/submission/{rv_data["submissionId"]}',
+            data=files,
+        )
+        assert rv.status_code == 400, rv.get_json()
+
     def test_reach_rate_limit(self, client_student):
         # set rate limit to 5 sec
         Submission.config().update(rate_limit=5)
