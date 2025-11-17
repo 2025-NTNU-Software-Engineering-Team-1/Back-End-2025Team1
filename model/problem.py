@@ -1,4 +1,3 @@
-import copy
 import json
 import hashlib
 import statistics
@@ -12,48 +11,14 @@ from mongo import engine
 from mongo import sandbox
 from mongo.utils import drop_none, MinioClient
 from mongo.problem import *
+from .utils.problem_utils import build_config_and_pipeline as _build_config_and_pipeline
+from .utils.problem_utils import build_static_analysis_rules as _build_static_analysis_rules
 from .auth import *
 from .utils import *
 
 __all__ = ['problem_api']
 
 problem_api = Blueprint('problem_api', __name__)
-
-
-def _build_config_and_pipeline(problem: Problem):
-    """
-    Return a tuple: (config_payload, pipeline_payload)
-    config_payload is a copy of problem.config enriched with defaults.
-    pipeline_payload contains the execution settings exposed to clients.
-    """
-    raw_config = problem.config or {}
-    config_payload = copy.deepcopy(raw_config)
-    static_analysis = (config_payload.get('staticAnalysis')
-                       or config_payload.get('staticAnalys') or {})
-    # keep both keys in sync for backward compatibility
-    config_payload['staticAnalysis'] = static_analysis
-    config_payload['staticAnalys'] = static_analysis
-    static_analysis.setdefault('custom', False)
-    network_cfg = config_payload.get('networkAccessRestriction')
-    if not network_cfg and static_analysis.get('networkAccessRestriction'):
-        network_cfg = static_analysis['networkAccessRestriction']
-        config_payload['networkAccessRestriction'] = network_cfg
-    config_payload.setdefault('artifactCollection', [])
-    config_payload.setdefault('acceptedFormat', 'code')
-    config_payload.setdefault('compilation',
-                              config_payload.get('compilation', False))
-    config_payload['trialMode'] = config_payload.get(
-        'trialMode', config_payload.get('testMode', False))
-    pipeline_payload = {
-        'fopen': config_payload.get('fopen', False),
-        'fwrite': config_payload.get('fwrite', False),
-        'executionMode': config_payload.get('executionMode', 'general'),
-        'customChecker': config_payload.get('customChecker', False),
-        'teacherFirst': config_payload.get('teacherFirst', False),
-        'scoringScript': config_payload.get('scoringScript',
-                                            {'custom': False}),
-    }
-    return config_payload, pipeline_payload
 
 
 def permission_error_response():
@@ -721,6 +686,21 @@ def download_problem_asset(token: str, problem_id: int, asset_type: str):
         as_attachment=True,
         download_name=filename,
     )
+
+
+@problem_api.route('/<int:problem_id>/rules', methods=['GET'])
+@Request.args('token: str')
+def get_static_analysis_rules(token: str, problem_id: int):
+    """Expose static-analysis library restrictions for sandbox."""
+    if sandbox.find_by_token(token) is None:
+        return HTTPError('Invalid sandbox token', 401)
+    problem = Problem(problem_id)
+    if not problem:
+        return HTTPError(f'{problem} not found', 404)
+    rules = _build_static_analysis_rules(problem)
+    if not rules:
+        return HTTPError('Static analysis rule not configured', 404)
+    return HTTPResponse(data=rules)
 
 
 @problem_api.route('/<int:problem_id>/high-score', methods=['GET'])

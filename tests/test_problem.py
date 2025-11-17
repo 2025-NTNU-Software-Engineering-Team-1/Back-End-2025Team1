@@ -971,6 +971,52 @@ class TestProblem(BaseTester):
         assert payload['assetPaths'] == {}
         assert payload['teacherFirst'] is False
 
+    def test_get_static_analysis_rules_not_configured(self, client,
+                                                      monkeypatch):
+        prob = utils.problem.create_problem()
+        from model.problem import sandbox
+        monkeypatch.setattr(sandbox, 'find_by_token', lambda *_: True)
+        rv = client.get(f'/problem/{prob.problem_id}/rules?token=SandboxToken')
+        assert rv.status_code == 404, rv.get_json()
+
+    def test_get_static_analysis_rules(self, client_admin, client,
+                                       monkeypatch):
+        prob = utils.problem.create_problem()
+        Problem.edit_problem(
+            user=User('admin'),
+            problem_id=prob.problem_id,
+            pipeline={
+                'staticAnalysis': {
+                    'libraryRestrictions': {
+                        'enabled': True,
+                        'whitelist': {
+                            'syntax': ['while'],
+                            'imports': ['os'],
+                            'headers': ['stdio.h'],
+                            'functions': ['printf'],
+                        },
+                        'blacklist': {
+                            'syntax': [],
+                            'imports': [],
+                            'headers': [],
+                            'functions': [],
+                        },
+                    },
+                },
+            },
+        )
+        from model.problem import sandbox
+        monkeypatch.setattr(sandbox, 'find_by_token', lambda *_: True)
+        rv = client.get(f'/problem/{prob.problem_id}/rules?token=SandboxToken')
+        assert rv.status_code == 200, rv.get_json()
+        assert rv.get_json()['data'] == {
+            'model': 'white',
+            'syntax': ['while'],
+            'imports': ['os'],
+            'headers': ['stdio.h'],
+            'functions': ['printf'],
+        }
+
     def test_upload_problem_assets_accepts_meta(self, client_admin):
         prob = utils.problem.create_problem()
         meta_payload = {
