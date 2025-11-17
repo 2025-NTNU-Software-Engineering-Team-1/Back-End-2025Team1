@@ -337,12 +337,85 @@ def upload_problem_assets(user: User, problem: Problem):
     'default_code',
 )
 def create_problem(user: User, **ks):
-    # Get optional parameters from request.json
     data = request.json or {}
-    ks['config'] = data.get('config')
-    ks['pipeline'] = data.get('pipeline')
-    ks['test_mode'] = data.get(
-        'Test_Mode')  # Note: Test_Mode in request, test_mode in code
+
+    alias_pairs = (
+        ('problem_name', 'problemName'),
+        ('allowed_language', 'allowedLanguage'),
+        ('can_view_stdout', 'canViewStdout'),
+        ('default_code', 'defaultCode'),
+        ('test_case_info', 'testCaseInfo'),
+    )
+    for dest, src in alias_pairs:
+        if ks.get(dest) is None and data.get(src) is not None:
+            ks[dest] = data[src]
+
+    config_payload = data.get('config') or {}
+    pipeline_payload = data.get('pipeline') or {}
+
+    legacy_config = {}
+    for key in (
+            'compilation',
+            'aiVTuber',
+            'aiVTuberMaxToken',
+            'aiVTuberMode',
+            'acceptedFormat',
+            'artifactCollection',
+            'maxStudentZipSizeMB',
+            'networkAccessRestriction',
+    ):
+        if config_payload.get(key) is not None:
+            legacy_config[key] = config_payload[key]
+    static_analysis = (config_payload.get('staticAnalysis')
+                       or config_payload.get('staticAnalys')
+                       or pipeline_payload.get('staticAnalysis'))
+    if config_payload.get('networkAccessRestriction'):
+        static_analysis = static_analysis or {}
+        static_analysis['networkAccessRestriction'] = config_payload[
+            'networkAccessRestriction']
+    if static_analysis:
+        legacy_config['staticAnalysis'] = static_analysis
+        legacy_config['staticAnalys'] = static_analysis
+    if legacy_config:
+        ks['config'] = drop_none(legacy_config)
+
+    legacy_pipeline = {}
+    for key in ('fopen', 'fwrite', 'executionMode', 'customChecker',
+                'teacherFirst'):
+        if pipeline_payload.get(key) is not None:
+            legacy_pipeline[key] = pipeline_payload[key]
+    if 'scoringScript' in pipeline_payload and pipeline_payload[
+            'scoringScript'] is not None:
+        legacy_pipeline['scoringScript'] = pipeline_payload['scoringScript']
+        legacy_pipeline['scoringScrip'] = pipeline_payload['scoringScript']
+    if 'scoringScrip' in pipeline_payload and pipeline_payload[
+            'scoringScrip'] is not None:
+        legacy_pipeline['scoringScript'] = pipeline_payload['scoringScrip']
+    if 'staticAnalysis' in pipeline_payload and pipeline_payload[
+            'staticAnalysis'] is not None:
+        legacy_pipeline['staticAnalysis'] = pipeline_payload['staticAnalysis']
+    if legacy_pipeline:
+        ks['pipeline'] = drop_none(legacy_pipeline)
+
+    test_mode_payload = data.get('Test_Mode') or {}
+    derived_test_mode = {}
+    if 'trialMode' in config_payload:
+        derived_test_mode['Enabled'] = config_payload['trialMode']
+    if 'trialModeQuotaPerStudent' in config_payload:
+        derived_test_mode['Quota_Per_Student'] = config_payload[
+            'trialModeQuotaPerStudent']
+    if not test_mode_payload:
+        test_mode_payload = derived_test_mode
+    else:
+        test_mode_payload = {
+            **test_mode_payload,
+            **{
+                k: v
+                for k, v in derived_test_mode.items() if v is not None
+            }
+        }
+    if test_mode_payload:
+        ks['Test_Mode'] = drop_none(test_mode_payload)
 
     try:
         pid = Problem.add(user=user, **ks)
@@ -409,6 +482,75 @@ def manage_problem(user: User, problem: Problem):
             'pipeline': p_ks.pop('pipeline', None),
             'Test_Mode': p_ks.pop('Test_Mode', None),
         }
+
+        data = request.json or {}
+        config_payload = data.get('config') or {}
+        pipeline_payload = data.get('pipeline') or {}
+
+        legacy_config = kwargs.get('config') or {}
+        for key in (
+                'compilation',
+                'aiVTuber',
+                'aiVTuberMaxToken',
+                'aiVTuberMode',
+                'acceptedFormat',
+                'artifactCollection',
+                'maxStudentZipSizeMB',
+                'networkAccessRestriction',
+        ):
+            if config_payload.get(key) is not None:
+                legacy_config[key] = config_payload[key]
+        static_analysis = (config_payload.get('staticAnalysis')
+                           or config_payload.get('staticAnalys')
+                           or pipeline_payload.get('staticAnalysis'))
+        if config_payload.get('networkAccessRestriction'):
+            static_analysis = static_analysis or {}
+            static_analysis['networkAccessRestriction'] = config_payload[
+                'networkAccessRestriction']
+        if static_analysis:
+            legacy_config['staticAnalysis'] = static_analysis
+            legacy_config['staticAnalys'] = static_analysis
+        if legacy_config:
+            kwargs['config'] = drop_none(legacy_config)
+
+        legacy_pipeline = kwargs.get('pipeline') or {}
+        for key in ('fopen', 'fwrite', 'executionMode', 'customChecker',
+                    'teacherFirst'):
+            if pipeline_payload.get(key) is not None:
+                legacy_pipeline[key] = pipeline_payload[key]
+        if 'scoringScript' in pipeline_payload and pipeline_payload[
+                'scoringScript'] is not None:
+            legacy_pipeline['scoringScript'] = pipeline_payload[
+                'scoringScript']
+            legacy_pipeline['scoringScrip'] = pipeline_payload['scoringScript']
+        if 'scoringScrip' in pipeline_payload and pipeline_payload[
+                'scoringScrip'] is not None:
+            legacy_pipeline['scoringScript'] = pipeline_payload['scoringScrip']
+        if 'staticAnalysis' in pipeline_payload and pipeline_payload[
+                'staticAnalysis'] is not None:
+            legacy_pipeline['staticAnalysis'] = pipeline_payload[
+                'staticAnalysis']
+        if legacy_pipeline:
+            kwargs['pipeline'] = drop_none(legacy_pipeline)
+
+        test_mode_payload = data.get('Test_Mode') or kwargs.get(
+            'Test_Mode') or {}
+        derived_test_mode = {}
+        if 'trialMode' in config_payload:
+            derived_test_mode['Enabled'] = config_payload['trialMode']
+        if 'trialModeQuotaPerStudent' in config_payload:
+            derived_test_mode['Quota_Per_Student'] = config_payload[
+                'trialModeQuotaPerStudent']
+        if derived_test_mode:
+            test_mode_payload = {
+                **test_mode_payload,
+                **{
+                    k: v
+                    for k, v in derived_test_mode.items() if v is not None
+                }
+            }
+        if test_mode_payload:
+            kwargs['Test_Mode'] = drop_none(test_mode_payload)
 
         Problem.edit_problem(
             user=user,
