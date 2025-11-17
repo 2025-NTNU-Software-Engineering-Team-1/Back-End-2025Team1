@@ -1,4 +1,5 @@
 import io
+import json
 import pytest
 from zipfile import ZipFile
 from tests.base_tester import BaseTester
@@ -958,16 +959,77 @@ class TestProblem(BaseTester):
         monkeypatch.setattr(Submission, 'config', MockConfig)
         rv = client.get('/problem/3/meta?token=SandboxToken')
         assert rv.status_code == 200, rv.get_json()
-        assert rv.get_json()['data'] == {
-            'submissionMode':
-            0,
-            'tasks': [{
-                'caseCount': 1,
-                'memoryLimit': 1000,
-                'taskScore': 100,
-                'timeLimit': 1000
-            }]
+        payload = rv.get_json()['data']
+        assert payload['submissionMode'] == 0
+        assert payload['tasks'] == [{
+            'caseCount': 1,
+            'memoryLimit': 1000,
+            'taskScore': 100,
+            'timeLimit': 1000
+        }]
+        assert payload['executionMode'] == 'general'
+        assert payload['assetPaths'] == {}
+        assert payload['teacherFirst'] is False
+
+    def test_upload_problem_assets_accepts_meta(self, client_admin):
+        prob = utils.problem.create_problem()
+        meta_payload = {
+            'config': {
+                'networkAccessRestriction': {
+                    'enabled': True,
+                    'firewallExtranet': {
+                        'enabled': True,
+                        'whitelist': ['1.1.1.1'],
+                        'blacklist': [],
+                    },
+                },
+            },
+            'pipeline': {
+                'executionMode': 'functionOnly',
+                'teacherFirst': True,
+            },
         }
+        data = {
+            'meta': json.dumps(meta_payload),
+            'checker.py': (io.BytesIO(b'print("ok")'), 'checker.py'),
+        }
+        rv = client_admin.put(
+            f'/problem/{prob.problem_id}/assets',
+            data=data,
+            content_type='multipart/form-data',
+        )
+        assert rv.status_code == 200, rv.get_json()
+        updated = Problem(prob.problem_id)
+        assert updated.config['executionMode'] == 'functionOnly'
+        assert updated.config['teacherFirst'] is True
+        assert updated.config['networkAccessRestriction']['enabled'] is True
+        assert 'checker' in updated.config.get('assetPaths', {})
+
+    def test_view_problem_returns_pipeline_and_network(self, client_admin):
+        prob = utils.problem.create_problem()
+        network_config = {
+            'enabled': True,
+            'firewallExtranet': {
+                'enabled': True,
+                'whitelist': ['2.2.2.2'],
+                'blacklist': [],
+            },
+        }
+        Problem.edit_problem(
+            user=User('admin'),
+            problem_id=prob.problem_id,
+            config={'networkAccessRestriction': network_config},
+            pipeline={
+                'executionMode': 'interactive',
+                'teacherFirst': True
+            },
+        )
+        rv = client_admin.get(f'/problem/view/{prob.problem_id}')
+        assert rv.status_code == 200, rv.get_json()
+        data = rv.get_json()['data']
+        assert data['pipeline']['executionMode'] == 'interactive'
+        assert data['pipeline']['teacherFirst'] is True
+        assert data['config']['networkAccessRestriction']['enabled'] is True
 
     def test_admin_update_problem_test_case_with_invalid_data(
         self,

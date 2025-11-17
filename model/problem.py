@@ -1,3 +1,4 @@
+import copy
 import json
 import hashlib
 import statistics
@@ -16,6 +17,42 @@ from .utils import *
 __all__ = ['problem_api']
 
 problem_api = Blueprint('problem_api', __name__)
+
+
+def _build_config_and_pipeline(problem: Problem):
+    """
+    Return a tuple: (config_payload, pipeline_payload)
+    config_payload is a copy of problem.config enriched with defaults.
+    pipeline_payload contains the execution settings exposed to clients.
+    """
+    raw_config = problem.config or {}
+    config_payload = copy.deepcopy(raw_config)
+    static_analysis = (config_payload.get('staticAnalysis')
+                       or config_payload.get('staticAnalys') or {})
+    # keep both keys in sync for backward compatibility
+    config_payload['staticAnalysis'] = static_analysis
+    config_payload['staticAnalys'] = static_analysis
+    static_analysis.setdefault('custom', False)
+    network_cfg = config_payload.get('networkAccessRestriction')
+    if not network_cfg and static_analysis.get('networkAccessRestriction'):
+        network_cfg = static_analysis['networkAccessRestriction']
+        config_payload['networkAccessRestriction'] = network_cfg
+    config_payload.setdefault('artifactCollection', [])
+    config_payload.setdefault('acceptedFormat', 'code')
+    config_payload.setdefault('compilation',
+                              config_payload.get('compilation', False))
+    config_payload['trialMode'] = config_payload.get(
+        'trialMode', config_payload.get('testMode', False))
+    pipeline_payload = {
+        'fopen': config_payload.get('fopen', False),
+        'fwrite': config_payload.get('fwrite', False),
+        'executionMode': config_payload.get('executionMode', 'general'),
+        'customChecker': config_payload.get('customChecker', False),
+        'teacherFirst': config_payload.get('teacherFirst', False),
+        'scoringScript': config_payload.get('scoringScript',
+                                            {'custom': False}),
+    }
+    return config_payload, pipeline_payload
 
 
 def permission_error_response():
@@ -174,77 +211,11 @@ def view_problem(user: User, problem: Problem):
             problem.get_tried_user_count(),
         }
 
-        # 添加 config 資訊（如果存在）
-        if problem.config:
-            problem_data['config'] = {
-                'compilation': problem.config.get('compilation', False),
-                'trialMode': problem.config.get('trialMode', False),
-                'aiVTuber': problem.config.get('aiVTuber', False),
-                'acceptedFormat': problem.config.get('acceptedFormat',
-                                                     'code'),  # 關鍵：決定提交格式
-                'staticAnalysis': {
-                    'custom':
-                    problem.config.get('staticAnalysis',
-                                       {}).get('custom', False),
-                },
-                'artifactCollection':
-                problem.config.get('artifactCollection', []),
-            }
-
-            # 添加庫限制資訊
-            static_analysis = problem.config.get('staticAnalysis', {})
-            if static_analysis.get('libraryRestrictions'):
-                problem_data['config']['staticAnalysis'][
-                    'libraryRestrictions'] = {
-                        'enabled':
-                        static_analysis['libraryRestrictions'].get(
-                            'enabled', False),
-                        'whitelist':
-                        static_analysis['libraryRestrictions'].get(
-                            'whitelist', []),
-                        'blacklist':
-                        static_analysis['libraryRestrictions'].get(
-                            'blacklist', []),
-                    }
-
-            # 添加網路限制資訊
-            if static_analysis.get('networkAccessRestriction'):
-                network_config = static_analysis['networkAccessRestriction']
-                problem_data['config']['staticAnalysis'][
-                    'networkAccessRestriction'] = {
-                        'enabled': network_config.get('enabled', False),
-                    }
-
-                if network_config.get('firewallExtranet'):
-                    problem_data['config']['staticAnalysis'][
-                        'networkAccessRestriction']['firewallExtranet'] = {
-                            'enabled':
-                            network_config['firewallExtranet'].get(
-                                'enabled', False),
-                            'whitelist':
-                            network_config['firewallExtranet'].get(
-                                'whitelist', []),
-                            'blacklist':
-                            network_config['firewallExtranet'].get(
-                                'blacklist', []),
-                        }
-
-                if network_config.get('connectWithLocal'):
-                    problem_data['config']['staticAnalysis'][
-                        'networkAccessRestriction']['connectWithLocal'] = {
-                            'enabled':
-                            network_config['connectWithLocal'].get(
-                                'enabled', False),
-                            'whitelist':
-                            network_config['connectWithLocal'].get(
-                                'whitelist', []),
-                            'blacklist':
-                            network_config['connectWithLocal'].get(
-                                'blacklist', []),
-                            'localServiceZip':
-                            network_config['connectWithLocal'].get(
-                                'localServiceZip'),
-                        }
+        config_payload, pipeline_payload = _build_config_and_pipeline(problem)
+        if config_payload:
+            problem_data['config'] = config_payload
+        if pipeline_payload:
+            problem_data['pipeline'] = pipeline_payload
 
         return HTTPResponse('Success.', data=problem_data)
 
@@ -310,8 +281,19 @@ def upload_problem_assets(user: User, problem: Problem):
 
         if not valid_files:
             return HTTPError('No files provided', 400)
+        meta_raw = request.form.get('meta')
+        try:
+            meta = json.loads(meta_raw) if meta_raw else {}
+            if meta is not None and not isinstance(meta, dict):
+                raise ValueError('meta must be a JSON object')
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            return HTTPError(f'Invalid meta payload: {exc}', 400)
 
-        problem.update_assets(files_data=valid_files)
+        problem.update_assets(
+            user=user,
+            files_data=valid_files,
+            meta=meta,
+        )
 
         return HTTPResponse('Success.', data={'ok': True})  # (回傳 ok: true)
 
@@ -739,11 +721,23 @@ def get_meta(token: str, problem_id: int):
     if not problem:
         return HTTPError(f'{problem} not found', 404)
     submission_mode = getattr(problem.test_case, 'submission_mode', 0) or 0
+    config_payload, pipeline_payload = _build_config_and_pipeline(problem)
     meta = {
         'tasks':
         [json.loads(task.to_json()) for task in problem.test_case.tasks],
         'submissionMode': submission_mode,
     }
+    meta.update({
+        'executionMode':
+        pipeline_payload.get('executionMode', 'general'),
+        'teacherFirst':
+        pipeline_payload.get('teacherFirst', False),
+        'assetPaths':
+        config_payload.get('assetPaths', {}),
+    })
+    network_cfg = config_payload.get('networkAccessRestriction')
+    if network_cfg:
+        meta['networkAccessRestriction'] = network_cfg
     return HTTPResponse(data=meta)
 
 
