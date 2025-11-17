@@ -691,8 +691,8 @@ class BaseSubmission(abc.ABC):
         tasks = [task.to_mongo() for task in self.tasks]
         for task in tasks:
             for case in task['cases']:
-                del case['output']
-                del case['output_minio_path']
+                case.pop('output', None)
+                case.pop('output_minio_path', None)
         return [task.to_dict() for task in tasks]
 
     def get_detailed_result(self) -> List[Dict[str, Any]]:
@@ -705,8 +705,8 @@ class BaseSubmission(abc.ABC):
                 output = self.get_single_output(i, j)
                 case['stdout'] = output['stdout']
                 case['stderr'] = output['stderr']
-                del case['output']  # non-serializable field
-                del case['output_minio_path']  # non-serializable field
+                case.pop('output', None)  # non-serializable field
+                case.pop('output_minio_path', None)  # non-serializable field
         return [task.to_dict() for task in tasks]
 
     def _get_code_raw(self):
