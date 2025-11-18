@@ -1,5 +1,5 @@
 import copy
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple
 from mongo.problem import Problem
 
 
@@ -34,7 +34,7 @@ def build_config_and_pipeline(problem: Problem) -> Tuple[Dict, Dict]:
     return config_payload, pipeline_payload
 
 
-def build_static_analysis_rules(problem: Problem) -> Optional[Dict]:
+def build_static_analysis_rules(problem: Problem):
     """Transform libraryRestrictions config into sandbox rules payload."""
     config_payload = problem.config or {}
     static_cfg = (config_payload.get('staticAnalysis')
@@ -71,3 +71,18 @@ def build_static_analysis_rules(problem: Problem) -> Optional[Dict]:
         'headers': selected['headers'],
         'functions': selected['functions'],
     }
+
+
+def derive_build_strategy(problem: Problem, submission_mode: int,
+                          execution_mode: str) -> str:
+    """Decide build strategy based on submission/testcase mode and executionMode."""
+    exec_mode = execution_mode or 'general'
+    is_zip = submission_mode == 1
+    if exec_mode == 'functionOnly':
+        return 'makeFunctionOnly'
+    if exec_mode == 'interactive':
+        return 'makeInteractive' if is_zip else 'compile'
+    # general (legacy zip -> makeNormal)
+    if is_zip:
+        return 'makeNormal'
+    return 'compile'

@@ -970,6 +970,51 @@ class TestProblem(BaseTester):
         assert payload['executionMode'] == 'general'
         assert payload['assetPaths'] == {}
         assert payload['teacherFirst'] is False
+        assert payload['buildStrategy'] == 'compile'
+
+    def test_get_meta_build_strategy_variants(self, client_admin, client,
+                                              monkeypatch):
+
+        class MockSandbox:
+            token = 'SandboxToken'
+
+        class MockConfig:
+            sandbox_instances = [MockSandbox()]
+
+        from mongo.sandbox import Submission
+        monkeypatch.setattr(Submission, 'config', MockConfig)
+
+        # general zip -> makeNormal
+        prob = utils.problem.create_problem()
+        prob.update(test_case__submission_mode=1)
+        prob.reload('test_case')
+        rv = client.get(f'/problem/{prob.problem_id}/meta?token=SandboxToken')
+        assert rv.status_code == 200, rv.get_json()
+        assert rv.get_json()['data']['buildStrategy'] == 'makeNormal'
+
+        # functionOnly -> makeFunctionOnly
+        Problem.edit_problem(
+            user=User('admin'),
+            problem_id=prob.problem_id,
+            pipeline={'executionMode': 'functionOnly'},
+        )
+        prob.update(test_case__submission_mode=0)
+        prob.reload('test_case')
+        rv = client.get(f'/problem/{prob.problem_id}/meta?token=SandboxToken')
+        assert rv.status_code == 200
+        assert rv.get_json()['data']['buildStrategy'] == 'makeFunctionOnly'
+
+        # interactive zip -> makeInteractive
+        Problem.edit_problem(
+            user=User('admin'),
+            problem_id=prob.problem_id,
+            pipeline={'executionMode': 'interactive'},
+        )
+        prob.update(test_case__submission_mode=1)
+        prob.reload('test_case')
+        rv = client.get(f'/problem/{prob.problem_id}/meta?token=SandboxToken')
+        assert rv.status_code == 200
+        assert rv.get_json()['data']['buildStrategy'] == 'makeInteractive'
 
     def test_get_static_analysis_rules_not_configured(self, client,
                                                       monkeypatch):

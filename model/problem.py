@@ -11,8 +11,11 @@ from mongo import engine
 from mongo import sandbox
 from mongo.utils import drop_none, MinioClient
 from mongo.problem import *
-from .utils.problem_utils import build_config_and_pipeline as _build_config_and_pipeline
-from .utils.problem_utils import build_static_analysis_rules as _build_static_analysis_rules
+from .utils.problem_utils import (build_config_and_pipeline as
+                                  _build_config_and_pipeline)
+from .utils.problem_utils import (build_static_analysis_rules as
+                                  _build_static_analysis_rules)
+from .utils.problem_utils import derive_build_strategy as _derive_build_strategy
 from .auth import *
 from .utils import *
 
@@ -640,13 +643,20 @@ def get_meta(token: str, problem_id: int):
         [json.loads(task.to_json()) for task in problem.test_case.tasks],
         'submissionMode': submission_mode,
     }
+    execution_mode = pipeline_payload.get('executionMode', 'general')
     meta.update({
         'executionMode':
-        pipeline_payload.get('executionMode', 'general'),
+        execution_mode,
         'teacherFirst':
         pipeline_payload.get('teacherFirst', False),
         'assetPaths':
         config_payload.get('assetPaths', {}),
+        'buildStrategy':
+        _derive_build_strategy(
+            problem=problem,
+            submission_mode=submission_mode,
+            execution_mode=execution_mode,
+        ),
     })
     network_cfg = config_payload.get('networkAccessRestriction')
     if network_cfg:
