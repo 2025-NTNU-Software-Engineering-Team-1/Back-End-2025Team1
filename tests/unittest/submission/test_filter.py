@@ -108,7 +108,8 @@ def test_invalid_sort_by():
     admin = utils.user.create_user(role=User.engine.Role.ADMIN)
     with pytest.raises(
             ValueError,
-            match=r'.*runTime or memoryUsage.*',
+            match=
+            r'can only sort by runTime, memoryUsage, timestamp, -timestamp',
     ):
         Submission.filter(user=admin, sort_by='problemIds')
 

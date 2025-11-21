@@ -40,6 +40,10 @@ __all__ = [
     'TestCaseNotFound',
 ]
 
+SUBMISSION_ALLOWED_SORT_BY = [
+    'runTime', 'memoryUsage', 'timestamp', '-timestamp'
+]
+
 # TODO: modular token function
 
 
@@ -1088,18 +1092,26 @@ class Submission(MongoBase, BaseSubmission, engine=engine.Submission):
             raise ValueError(f'offset must >= 0!')
         if count < -1:
             raise ValueError(f'count must >=-1!')
-        if sort_by is not None and sort_by not in ['runTime', 'memoryUsage']:
-            raise ValueError(f'can only sort by runTime or memoryUsage')
+        if sort_by is not None and sort_by not in SUBMISSION_ALLOWED_SORT_BY:
+            raise ValueError(
+                f'can only sort by {", ".join(SUBMISSION_ALLOWED_SORT_BY)}')
         wont_have_results = False
+
         if isinstance(problem, int):
             problem = Problem(problem).obj
             if problem is None:
                 wont_have_results = True
+        elif hasattr(problem, 'obj'):
+            problem = problem.obj
+
         if isinstance(q_user, str):
             q_user = User(q_user)
             if not q_user:
                 wont_have_results = True
             q_user = q_user.obj
+        elif hasattr(q_user, 'obj'):
+            q_user = q_user.obj
+
         if isinstance(course, str):
             course = Course(course)
             if not course:
@@ -1381,6 +1393,11 @@ class TrialSubmission(MongoBase, BaseSubmission,
 
     # --- TrialSubmission-specific Classmethods ---
 
+    @property
+    def code2status(self):
+        # 將Status從數字轉回字串
+        return {v: k for k, v in self.status2code.items()}
+
     @staticmethod
     def count():
         return len(engine.TrialSubmission.objects)
@@ -1413,18 +1430,26 @@ class TrialSubmission(MongoBase, BaseSubmission,
             raise ValueError(f'offset must >= 0!')
         if count < -1:
             raise ValueError(f'count must >=-1!')
-        if sort_by is not None and sort_by not in ['runTime', 'memoryUsage']:
-            raise ValueError(f'can only sort by runTime or memoryUsage')
+        if sort_by is not None and sort_by not in SUBMISSION_ALLOWED_SORT_BY:
+            raise ValueError(
+                f'can only sort by {", ".join(SUBMISSION_ALLOWED_SORT_BY)}')
         wont_have_results = False
+
         if isinstance(problem, int):
             problem = Problem(problem).obj
             if problem is None:
                 wont_have_results = True
+        elif hasattr(problem, 'obj'):
+            problem = problem.obj
+
         if isinstance(q_user, str):
             q_user = User(q_user)
             if not q_user:
                 wont_have_results = True
             q_user = q_user.obj
+        elif hasattr(q_user, 'obj'):
+            q_user = q_user.obj
+
         if isinstance(course, str):
             course = Course(course)
             if not course:
@@ -1507,3 +1532,53 @@ class TrialSubmission(MongoBase, BaseSubmission,
                                             ip_addr=ip_addr)
         submission.save()
         return cls(submission.id)
+
+    @classmethod
+    def get_history_for_api(cls,
+                            user: User,
+                            problem: Problem,
+                            offset: int = 0,
+                            count: int = -1) -> Dict[str, Any]:
+        """
+        Method for URI: /problem/<id>/trial/history
+        """
+        current_app.logger.debug(
+            f"Getting trial submission history for user {user.username} on problem id-{problem.problem_id}"
+        )
+        try:
+            # 1. 使用 filter 查詢資料
+            submissions, total_count = cls.filter(
+                user=user,
+                q_user=user,
+                problem=problem,
+                offset=offset,
+                count=count,
+                with_count=True,
+                sort_by='-timestamp'  # 預設依時間倒序
+            )
+
+            # 2. 轉成 API 規定的格式
+            history_list = []
+            for sub in submissions:
+                # 取得狀態字串，如果找不到對應代碼 (如 -1 pending) 則顯示 'Pending' 或其他預設值
+                status_str = sub.code2status.get(sub.status, 'Judging')
+                if sub.status == -1:
+                    status_str = 'Judging'
+                elif sub.status == -2:
+                    status_str = 'Pending'
+
+                history_list.append({
+                    "Trial_Submission_Id": str(sub.id),
+                    "Problem_Id": str(sub.problem_id),
+                    "Status": status_str,
+                    "Score": sub.score,
+                    "Language_Type": sub.language,  # 0: C, 1: C++, 2: Python
+                    "Timestamp":
+                    sub.timestamp.timestamp()  # 回傳 Unix Timestamp 方便前端處理
+                })
+
+            return {"Total_Count": total_count, "History": history_list}
+        except Exception as e:
+            current_app.logger.error(
+                f"Error getting trial submission history: {e}")
+            raise e

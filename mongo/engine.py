@@ -343,6 +343,10 @@ def problem_desc_escape(sender, document):
 @problem_desc_escape.apply
 class Problem(Document):
 
+    meta = {
+        'strict': False,  # for development convenience, ignore unknown fields
+    }
+
     class Visibility:
         SHOW = 0
         HIDDEN = 1

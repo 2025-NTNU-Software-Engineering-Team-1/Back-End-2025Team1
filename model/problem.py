@@ -5,7 +5,7 @@ from dataclasses import asdict
 import zipfile
 import io
 from datetime import datetime
-from flask import Blueprint, request, send_file
+from flask import Blueprint, request, send_file, current_app
 from urllib import parse
 from zipfile import BadZipFile
 from mongo import *
@@ -554,6 +554,37 @@ def get_public_testcases(user, problem_id: int):
         })
 
     return HTTPResponse("OK", data={"Trial_Cases": cases})
+
+
+@problem_api.route('/<int:problem_id>/trial/history', methods=['GET'])
+@login_required
+@Request.doc('problem_id', 'problem', Problem)
+def view_trial_history(
+    user: User,
+    problem: Problem,
+):
+    """
+    Get trial submission history for a problem
+    """
+    current_app.logger.debug(
+        f"User {user.username} is requesting trial history for problem id-{problem.id}"
+    )
+    # 1. Permission Check: Pass if user has VIEW permission
+    if not problem.permission(user, problem.Permission.VIEW):
+        current_app.logger.info(
+            f"User {user.username} attempted to access trial history for problem id-{problem.id} without permission."
+        )
+        return permission_error_response()
+
+    # 2. Call Model to handle business logic
+    try:
+        data = TrialSubmission.get_history_for_api(user=user, problem=problem)
+
+        # 3. Return the result
+        return HTTPResponse('Success.', data=data)
+    except Exception as e:
+        current_app.logger.error(f"Error retrieving trial history: {str(e)}")
+        return HTTPError(f"Failed to retrieve trial history: {str(e)}", 500)
 
 
 @problem_api.post("/<int:problem_id>/trial/request")
