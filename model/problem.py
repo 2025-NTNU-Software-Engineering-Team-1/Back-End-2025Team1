@@ -506,6 +506,8 @@ def get_public_testcases(user, problem_id: int):
         obj = minio.client.get_object(minio.bucket, zip_path)
         raw = obj.read()
     except Exception as e:
+        current_app.logger.error(
+            f"Error loading public testcases for problem id-{problem_id}: {e}")
         return HTTPError(f"Failed to load testcases: {e}", 500)
     finally:
         try:
@@ -528,6 +530,8 @@ def get_public_testcases(user, problem_id: int):
     try:
         zf = zipfile.ZipFile(io.BytesIO(raw))
     except zipfile.BadZipFile:
+        current_app.logger.warning(
+            f"Invalid ZIP content for problem id-{problem_id}.")
         return HTTPError("Invalid ZIP content.", 500)
 
     names = set(zf.namelist())
@@ -660,4 +664,5 @@ def request_trial_submission(user,
     except PermissionError as e:
         return HTTPError(str(e), 403)
     except Exception as e:
+        current_app.logger.error(f"Error creating trial submission: {str(e)}")
         return HTTPError(f"Failed to create trial submission: {str(e)}", 500)
