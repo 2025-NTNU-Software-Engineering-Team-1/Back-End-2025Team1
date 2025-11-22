@@ -1,6 +1,6 @@
 import io
 from flask import Blueprint, request, current_app
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .utils import *
 from .auth import *
@@ -144,7 +144,7 @@ def upload_trial_files(user, trial_id: str):
 
     # Store in MinIO
     minio = MinioClient()
-    now_tag = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+    now_tag = datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')
     code_path = f"trial/{trial_id}/code-{now_tag}.zip"
     try:
         minio.client.put_object(minio.bucket,

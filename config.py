@@ -20,7 +20,12 @@ LOGGING_CONFIG = {
         },
         'mongoengine': {
             'level': 'WARNING'
-        }
+        },
+        # connectionpool is rather annoying too
+        # though it is useful when debugging network issues
+        'urllib3.connectionpool': {
+            'level': 'INFO'
+        },
     },
     'handlers': {
         'console': {

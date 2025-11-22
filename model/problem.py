@@ -11,11 +11,13 @@ from zipfile import BadZipFile
 from mongo import *
 from mongo import engine
 from mongo import sandbox
-from mongo.utils import drop_none, MinioClient
+from mongo.utils import drop_none, MinioClient, RedisCache
 from mongo.problem import *
 from mongo.submission import TrialSubmission
 from .auth import *
 from .utils import *
+
+PUBLIC_TESTCASES_TTL = 3600  # 1 hour Time-to-Live for Redis cache
 
 __all__ = ['problem_api']
 
@@ -496,6 +498,22 @@ def get_public_testcases(user, problem_id: int):
             problem.obj, "test_mode_enabled", False):
         return HTTPError("Test mode disabled.", 403)
 
+    # Redis Cache Lookup
+    cache_key = f'PROBLEM_PUBLIC_TESTCASES_{problem_id}'
+    cache = RedisCache()
+
+    if cache.exists(cache_key):
+        try:
+            # Cache hit: load from cache
+            current_app.logger.debug(f"Cache hit for {cache_key}")
+            cached_data = json.loads(cache.get(cache_key))
+            return HTTPResponse("OK", data=cached_data)
+        except Exception as e:
+            current_app.logger.error(
+                f"Cache hit but failed to parse for {cache_key}: {e}")
+            # If fails: continue to fetch from MinIO
+
+    # Cache miss or fail: Fetch from MinIO
     zip_path = getattr(problem, "public_cases_zip_minio_path", None)
     if not zip_path:
         return HTTPError("No public testcases.", 404)
@@ -557,7 +575,17 @@ def get_public_testcases(user, problem_id: int):
             "Output_Content": outp,
         })
 
-    return HTTPResponse("OK", data={"Trial_Cases": cases})
+    response_data = {"Trial_Cases": cases}
+
+    # Store in Redis Cache
+    try:
+        cache.set(cache_key,
+                  json.dumps(response_data),
+                  ex=PUBLIC_TESTCASES_TTL)
+    except Exception as e:
+        current_app.logger.warning(f"Failed to set cache for {cache_key}: {e}")
+
+    return HTTPResponse("OK", data=response_data)
 
 
 @problem_api.route('/<int:problem_id>/trial/history', methods=['GET'])
