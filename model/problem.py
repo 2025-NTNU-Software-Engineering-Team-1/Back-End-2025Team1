@@ -570,7 +570,7 @@ def view_trial_history(
     """
     Get trial submission history for a problem
     """
-    current_app.logger.debug(
+    current_app.logger.info(
         f"User {user.username} is requesting trial history for problem id-{problem.id}"
     )
     # 1. Permission Check: Pass if user has VIEW permission
@@ -607,7 +607,7 @@ def request_trial_submission(user,
     Returns:
         Trial_Submission_Id if successful
     """
-    current_app.logger.debug(
+    current_app.logger.info(
         f"Requesting trial submission for problem id-{problem_id} by user {user.username}"
     )
     # Load problem
