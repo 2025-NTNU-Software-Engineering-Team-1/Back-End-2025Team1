@@ -68,6 +68,8 @@ class _Request(type):
                             current_app.logger.error(
                                 f"[Request Parsing] Missing required field '{lookup_key}'."
                             )
+                            current_app.logger.error(
+                                f"[Request Parsing] Caller = {func.__name__}")
                             return HTTPError('Requested Value With Wrong Type',
                                              400)
 

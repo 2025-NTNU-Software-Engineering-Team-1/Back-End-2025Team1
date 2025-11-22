@@ -607,6 +607,9 @@ def request_trial_submission(user,
     Returns:
         Trial_Submission_Id if successful
     """
+    current_app.logger.debug(
+        f"Requesting trial submission for problem id-{problem_id} by user {user.username}"
+    )
     # Load problem
     problem = Problem(problem_id)
     if not problem or not getattr(problem, "obj", None):
