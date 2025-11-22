@@ -41,7 +41,7 @@ class _Request(type):
                     parsed_kwargs = {}
 
                     for key_spec in keys:
-                        # Parsing "param_name: type"
+                        # 2. Parsing parameter specifications
                         if ':' in key_spec:
                             param_name, type_str = key_spec.split(':', 1)
                             param_name = param_name.strip()
@@ -50,31 +50,45 @@ class _Request(type):
                             param_name = key_spec.strip()
                             target_type = None
 
-                        # Snake Case -> Camel Case conversion
+                        # 3. Smart key lookup (Snake/Camel/Title)
+                        #    Determine key name candidates
                         parts = [p for p in param_name.split('_') if p]
                         if not parts:
-                            lookup_key = param_name
+                            camel_key = param_name
                         else:
-                            lookup_key = parts[0] + ''.join(p.capitalize()
-                                                            for p in parts[1:])
+                            camel_key = parts[0] + ''.join(p.capitalize()
+                                                           for p in parts[1:])
 
-                        # 2. Extracting the value from request data
-                        value = request_data.get(lookup_key)
+                        possible_keys = [
+                            camel_key,  # languageType
+                            param_name,  # language_type
+                            param_name.title(),  # Language_Type
+                            param_name.upper()  # LANGUAGE_TYPE
+                        ]
 
-                        # 3. Checking for missing values
-                        #   Required fields missing should directly report error
-                        #   to avoid passing None causing 500
+                        value = None
+                        found_key = None
+
+                        for k in possible_keys:
+                            if k in request_data:
+                                value = request_data[k]
+                                found_key = k
+                                break
+
+                        # 4. Checking for missing values
+                        #    Required fields missing should directly report error
                         if value is None and target_type is not None:
-                            current_app.logger.error(
-                                f"[Request Parsing] Missing required field '{lookup_key}'."
-                            )
-                            current_app.logger.error(
-                                f"[Request Parsing] Caller = {func.__name__}")
-                            return HTTPError('Requested Value With Wrong Type',
-                                             400)
+                            if param_name not in vars_dict:
+                                current_app.logger.error(
+                                    f"[Request Parsing] Missing required field '{param_name}'. "
+                                    f"Tried keys: {possible_keys}. "
+                                    f"Received: {request_data}. Caller: {func.__name__}"
+                                )
+                                return HTTPError(
+                                    'Requested Value With Wrong Type', 400)
 
-                        # 4. Automatic type conversion and validation
-                        if target_type is not None:
+                        # 5. Type conversion and validation
+                        if target_type is not None and value is not None:
                             if not isinstance(value, target_type):
                                 try:
                                     # Special handling for bool
@@ -90,17 +104,17 @@ class _Request(type):
                                                     f"Invalid boolean string: {value}"
                                                 )
                                         else:
-                                            # for non-str types, we raise error
+                                            # Strict bool check: reject int or other types
                                             raise ValueError(
                                                 f"Strict bool check: cannot cast {type(value)} to bool"
                                             )
                                     else:
-                                        # Other types attempt automatic conversion (e.g., str -> int)
+                                        # Other types attempt automatic conversion
                                         value = target_type(value)
 
                                 except (ValueError, TypeError) as e:
                                     current_app.logger.error(
-                                        f"[Request Parsing] Type mismatch for field '{lookup_key}'. "
+                                        f"[Request Parsing] Type mismatch for field '{found_key}'. "
                                         f"Expected {target_type.__name__}, got {type(value).__name__} ('{value}') "
                                         f"and failed to cast. Error: {e}")
                                     current_app.logger.error(
@@ -111,7 +125,7 @@ class _Request(type):
 
                         parsed_kwargs[param_name] = value
 
-                    # vars_dict
+                    # 6. Processing vars_dict
                     for v in vars_dict:
                         parsed_kwargs[v] = request_data.get(vars_dict[v])
 

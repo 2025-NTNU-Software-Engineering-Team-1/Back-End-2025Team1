@@ -594,13 +594,13 @@ def view_trial_history(
 @problem_api.post("/<int:problem_id>/trial/request")
 @login_required
 @Request.json(
-    "languageType: int",
-    "useDefaultCase: bool?",
+    "language_type: int",
+    "use_default_test_cases: bool?",
 )
 def request_trial_submission(user,
                              problem_id: int,
-                             languageType: int,
-                             useDefaultCase: bool = True):
+                             language_type: int,
+                             use_default_test_cases: bool = True):
     """
     Create a trial submission request
     
@@ -611,39 +611,19 @@ def request_trial_submission(user,
         f"Requesting trial submission for problem id-{problem_id} by user {user.username}"
     )
     # Load problem
-    problem = Problem(problem_id)
-    if not problem or not getattr(problem, "obj", None):
+    problem_proxy = Problem(problem_id)
+    if not problem_proxy or not getattr(problem_proxy, "obj", None):
         return HTTPError("Problem not found.", 404)
 
+    problem = problem_proxy
+
     # Validate language type (0: C, 1: C++, 2: Python)
-    if languageType not in [0, 1, 2]:
+    if language_type not in [0, 1, 2]:
         return HTTPError(
             "Invalid language type. Must be 0 (C), 1: C++, 2: Python).", 400)
 
     # Check if user has permission to submit
-    user_obj = User(user.username)
-    if not user_obj:
-        return HTTPError("User not found.", 404)
-
-    # Check permission
-    has_permission = False
-
-    # Teachers and TAs have permission
-    if user_obj.role == Role.TA or user_obj.role == Role.TEACHER:
-        has_permission = True
-    else:
-        # For students, check if they are in any of the problem's courses
-        for course_obj in problem.courses:
-            try:
-                course_name = course_obj.course_name
-                course = Course(course_name)
-                if course and user.username in course.student_nicknames:
-                    has_permission = True
-                    break
-            except Exception:
-                continue
-
-    if not has_permission:
+    if not problem.permission(user, Problem.Permission.ONLINE):
         return HTTPError(
             "You don't have permission to submit to this problem.", 403)
 
@@ -652,19 +632,22 @@ def request_trial_submission(user,
         trial_submission = TrialSubmission.add(
             problem_id=problem_id,
             username=user.username,
-            lang=languageType,
+            lang=language_type,
             timestamp=datetime.now(),
             ip_addr=request.remote_addr,
         )
 
-        # Update use_default_case field
-        trial_submission.obj.use_default_case = useDefaultCase
+        # Update use_default_test_cases field
+        trial_submission.obj.use_default_test_cases = use_default_test_cases
         trial_submission.obj.save()
 
         return HTTPResponse(
             "Trial submission created successfully.",
             data={"Trial_Submission_Id": str(trial_submission.id)})
     except PermissionError as e:
+        current_app.logger.info(
+            f"Permission error for trial submission by user {user.username} on problem id-{problem_id}: {str(e)}"
+        )
         return HTTPError(str(e), 403)
     except Exception as e:
         current_app.logger.error(f"Error creating trial submission: {str(e)}")
