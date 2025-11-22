@@ -42,8 +42,9 @@ def setup_problem_with_testcases():
     problem = Problem(problem_id)
     problem.reload()
 
-    # Enable test mode and allow all languages if fields exist
+    # Set visability to SHOW and test_mode_enabled to True
     try:
+        problem.obj.problem_status = 0
         problem.obj.test_mode_enabled = True
     except Exception:
         pass
@@ -83,7 +84,7 @@ class TestTrialSubmissionAPI(BaseTester):
         rv = client.post(f'/problem/{problem.problem_id}/trial/request',
                          json={
                              'languageType': 2,
-                             'useDefaultCase': True
+                             'Use_Default_Test_Cases': True
                          })
         assert rv.status_code == 200
         trial_id = rv.get_json()['data']['Trial_Submission_Id']
@@ -120,7 +121,7 @@ class TestTrialSubmissionAPI(BaseTester):
         rv = client.post(f'/problem/{problem.problem_id}/trial/request',
                          json={
                              'languageType': 2,
-                             'useDefaultCase': False
+                             'Use_Default_Test_Cases': False
                          })
         assert rv.status_code == 200
         trial_id = rv.get_json()['data']['Trial_Submission_Id']
@@ -166,7 +167,7 @@ class TestTrialSubmissionAPI(BaseTester):
         rv = client.post(f'/problem/{problem.problem_id}/trial/request',
                          json={
                              'languageType': 2,
-                             'useDefaultCase': True
+                             'Use_Default_Test_Cases': True
                          })
         trial_id = rv.get_json()['data']['Trial_Submission_Id']
 
@@ -201,7 +202,7 @@ class TestTrialSubmissionAPI(BaseTester):
             f'/problem/{problem.problem_id}/trial/request',
             json={
                 'languageType': 2,
-                'useDefaultCase': True
+                'Use_Default_Test_Cases': True
             })
         trial_id = rv.get_json()['data']['Trial_Submission_Id']
 
@@ -227,7 +228,7 @@ class TestTrialSubmissionAPI(BaseTester):
         rv = client.post(f'/problem/{problem.problem_id}/trial/request',
                          json={
                              'languageType': 2,
-                             'useDefaultCase': True
+                             'Use_Default_Test_Cases': True
                          })
         trial_id = rv.get_json()['data']['Trial_Submission_Id']
 
@@ -249,7 +250,7 @@ class TestTrialSubmissionAPI(BaseTester):
         rv = client.post(f'/problem/{problem.problem_id}/trial/request',
                          json={
                              'languageType': 2,
-                             'useDefaultCase': True
+                             'Use_Default_Test_Cases': True
                          })
         trial_id = rv.get_json()['data']['Trial_Submission_Id']
 
@@ -274,7 +275,7 @@ class TestTrialSubmissionAPI(BaseTester):
         rv = client.post(f'/problem/{problem.problem_id}/trial/request',
                          json={
                              'languageType': 2,
-                             'useDefaultCase': False
+                             'Use_Default_Test_Cases': False
                          })
         trial_id = rv.get_json()['data']['Trial_Submission_Id']
 
@@ -308,7 +309,7 @@ class TestTrialSubmissionAPI(BaseTester):
         rv = client.post(f'/problem/{problem.problem_id}/trial/request',
                          json={
                              'languageType': 2,
-                             'useDefaultCase': False
+                             'Use_Default_Test_Cases': False
                          })
         trial_id = rv.get_json()['data']['Trial_Submission_Id']
 

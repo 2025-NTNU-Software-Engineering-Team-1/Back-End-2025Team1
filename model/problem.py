@@ -635,11 +635,7 @@ def request_trial_submission(user,
             lang=language_type,
             timestamp=datetime.now(),
             ip_addr=request.remote_addr,
-        )
-
-        # Update use_default_test_cases field
-        trial_submission.obj.use_default_test_cases = use_default_test_cases
-        trial_submission.obj.save()
+            use_default_case=use_default_test_cases)
 
         return HTTPResponse(
             "Trial submission created successfully.",

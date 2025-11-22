@@ -994,7 +994,9 @@ class TestTrialSubmissionAPI(BaseTester):
         problem.reload()
 
         # Enable trial mode + allow all languages (bitmask 7 = C/C++/Python)
+        # Also make sure problem is visible
         try:
+            problem.obj.problem_status = 0  # Visible
             problem.obj.test_mode_enabled = True
         except Exception:
             pass
@@ -1193,7 +1195,7 @@ class TestTrialSubmissionAPI(BaseTester):
             f'/problem/{problem.problem_id}/trial/request',
             json={
                 'languageType': 2,  # Python
-                'useDefaultCase': True
+                'Use_Default_Test_Cases': True
             })
         assert rv.status_code == 200
         data = rv.get_json()
@@ -1218,7 +1220,7 @@ class TestTrialSubmissionAPI(BaseTester):
             f'/problem/{problem.problem_id}/trial/request',
             json={
                 'languageType': 3,  # Not allowed for trial
-                'useDefaultCase': True
+                'Use_Default_Test_Cases': True
             })
         assert rv.status_code == 400
         assert 'Invalid language type' in rv.get_json()['message']
@@ -1228,7 +1230,7 @@ class TestTrialSubmissionAPI(BaseTester):
         rv = client.post('/problem/999999/trial/request',
                          json={
                              'languageType': 2,
-                             'useDefaultCase': True
+                             'Use_Default_Test_Cases': True
                          })
         assert rv.status_code == 404
         assert 'Problem not found' in rv.get_json()['message']
@@ -1240,7 +1242,7 @@ class TestTrialSubmissionAPI(BaseTester):
         rv = client.post(f'/problem/{problem.problem_id}/trial/request',
                          json={
                              'languageType': 2,
-                             'useDefaultCase': True
+                             'Use_Default_Test_Cases': True
                          })
         assert rv.status_code == 403
 
@@ -1253,7 +1255,7 @@ class TestTrialSubmissionAPI(BaseTester):
             f'/problem/{problem.problem_id}/trial/request',
             json={
                 'languageType': 0,  # C
-                'useDefaultCase': False
+                'Use_Default_Test_Cases': False
             })
         assert rv.status_code == 200
         from mongo.submission import TrialSubmission

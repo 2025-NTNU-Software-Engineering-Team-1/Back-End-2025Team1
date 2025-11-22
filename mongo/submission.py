@@ -1507,6 +1507,7 @@ class TrialSubmission(MongoBase, BaseSubmission,
         lang: int,
         timestamp: Optional[date] = None,
         ip_addr: Optional[str] = None,
+        use_default_case: bool = True,
     ) -> 'TrialSubmission':
         '''
         Insert a new test submission into db
@@ -1529,7 +1530,8 @@ class TrialSubmission(MongoBase, BaseSubmission,
                                             user=user.obj,
                                             language=lang,
                                             timestamp=timestamp,
-                                            ip_addr=ip_addr)
+                                            ip_addr=ip_addr,
+                                            use_default_case=use_default_case)
         submission.save()
         return cls(submission.id)
 
