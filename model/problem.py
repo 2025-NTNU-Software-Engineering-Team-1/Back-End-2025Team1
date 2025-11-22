@@ -2,14 +2,20 @@ import json
 import hashlib
 import statistics
 from dataclasses import asdict
+from io import BytesIO
 from flask import Blueprint, request, send_file
 from urllib import parse
 from zipfile import BadZipFile
 from mongo import *
 from mongo import engine
 from mongo import sandbox
-from mongo.utils import drop_none
+from mongo.utils import drop_none, MinioClient
 from mongo.problem import *
+from .utils.problem_utils import (build_config_and_pipeline as
+                                  _build_config_and_pipeline)
+from .utils.problem_utils import (build_static_analysis_rules as
+                                  _build_static_analysis_rules)
+from .utils.problem_utils import derive_build_strategy as _derive_build_strategy
 from .auth import *
 from .utils import *
 
@@ -124,6 +130,11 @@ def view_problem(user: User, problem: Problem):
         'submitCount': problem.submit_count(user),
         'highScore': problem.get_high_score(user=user),
     })
+    config_payload, pipeline_payload = _build_config_and_pipeline(problem)
+    if config_payload:
+        data['config'] = config_payload
+    if pipeline_payload:
+        data['pipeline'] = pipeline_payload
     return HTTPResponse('Problem can view.', data=data)
 
 
@@ -185,8 +196,19 @@ def upload_problem_assets(user: User, problem: Problem):
 
         if not valid_files:
             return HTTPError('No files provided', 400)
+        meta_raw = request.form.get('meta')
+        try:
+            meta = json.loads(meta_raw) if meta_raw else {}
+            if meta is not None and not isinstance(meta, dict):
+                raise ValueError('meta must be a JSON object')
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            return HTTPError(f'Invalid meta payload: {exc}', 400)
 
-        problem.update_assets(files_data=valid_files)
+        problem.update_assets(
+            user=user,
+            files_data=valid_files,
+            meta=meta,
+        )
 
         return HTTPResponse('Success.', data={'ok': True})  # (回傳 ok: true)
 
@@ -212,12 +234,85 @@ def upload_problem_assets(user: User, problem: Problem):
     'default_code',
 )
 def create_problem(user: User, **ks):
-    # Get optional parameters from request.json
     data = request.json or {}
-    ks['config'] = data.get('config')
-    ks['pipeline'] = data.get('pipeline')
-    ks['test_mode'] = data.get(
-        'Test_Mode')  # Note: Test_Mode in request, test_mode in code
+
+    alias_pairs = (
+        ('problem_name', 'problemName'),
+        ('allowed_language', 'allowedLanguage'),
+        ('can_view_stdout', 'canViewStdout'),
+        ('default_code', 'defaultCode'),
+        ('test_case_info', 'testCaseInfo'),
+    )
+    for dest, src in alias_pairs:
+        if ks.get(dest) is None and data.get(src) is not None:
+            ks[dest] = data[src]
+
+    config_payload = data.get('config') or {}
+    pipeline_payload = data.get('pipeline') or {}
+
+    legacy_config = {}
+    for key in (
+            'compilation',
+            'aiVTuber',
+            'aiVTuberMaxToken',
+            'aiVTuberMode',
+            'acceptedFormat',
+            'artifactCollection',
+            'maxStudentZipSizeMB',
+            'networkAccessRestriction',
+    ):
+        if config_payload.get(key) is not None:
+            legacy_config[key] = config_payload[key]
+    static_analysis = (config_payload.get('staticAnalysis')
+                       or config_payload.get('staticAnalys')
+                       or pipeline_payload.get('staticAnalysis'))
+    if config_payload.get('networkAccessRestriction'):
+        static_analysis = static_analysis or {}
+        static_analysis['networkAccessRestriction'] = config_payload[
+            'networkAccessRestriction']
+    if static_analysis:
+        legacy_config['staticAnalysis'] = static_analysis
+        legacy_config['staticAnalys'] = static_analysis
+    if legacy_config:
+        ks['config'] = drop_none(legacy_config)
+
+    legacy_pipeline = {}
+    for key in ('fopen', 'fwrite', 'executionMode', 'customChecker',
+                'teacherFirst'):
+        if pipeline_payload.get(key) is not None:
+            legacy_pipeline[key] = pipeline_payload[key]
+    if 'scoringScript' in pipeline_payload and pipeline_payload[
+            'scoringScript'] is not None:
+        legacy_pipeline['scoringScript'] = pipeline_payload['scoringScript']
+        legacy_pipeline['scoringScrip'] = pipeline_payload['scoringScript']
+    if 'scoringScrip' in pipeline_payload and pipeline_payload[
+            'scoringScrip'] is not None:
+        legacy_pipeline['scoringScript'] = pipeline_payload['scoringScrip']
+    if 'staticAnalysis' in pipeline_payload and pipeline_payload[
+            'staticAnalysis'] is not None:
+        legacy_pipeline['staticAnalysis'] = pipeline_payload['staticAnalysis']
+    if legacy_pipeline:
+        ks['pipeline'] = drop_none(legacy_pipeline)
+
+    test_mode_payload = data.get('Test_Mode') or {}
+    derived_test_mode = {}
+    if 'trialMode' in config_payload:
+        derived_test_mode['Enabled'] = config_payload['trialMode']
+    if 'trialModeQuotaPerStudent' in config_payload:
+        derived_test_mode['Quota_Per_Student'] = config_payload[
+            'trialModeQuotaPerStudent']
+    if not test_mode_payload:
+        test_mode_payload = derived_test_mode
+    else:
+        test_mode_payload = {
+            **test_mode_payload,
+            **{
+                k: v
+                for k, v in derived_test_mode.items() if v is not None
+            }
+        }
+    if test_mode_payload:
+        ks['Test_Mode'] = drop_none(test_mode_payload)
 
     try:
         pid = Problem.add(user=user, **ks)
@@ -284,6 +379,75 @@ def manage_problem(user: User, problem: Problem):
             'pipeline': p_ks.pop('pipeline', None),
             'Test_Mode': p_ks.pop('Test_Mode', None),
         }
+
+        data = request.json or {}
+        config_payload = data.get('config') or {}
+        pipeline_payload = data.get('pipeline') or {}
+
+        legacy_config = kwargs.get('config') or {}
+        for key in (
+                'compilation',
+                'aiVTuber',
+                'aiVTuberMaxToken',
+                'aiVTuberMode',
+                'acceptedFormat',
+                'artifactCollection',
+                'maxStudentZipSizeMB',
+                'networkAccessRestriction',
+        ):
+            if config_payload.get(key) is not None:
+                legacy_config[key] = config_payload[key]
+        static_analysis = (config_payload.get('staticAnalysis')
+                           or config_payload.get('staticAnalys')
+                           or pipeline_payload.get('staticAnalysis'))
+        if config_payload.get('networkAccessRestriction'):
+            static_analysis = static_analysis or {}
+            static_analysis['networkAccessRestriction'] = config_payload[
+                'networkAccessRestriction']
+        if static_analysis:
+            legacy_config['staticAnalysis'] = static_analysis
+            legacy_config['staticAnalys'] = static_analysis
+        if legacy_config:
+            kwargs['config'] = drop_none(legacy_config)
+
+        legacy_pipeline = kwargs.get('pipeline') or {}
+        for key in ('fopen', 'fwrite', 'executionMode', 'customChecker',
+                    'teacherFirst'):
+            if pipeline_payload.get(key) is not None:
+                legacy_pipeline[key] = pipeline_payload[key]
+        if 'scoringScript' in pipeline_payload and pipeline_payload[
+                'scoringScript'] is not None:
+            legacy_pipeline['scoringScript'] = pipeline_payload[
+                'scoringScript']
+            legacy_pipeline['scoringScrip'] = pipeline_payload['scoringScript']
+        if 'scoringScrip' in pipeline_payload and pipeline_payload[
+                'scoringScrip'] is not None:
+            legacy_pipeline['scoringScript'] = pipeline_payload['scoringScrip']
+        if 'staticAnalysis' in pipeline_payload and pipeline_payload[
+                'staticAnalysis'] is not None:
+            legacy_pipeline['staticAnalysis'] = pipeline_payload[
+                'staticAnalysis']
+        if legacy_pipeline:
+            kwargs['pipeline'] = drop_none(legacy_pipeline)
+
+        test_mode_payload = data.get('Test_Mode') or kwargs.get(
+            'Test_Mode') or {}
+        derived_test_mode = {}
+        if 'trialMode' in config_payload:
+            derived_test_mode['Enabled'] = config_payload['trialMode']
+        if 'trialModeQuotaPerStudent' in config_payload:
+            derived_test_mode['Quota_Per_Student'] = config_payload[
+                'trialModeQuotaPerStudent']
+        if derived_test_mode:
+            test_mode_payload = {
+                **test_mode_payload,
+                **{
+                    k: v
+                    for k, v in derived_test_mode.items() if v is not None
+                }
+            }
+        if test_mode_payload:
+            kwargs['Test_Mode'] = drop_none(test_mode_payload)
 
         Problem.edit_problem(
             user=user,
@@ -466,18 +630,87 @@ def get_checksum(token: str, problem_id: int):
 @problem_api.route('/<int:problem_id>/meta', methods=['GET'])
 @Request.args('token: str')
 def get_meta(token: str, problem_id: int):
+    """Serve sandbox metadata (tasks, submission/execution modes, assets)."""
     if sandbox.find_by_token(token) is None:
         return HTTPError('Invalid sandbox token', 401)
     problem = Problem(problem_id)
     if not problem:
         return HTTPError(f'{problem} not found', 404)
     submission_mode = getattr(problem.test_case, 'submission_mode', 0) or 0
+    config_payload, pipeline_payload = _build_config_and_pipeline(problem)
     meta = {
         'tasks':
         [json.loads(task.to_json()) for task in problem.test_case.tasks],
         'submissionMode': submission_mode,
     }
+    execution_mode = pipeline_payload.get('executionMode', 'general')
+    meta.update({
+        'executionMode':
+        execution_mode,
+        'teacherFirst':
+        pipeline_payload.get('teacherFirst', False),
+        'assetPaths':
+        config_payload.get('assetPaths', {}),
+        'buildStrategy':
+        _derive_build_strategy(
+            problem=problem,
+            submission_mode=submission_mode,
+            execution_mode=execution_mode,
+        ),
+    })
+    network_cfg = config_payload.get('networkAccessRestriction')
+    if network_cfg:
+        meta['networkAccessRestriction'] = network_cfg
     return HTTPResponse(data=meta)
+
+
+@problem_api.route('/<int:problem_id>/asset/<asset_type>', methods=['GET'])
+@Request.args('token: str')
+def download_problem_asset(token: str, problem_id: int, asset_type: str):
+    """Allow sandbox to download teacher-provided assets via assetPaths."""
+    if sandbox.find_by_token(token) is None:
+        return HTTPError('Invalid sandbox token', 401)
+    problem = Problem(problem_id)
+    if not problem:
+        return HTTPError(f'{problem} not found', 404)
+    asset_paths = (problem.config or {}).get('assetPaths', {})
+    path = asset_paths.get(asset_type)
+    if not path:
+        return HTTPError('Asset not found', 404)
+    minio_client = MinioClient()
+    try:
+        obj = minio_client.client.get_object(minio_client.bucket, path)
+        data = obj.read()
+    except Exception as exc:
+        return HTTPError(str(exc), 404)
+    finally:
+        try:
+            obj.close()
+            obj.release_conn()
+        except Exception:
+            pass
+    filename = path.split('/')[-1] or f'{asset_type}'
+    return send_file(
+        BytesIO(data),
+        mimetype='application/octet-stream',
+        as_attachment=True,
+        download_name=filename,
+    )
+
+
+@problem_api.route('/<int:problem_id>/rules', methods=['GET'])
+@Request.args('token: str')
+def get_static_analysis_rules(token: str, problem_id: int):
+    """Expose static-analysis library restrictions for sandbox."""
+    if sandbox.find_by_token(token) is None:
+        return HTTPError('Invalid sandbox token', 401)
+    problem = Problem(problem_id)
+    if not problem:
+        return HTTPError(f'{problem} not found', 404)
+    rules = _build_static_analysis_rules(problem)
+    if not rules:
+        return HTTPError('Static analysis rule not configured', 404)
+    return HTTPResponse(data=rules)
 
 
 @problem_api.route('/<int:problem_id>/high-score', methods=['GET'])

@@ -175,6 +175,20 @@ class BaseSubmission(abc.ABC):
     def is_zip_mode(self) -> bool:
         return self.submission_mode == 1
 
+    @property
+    def execution_mode(self) -> str:
+        config = getattr(self.problem, 'config', {}) or {}
+        return config.get('executionMode', 'general')
+
+    @property
+    def is_function_only_mode(self) -> bool:
+        return self.execution_mode == 'functionOnly'
+
+    def _validate_execution_mode_constraints(self):
+        if self.is_function_only_mode and self.is_zip_mode:
+            raise ValueError(
+                'function-only problems only accept code submissions')
+
     def main_code_path(self) -> str:
         # handwritten submission didn't provide this function
         if self.handwritten:
@@ -691,8 +705,8 @@ class BaseSubmission(abc.ABC):
         tasks = [task.to_mongo() for task in self.tasks]
         for task in tasks:
             for case in task['cases']:
-                del case['output']
-                del case['output_minio_path']
+                case.pop('output', None)
+                case.pop('output_minio_path', None)
         return [task.to_dict() for task in tasks]
 
     def get_detailed_result(self) -> List[Dict[str, Any]]:
@@ -705,8 +719,8 @@ class BaseSubmission(abc.ABC):
                 output = self.get_single_output(i, j)
                 case['stdout'] = output['stdout']
                 case['stderr'] = output['stderr']
-                del case['output']  # non-serializable field
-                del case['output_minio_path']  # non-serializable field
+                case.pop('output', None)  # non-serializable field
+                case.pop('output_minio_path', None)  # non-serializable field
         return [task.to_dict() for task in tasks]
 
     def _get_code_raw(self):
@@ -919,6 +933,7 @@ class Submission(MongoBase, BaseSubmission, engine=engine.Submission):
         # unexisted id
         if not self:
             raise engine.DoesNotExist(f'{self}')
+        self._validate_execution_mode_constraints()
         self.update(
             status=-1,
             last_send=datetime.now(),

@@ -1,5 +1,6 @@
 import json
 import enum
+import copy
 from hashlib import md5
 from datetime import datetime, timedelta
 from typing import (
@@ -11,6 +12,7 @@ from typing import (
 )
 from dataclasses import dataclass
 from io import BytesIO
+from zipfile import BadZipFile
 from ulid import ULID
 from .. import engine
 from ..base import MongoBase
@@ -211,13 +213,15 @@ class Problem(MongoBase, engine=engine.Problem):
 
     def update_assets(
         self,
-        user: User,
-        files_data: Dict[str, Any],
-        meta: Dict[str, Any],
+        user: Optional[User] = None,
+        files_data: Optional[Dict[str, Any]] = None,
+        meta: Optional[Dict[str, Any]] = None,
     ):
         '''
         更新題目資源 (assets)，並「合併」設定
         '''
+        files_data = files_data or {}
+        meta = meta or {}
         try:
             if files_data.get('case'):
                 self.update_test_case(files_data['case'])
@@ -239,18 +243,32 @@ class Problem(MongoBase, engine=engine.Problem):
                     path = self._save_asset_file(minio_client, file_obj,
                                                  asset_type, filename)
                     new_asset_paths[asset_type] = path
-            kwargs_for_edit = {
-                'config': meta.get('config'),
-                'pipeline': meta.get('pipeline'),
-            }
+
+            meta = meta or {}
+            pipeline_payload = meta.get('pipeline') or {}
+            meta_config = meta.get('config') or {}
+            current_config = copy.deepcopy(self.obj.config
+                                           or Problem.config.default())
+            current_config.update(meta_config)
             if new_asset_paths:
-                current_config = self.obj.config or Problem.config.default()
                 current_asset_paths = current_config.get('assetPaths', {})
                 current_asset_paths.update(new_asset_paths)
                 current_config['assetPaths'] = current_asset_paths
+            kwargs_for_edit = {}
+            if meta_config or new_asset_paths:
                 kwargs_for_edit['config'] = current_config
+            if pipeline_payload:
+                kwargs_for_edit['pipeline'] = pipeline_payload
 
-            if kwargs_for_edit:
+            execution_mode = (pipeline_payload.get('executionMode') or
+                              current_config.get('executionMode', 'general'))
+            asset_paths = current_config.get('assetPaths', {})
+            if execution_mode == 'functionOnly' and 'makefile' not in asset_paths:
+                raise ValueError('functionOnly mode requires makefile.zip')
+            if execution_mode == 'interactive' and 'teacher_file' not in asset_paths:
+                raise ValueError('interactive mode requires Teacher_file')
+
+            if kwargs_for_edit and user:
                 self.edit_problem(user=user,
                                   problem_id=self.problem_id,
                                   **kwargs_for_edit)
@@ -366,12 +384,27 @@ class Problem(MongoBase, engine=engine.Problem):
         config = config or {}
         pipeline = pipeline or {}
         test_mode = Test_Mode or {}
+        if 'scoringScript' in pipeline and 'scoringScrip' not in pipeline:
+            pipeline['scoringScrip'] = pipeline['scoringScript']
+        static_analysis_cfg = (config.get('staticAnalysis')
+                               or config.get('staticAnalys')
+                               or pipeline.get('staticAnalysis'))
+        if static_analysis_cfg is not None:
+            static_analysis_cfg = copy.deepcopy(static_analysis_cfg)
+        else:
+            static_analysis_cfg = {'custom': False}
+        if config.get('networkAccessRestriction'):
+            static_analysis_cfg.setdefault(
+                'networkAccessRestriction',
+                config['networkAccessRestriction'],
+            )
         full_config = {
             'compilation': config.get('compilation', False),
             'testMode': test_mode.get('Enabled', False),
             'aiVTuber': config.get('aiVTuber', False),
             'acceptedFormat': config.get('acceptedFormat', 'code'),
-            'staticAnalys': config.get('staticAnalys', {'custom': False}),
+            'staticAnalys': static_analysis_cfg,
+            'staticAnalysis': static_analysis_cfg,
             'artifactCollection': config.get('artifactCollection', []),
             'fopen': pipeline.get('fopen', False),
             'fwrite': pipeline.get('fwrite', False),
@@ -381,6 +414,19 @@ class Problem(MongoBase, engine=engine.Problem):
             'scoringScript': pipeline.get('scoringScrip', {'custom': False}),
             'testModeQuotaPerStudent': test_mode.get('Quota_Per_Student', 0),
         }
+        for key in (
+                'aiVTuberMaxToken',
+                'aiVTuberMode',
+                'maxStudentZipSizeMB',
+                'networkAccessRestriction',
+        ):
+            if key in config and config[key] is not None:
+                full_config[key] = config[key]
+        known_config_keys = set(full_config.keys())
+        for key, value in config.items():
+            if value is None or key in known_config_keys:
+                continue
+            full_config[key] = value
 
         description_dict = description or {}
         problem_args = drop_none({
@@ -448,6 +494,14 @@ class Problem(MongoBase, engine=engine.Problem):
         """
         from mongo import Course
 
+        def _sync_config_aliases(cfg: dict):
+            if 'staticAnalysis' in cfg and 'staticAnalys' not in cfg:
+                cfg['staticAnalys'] = cfg['staticAnalysis']
+            if 'staticAnalys' in cfg and 'staticAnalysis' not in cfg:
+                cfg['staticAnalysis'] = cfg['staticAnalys']
+            if 'scoringScrip' in cfg and 'scoringScript' not in cfg:
+                cfg['scoringScript'] = cfg['scoringScrip']
+
         # Convert parameter names to match database field names
         if 'status' in kwargs:
             kwargs['problem_status'] = kwargs.pop('status')
@@ -502,6 +556,7 @@ class Problem(MongoBase, engine=engine.Problem):
 
             if 'config' in kwargs and kwargs.get('config') is not None:
                 full_config.update(kwargs.pop('config'))
+                _sync_config_aliases(full_config)
 
             if 'pipeline' in kwargs and kwargs.get('pipeline') is not None:
                 pipeline = kwargs.pop('pipeline')
@@ -515,8 +570,14 @@ class Problem(MongoBase, engine=engine.Problem):
                     full_config['customChecker'] = pipeline['customChecker']
                 if 'teacherFirst' in pipeline:
                     full_config['teacherFirst'] = pipeline['teacherFirst']
+                if 'scoringScript' in pipeline:
+                    full_config['scoringScript'] = pipeline['scoringScript']
+                    full_config['scoringScrip'] = pipeline['scoringScript']
                 if 'scoringScrip' in pipeline:
                     full_config['scoringScript'] = pipeline['scoringScrip']
+                if 'staticAnalysis' in pipeline:
+                    full_config['staticAnalysis'] = pipeline['staticAnalysis']
+                    full_config['staticAnalys'] = pipeline['staticAnalysis']
 
             if 'Test_Mode' in kwargs and kwargs.get('Test_Mode') is not None:
                 test_mode = kwargs.pop('Test_Mode')
@@ -527,6 +588,7 @@ class Problem(MongoBase, engine=engine.Problem):
                         'Quota_Per_Student']
 
             kwargs['config'] = full_config
+            _sync_config_aliases(kwargs['config'])
 
         if 'test_case_info' in kwargs and kwargs.get(
                 'test_case_info') is not None:
