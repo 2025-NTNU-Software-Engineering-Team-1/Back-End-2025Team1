@@ -373,30 +373,6 @@ class Problem(Document):
         default=ProblemDescription,
     )
     # New fields for API compatibility (can coexist with description)
-    input_description = StringField(
-        db_field='inputDescription',
-        default='',
-        max_length=100000,
-    )
-    output_description = StringField(
-        db_field='outputDescription',
-        default='',
-        max_length=100000,
-    )
-    hint = StringField(
-        default='',
-        max_length=100000,
-    )
-    sample_input = ListField(
-        StringField(max_length=1024),
-        default=list,
-        db_field='sampleInput',
-    )
-    sample_output = ListField(
-        StringField(max_length=1024),
-        default=list,
-        db_field='sampleOutput',
-    )
     config = DictField(
         default=dict,
         null=True,

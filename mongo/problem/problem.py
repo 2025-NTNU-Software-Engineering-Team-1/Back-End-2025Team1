@@ -438,16 +438,6 @@ class Problem(MongoBase, engine=engine.Problem):
             type,
             'problem_name':
             problem_name,
-            'input_description':
-            description_dict.get('input', ''),
-            'output_description':
-            description_dict.get('output', ''),
-            'hint':
-            description_dict.get('hint', ''),
-            'sample_input':
-            description_dict.get('sampleInput', []),
-            'sample_output':
-            description_dict.get('sampleOutput', []),
             'owner':
             user.username,
             'tags':
@@ -530,11 +520,6 @@ class Problem(MongoBase, engine=engine.Problem):
             if isinstance(desc, engine.ProblemDescription):
                 # Already a ProblemDescription, just use it
                 kwargs['description'] = desc
-                kwargs['input_description'] = desc.input
-                kwargs['output_description'] = desc.output
-                kwargs['hint'] = desc.hint
-                kwargs['sample_input'] = desc.sample_input
-                kwargs['sample_output'] = desc.sample_output
             elif isinstance(desc, dict):
                 # Convert dict to ProblemDescription
                 kwargs['description'] = engine.ProblemDescription(
@@ -545,11 +530,6 @@ class Problem(MongoBase, engine=engine.Problem):
                     sample_input=desc.get('sampleInput', []),
                     sample_output=desc.get('sampleOutput', []),
                 )
-                kwargs['input_description'] = desc.get('input')
-                kwargs['output_description'] = desc.get('output')
-                kwargs['hint'] = desc.get('hint')
-                kwargs['sample_input'] = desc.get('sampleInput')
-                kwargs['sample_output'] = desc.get('sampleOutput')
 
         if 'config' in kwargs or 'pipeline' in kwargs or 'Test_Mode' in kwargs:
             full_config = problem.obj.config or {}
