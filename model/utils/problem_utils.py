@@ -30,6 +30,7 @@ def build_config_and_pipeline(problem: Problem) -> Tuple[Dict, Dict]:
         'teacherFirst': config_payload.get('teacherFirst', False),
         'scoringScript': config_payload.get('scoringScript',
                                             {'custom': False}),
+        'staticAnalysis': static_analysis,
     }
     return config_payload, pipeline_payload
 

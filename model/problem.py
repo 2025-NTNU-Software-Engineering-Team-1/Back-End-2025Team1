@@ -664,6 +664,110 @@ def get_meta(token: str, problem_id: int):
     return HTTPResponse(data=meta)
 
 
+@problem_api.route('/<int:problem_id>/meta', methods=['PUT'])
+@identity_verify(0, 1)
+@Request.doc('problem_id', 'problem', Problem)
+def update_problem_meta(user: User, problem: Problem):
+    """Update problem config/pipeline only (no files)."""
+    if not problem.permission(user, problem.Permission.MANAGE):
+        return permission_error_response()
+    if not problem.permission(user=user, req=problem.Permission.ONLINE):
+        return online_error_response()
+    if not request.content_type or not request.content_type.startswith(
+            'application/json'):
+        return HTTPError(
+            'Content-Type must be application/json',
+            400,
+            data={'contentType': request.content_type},
+        )
+    data = request.json or {}
+    config_payload = data.get('config') or {}
+    pipeline_payload = data.get('pipeline') or {}
+
+    legacy_config = {}
+    for key in (
+            'compilation',
+            'aiVTuber',
+            'aiVTuberMaxToken',
+            'aiVTuberMode',
+            'acceptedFormat',
+            'artifactCollection',
+            'maxStudentZipSizeMB',
+            'networkAccessRestriction',
+    ):
+        if config_payload.get(key) is not None:
+            legacy_config[key] = config_payload[key]
+    static_analysis = (config_payload.get('staticAnalysis')
+                       or config_payload.get('staticAnalys')
+                       or pipeline_payload.get('staticAnalysis'))
+    if config_payload.get('networkAccessRestriction'):
+        static_analysis = static_analysis or {}
+        static_analysis['networkAccessRestriction'] = config_payload[
+            'networkAccessRestriction']
+    if static_analysis:
+        legacy_config['staticAnalysis'] = static_analysis
+        legacy_config['staticAnalys'] = static_analysis
+    kwargs = {}
+    if legacy_config:
+        kwargs['config'] = drop_none(legacy_config)
+
+    legacy_pipeline = {}
+    for key in ('fopen', 'fwrite', 'executionMode', 'customChecker',
+                'teacherFirst'):
+        if pipeline_payload.get(key) is not None:
+            legacy_pipeline[key] = pipeline_payload[key]
+    if 'scoringScript' in pipeline_payload and pipeline_payload[
+            'scoringScript'] is not None:
+        legacy_pipeline['scoringScript'] = pipeline_payload['scoringScript']
+        legacy_pipeline['scoringScrip'] = pipeline_payload['scoringScript']
+    if 'scoringScrip' in pipeline_payload and pipeline_payload[
+            'scoringScrip'] is not None:
+        legacy_pipeline['scoringScript'] = pipeline_payload['scoringScrip']
+    if 'staticAnalysis' in pipeline_payload and pipeline_payload[
+            'staticAnalysis'] is not None:
+        legacy_pipeline['staticAnalysis'] = pipeline_payload['staticAnalysis']
+    if legacy_pipeline:
+        kwargs['pipeline'] = drop_none(legacy_pipeline)
+
+    test_mode_payload = data.get('Test_Mode') or {}
+    derived_test_mode = {}
+    if 'trialMode' in config_payload:
+        derived_test_mode['Enabled'] = config_payload['trialMode']
+    if 'trialModeQuotaPerStudent' in config_payload:
+        derived_test_mode['Quota_Per_Student'] = config_payload[
+            'trialModeQuotaPerStudent']
+    if derived_test_mode:
+        test_mode_payload = {
+            **test_mode_payload,
+            **{
+                k: v
+                for k, v in derived_test_mode.items() if v is not None
+            }
+        }
+    if test_mode_payload:
+        kwargs['Test_Mode'] = drop_none(test_mode_payload)
+
+    if not kwargs:
+        return HTTPResponse('Success.')
+    try:
+        Problem.edit_problem(
+            user=user,
+            problem_id=problem.id,
+            **kwargs,
+        )
+    except ValidationError as ve:
+        return HTTPError(
+            'Invalid or missing arguments.',
+            400,
+            data=ve.to_dict(),
+        )
+    except engine.DoesNotExist:
+        return HTTPError('Course not found', 404)
+    except ValueError as exc:
+        return HTTPError(str(exc), 400)
+    return HTTPResponse('Success.')
+
+
 @problem_api.route('/<int:problem_id>/asset/<asset_type>', methods=['GET'])
 @Request.args('token: str')
 def download_problem_asset(token: str, problem_id: int, asset_type: str):
@@ -842,7 +946,7 @@ def problem_migrate_test_case(user: User, problem: Problem):
 @problem_api.route('/static-analysis/options', methods=['GET'])
 def get_static_analysis_options():
     try:
-        library_symbols = [
+        symbols = [
             'stdio.h',
             'stdlib.h',
             'string.h',
@@ -876,9 +980,20 @@ def get_static_analysis_options():
             'deque',
             'memory',
         ]
+        headers = sorted({s for s in symbols if s.endswith('.h')})
+        functions = sorted({s for s in symbols if not s.endswith('.h')})
+        imports = []  # Python import list is intentionally empty for now
 
-        return HTTPResponse('Success.',
-                            data={'librarySymbols': library_symbols})
+        return HTTPResponse(
+            'Success.',
+            data={
+                'librarySymbols': {
+                    'imports': imports,
+                    'headers': headers,
+                    'functions': functions,
+                }
+            },
+        )
 
     except Exception as e:
         return HTTPError(str(e), 400)
