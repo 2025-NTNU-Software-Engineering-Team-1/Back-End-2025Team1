@@ -430,24 +430,15 @@ class Problem(MongoBase, engine=engine.Problem):
 
         description_dict = description or {}
         problem_args = drop_none({
-            'courses':
-            course_objs,
-            'problem_status':
-            status,
-            'problem_type':
-            type,
-            'problem_name':
-            problem_name,
-            'owner':
-            user.username,
-            'tags':
-            tags,
-            'quota':
-            quota,
-            'default_code':
-            default_code,
-            'config':
-            full_config,
+            'courses': course_objs,
+            'problem_status': status,
+            'problem_type': type,
+            'problem_name': problem_name,
+            'owner': user.username,
+            'tags': tags,
+            'quota': quota,
+            'default_code': default_code,
+            'config': full_config,
         })
         # Create ProblemDescription for the embedded document field
         if description_dict:
