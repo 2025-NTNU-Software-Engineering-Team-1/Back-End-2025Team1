@@ -417,6 +417,7 @@ class Problem(Document):
         max_length=10**4,
         default='',
     )
+    meta = {'strict': False}
 
     # === Test Mode Fields ===
     test_mode_enabled = BooleanField(db_field='testModeEnabled', default=False)
