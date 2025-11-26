@@ -38,6 +38,7 @@ __all__ = [
     'TrialSubmission',
     'JudgeQueueFullError',
     'TestCaseNotFound',
+    'SubmissionCodeNotFound',
 ]
 
 # TODO: modular token function
