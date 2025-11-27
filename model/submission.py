@@ -15,6 +15,7 @@ from mongo import engine
 from mongo.utils import (
     RedisCache,
     drop_none,
+    MinioClient,
 )
 from .utils import *
 from .auth import *
@@ -399,6 +400,22 @@ def get_submission_pdf(user, submission: Submission, item):
     )
 
 
+@submission_api.route('/<submission>/static-analysis', methods=['GET'])
+@login_required
+@Request.doc('submission', Submission)
+def get_static_analysis(user, submission: Submission):
+    if not submission.permission(user, Submission.Permission.FEEDBACK):
+        return HTTPError('forbidden.', 403)
+    report = submission.sa_report or ""
+    report_url = None
+    if submission.sa_report_path:
+        try:
+            report_url = MinioClient().presign_get(submission.sa_report_path)
+        except Exception:
+            current_app.logger.exception("Failed to presign SA report")
+    return HTTPResponse('', data={"report": report, "reportUrl": report_url})
+
+
 @submission_api.route('/<submission>/complete', methods=['PUT'])
 @Request.json('tasks: list', 'token: str')
 @Request.doc('submission', Submission)
@@ -406,7 +423,8 @@ def on_submission_complete(submission: Submission, tasks, token):
     if not Submission.verify_token(submission.id, token):
         return HTTPError('i don\'t know you', 403)
     try:
-        submission.process_result(tasks)
+        static_analysis = request.json.get('staticAnalysis')
+        submission.process_result(tasks, static_analysis=static_analysis)
     except (ValidationError, KeyError) as e:
         return HTTPError(
             'invalid data!\n'
