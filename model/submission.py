@@ -290,9 +290,20 @@ def get_submission(user, submission: Submission):
                 ret['code'] = code if code is not None else ''
         except (UnicodeDecodeError, SubmissionCodeNotFound):
             ret['code'] = ''
+        except Exception as e:  # MinIO/network issues or other unexpected errors
+            current_app.logger.error(
+                f"failed to load submission code [{submission.id}]: {e}")
+            ret['code'] = ''
+            ret['codeDownloadUrl'] = None
 
     if has_output:
-        ret['tasks'] = submission.get_detailed_result()
+        try:
+            ret['tasks'] = submission.get_detailed_result()
+        except Exception as e:
+            current_app.logger.error(
+                f"failed to load submission outputs [{submission.id}]: {e}")
+            ret['tasks'] = []
+            ret['tasksError'] = 'Failed to load outputs'
     else:
         ret['tasks'] = submission.get_result()
     return HTTPResponse(data=ret)
