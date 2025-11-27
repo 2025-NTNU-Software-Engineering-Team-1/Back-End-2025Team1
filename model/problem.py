@@ -164,6 +164,11 @@ def get_problem_detailed(user, problem: Problem):
         status='problemStatus',
         type='problemType',
     )
+    config_payload, pipeline_payload = _build_config_and_pipeline(problem)
+    if config_payload:
+        info['config'] = config_payload
+    if pipeline_payload:
+        info['pipeline'] = pipeline_payload
     info.update({'submitCount': problem.submit_count(user)})
     return HTTPResponse(
         'Success.',
@@ -193,8 +198,9 @@ def upload_problem_assets(user: User, problem: Problem):
         }
 
         valid_files = {k: v for k, v in files_data.items() if v is not None}
-
-        if not valid_files:
+        # 如果之前已經有 asset，可以只更新 meta，不強制上傳檔案
+        has_existing_assets = bool((problem.config or {}).get('assetPaths'))
+        if not valid_files and not has_existing_assets:
             return HTTPError('No files provided', 400)
         meta_raw = request.form.get('meta')
         try:
@@ -778,6 +784,42 @@ def download_problem_asset(token: str, problem_id: int, asset_type: str):
     problem = Problem(problem_id)
     if not problem:
         return HTTPError(f'{problem} not found', 404)
+    asset_paths = (problem.config or {}).get('assetPaths', {})
+    path = asset_paths.get(asset_type)
+    if not path:
+        return HTTPError('Asset not found', 404)
+    minio_client = MinioClient()
+    try:
+        obj = minio_client.client.get_object(minio_client.bucket, path)
+        data = obj.read()
+    except Exception as exc:
+        return HTTPError(str(exc), 404)
+    finally:
+        try:
+            obj.close()
+            obj.release_conn()
+        except Exception:
+            pass
+    filename = path.split('/')[-1] or f'{asset_type}'
+    return send_file(
+        BytesIO(data),
+        mimetype='application/octet-stream',
+        as_attachment=True,
+        download_name=filename,
+    )
+
+
+@problem_api.route('/<int:problem_id>/asset/<asset_type>/download',
+                   methods=['GET'])
+@login_required
+@Request.doc('problem_id', 'problem', Problem)
+def download_problem_asset_manage(user: User, problem: Problem,
+                                  asset_type: str):
+    """Allow managers (teacher/admin) to download uploaded assets."""
+    if not problem.permission(user, problem.Permission.MANAGE):
+        return permission_error_response()
+    if not problem.permission(user=user, req=problem.Permission.ONLINE):
+        return online_error_response()
     asset_paths = (problem.config or {}).get('assetPaths', {})
     path = asset_paths.get(asset_type)
     if not path:
