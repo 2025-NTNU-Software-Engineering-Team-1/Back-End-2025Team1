@@ -3,6 +3,7 @@ import io
 import os
 import pathlib
 import secrets
+from mongo.utils import generate_ulid
 import logging
 from typing import (
     Any,
@@ -21,7 +22,6 @@ from flask import current_app
 from tempfile import NamedTemporaryFile
 from datetime import date, datetime, timedelta
 from zipfile import ZipFile, is_zipfile, BadZipFile
-from ulid import ULID
 import abc
 
 from . import engine
@@ -429,7 +429,7 @@ class BaseSubmission(abc.ABC):
         return self.send()  # Calls subclass's send()
 
     def _generate_code_minio_path(self):
-        return f'submissions/{ULID()}.zip'
+        return f'submissions/{generate_ulid()}.zip'
 
     def _put_code(self, code_file) -> str:
         '''
@@ -504,7 +504,9 @@ class BaseSubmission(abc.ABC):
         '''
         raise NotImplementedError
 
-    def process_result(self, tasks: list):
+    def process_result(self,
+                       tasks: list,
+                       static_analysis: Optional[dict] = None):
         '''
         process results from sandbox
 
@@ -519,10 +521,43 @@ class BaseSubmission(abc.ABC):
                     'execTime': int,
                     'memoryUsage': int
                 }
+            static_analysis:
+                optional static analysis payload from sandbox
         '''
         self.logger.info(f'recieve {self} result')
         processed_tasks = []
         minio_client = MinioClient()
+
+        sa_updates = {}
+        if static_analysis:
+            sa_status = static_analysis.get('status', '').lower()
+            if sa_status == 'skip':
+                sa_updates.update(
+                    sa_status=None,
+                    sa_message=static_analysis.get('message'),
+                    sa_report=static_analysis.get('report'),
+                )
+            else:
+                sa_updates.update(
+                    sa_status=0 if sa_status == 'pass' else 1,
+                    sa_message=static_analysis.get('message'),
+                    sa_report=static_analysis.get('report'),
+                )
+            report_path = static_analysis.get('reportPath')
+            report_text = static_analysis.get('report') or ''
+            if report_path:
+                sa_updates['sa_report_path'] = report_path
+            elif report_text:
+                # upload report text to minio for later download
+                minio_client = MinioClient()
+                object_name = f'static-analysis/{self.id}_{generate_ulid()}.txt'
+                minio_client.upload_file_object(
+                    io.BytesIO(report_text.encode('utf-8')),
+                    object_name=object_name,
+                    length=len(report_text.encode('utf-8')),
+                    content_type='text/plain',
+                )
+                sa_updates['sa_report_path'] = object_name
 
         for i, task_cases in enumerate(tasks):
             # process cases
@@ -595,6 +630,7 @@ class BaseSubmission(abc.ABC):
             tasks=tasks,
             exec_time=exec_time,
             memory_usage=memory_usage,
+            **sa_updates,
         )
         self.reload()
         self.finish_judging()  # Call subclass's finish_judging
@@ -604,7 +640,7 @@ class BaseSubmission(abc.ABC):
         '''
         generate a output file path for minio
         '''
-        return f'submissions/task{task_no:02d}_case{case_no:02d}_{ULID()}.zip'
+        return f'submissions/task{task_no:02d}_case{case_no:02d}_{generate_ulid()}.zip'
 
     @staticmethod
     @abc.abstractmethod

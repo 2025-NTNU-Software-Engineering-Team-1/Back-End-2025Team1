@@ -20,6 +20,7 @@ __all__ = (
     'RedisCache',
     'doc_required',
     'drop_none',
+    'generate_ulid',
 )
 
 
@@ -171,6 +172,26 @@ def doc_required(
 
 def drop_none(d: Dict):
     return {k: v for k, v in d.items() if v is not None}
+
+
+def generate_ulid() -> str:
+    """
+    Generate a ULID-like string; fall back to uuid4 hex if ulid package
+    is missing or incompatible.
+    """
+    try:
+        import ulid as _ulid  # type: ignore
+        if hasattr(_ulid, 'new'):
+            return str(_ulid.new())
+        if hasattr(_ulid, 'ULID'):
+            try:
+                return str(_ulid.ULID())
+            except Exception:
+                pass
+    except Exception:
+        pass
+    import uuid
+    return uuid.uuid4().hex
 
 
 class MinioClient:

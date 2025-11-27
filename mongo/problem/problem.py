@@ -13,7 +13,7 @@ from typing import (
 from dataclasses import dataclass
 from io import BytesIO
 from zipfile import BadZipFile
-from ulid import ULID
+from mongo.utils import generate_ulid
 from .. import engine
 from ..base import MongoBase
 from ..course import *
@@ -631,7 +631,7 @@ class Problem(MongoBase, engine=engine.Problem):
         self.reload('test_case')
 
     def _generate_test_case_obj_path(self):
-        return f'problem-test-case/{ULID()}.zip'
+        return f'problem-test-case/{generate_ulid()}.zip'
 
     def _validate_test_case(self, test_case: BinaryIO):
         '''
