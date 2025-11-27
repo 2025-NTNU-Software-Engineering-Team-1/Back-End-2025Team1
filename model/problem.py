@@ -210,7 +210,8 @@ def upload_problem_assets(user: User, problem: Problem):
             meta=meta,
         )
 
-        return HTTPResponse('Success.', data={'ok': True})  # (回傳 ok: true)
+        return HTTPResponse('Success.', data={'ok':
+                                              True})  # (returns ok: true)
 
     except BadZipFile as e:
         return HTTPError(f'Invalid zip file: {str(e)}', 400)

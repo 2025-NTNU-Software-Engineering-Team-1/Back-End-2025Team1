@@ -227,7 +227,8 @@ class TestPATRoutes(BaseTester):
 
         error_data = json_data.get('data', {})
 
-        backend_message = error_data.get('Message', '後端未提供詳細錯誤訊息')
+        backend_message = error_data.get(
+            'Message', 'Backend did not provide detailed error message')
 
         assert rv.status_code == 200, f"\nBack-End error: {backend_message}"
         assert json_data['status'] == 'ok'

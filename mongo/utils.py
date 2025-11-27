@@ -194,7 +194,7 @@ class MinioClient:
         part_size: int = 5 * 1024 * 1024,
     ):
         """
-        將檔案物件上傳至 MinIO，並自動處理檔案指標/分段大小設定。
+        Upload file object to MinIO, handling file pointer/part size settings automatically.
         """
         try:
             file_obj.seek(0)
@@ -212,7 +212,7 @@ class MinioClient:
 
     def download_file(self, object_name: str) -> bytes:
         """
-        從 MinIO 下載檔案並以 bytes 回傳。
+        Download file from MinIO and return as bytes.
         """
         response = self.client.get_object(self.bucket, object_name)
         try:

@@ -218,7 +218,7 @@ class Problem(MongoBase, engine=engine.Problem):
         meta: Optional[Dict[str, Any]] = None,
     ):
         '''
-        更新題目資源 (assets)，並「合併」設定
+        Update problem assets and "merge" settings
         '''
         files_data = files_data or {}
         meta = meta or {}
@@ -471,7 +471,7 @@ class Problem(MongoBase, engine=engine.Problem):
         **kwargs,
     ):
         """
-        編輯現有題目 (部分更新)
+        Edit existing problem (partial update)
         """
         from mongo import Course
 

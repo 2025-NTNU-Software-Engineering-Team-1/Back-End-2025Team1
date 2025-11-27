@@ -23,7 +23,7 @@ def hash_pat_token(pat_token: str) -> str:
 
 
 def get_pat_status(pat_obj):
-    """判斷 PAT token 的狀態"""
+    """Check the status of the PAT token"""
     if pat_obj.is_revoked:
         return "deactivated"  # When revoked by Admin
 
@@ -45,7 +45,7 @@ def add_pat_to_database(pat_id,
                         hash_val,
                         scope=None,
                         due_time=None):
-    """在資料庫中新增 PAT token"""
+    """Add a PAT token to the database"""
     try:
         pat = PersonalAccessToken(
             pat_id=pat_id,
