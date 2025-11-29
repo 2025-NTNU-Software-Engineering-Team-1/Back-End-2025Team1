@@ -82,7 +82,7 @@ def derive_build_strategy(problem: Problem, submission_mode: int,
     if exec_mode == 'functionOnly':
         return 'makeFunctionOnly'
     if exec_mode == 'interactive':
-        return 'makeInteractive' if is_zip else 'compile'
+        return 'makeInteractive'
     # general (legacy zip -> makeNormal)
     if is_zip:
         return 'makeNormal'

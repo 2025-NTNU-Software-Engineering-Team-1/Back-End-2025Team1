@@ -13,6 +13,7 @@ from typing import (
 from dataclasses import dataclass
 from io import BytesIO
 from zipfile import BadZipFile
+from pathlib import Path
 from mongo.utils import generate_ulid
 from .. import engine
 from ..base import MongoBase
@@ -236,23 +237,44 @@ class Problem(MongoBase, engine=engine.Problem):
                 'local_service.zip': ('local_service', 'local_service.zip'),
             }
 
-            new_asset_paths = {}
-            for key, (asset_type, filename) in resource_files.items():
-                file_obj = files_data.get(key)
-                if file_obj:
-                    path = self._save_asset_file(minio_client, file_obj,
-                                                 asset_type, filename)
-                    new_asset_paths[asset_type] = path
-
             meta = meta or {}
             pipeline_payload = meta.get('pipeline') or {}
             meta_config = meta.get('config') or {}
             current_config = copy.deepcopy(self.obj.config
                                            or Problem.config.default())
             current_config.update(meta_config)
+            execution_mode = (pipeline_payload.get('executionMode') or
+                              current_config.get('executionMode', 'general'))
+
+            new_asset_paths = {}
+            inferred_teacher_lang = None
+            for key, (asset_type, filename) in resource_files.items():
+                file_obj = files_data.get(key)
+                if file_obj:
+                    # Preserve original filename for Teacher_file to keep extension
+                    stored_name = filename
+                    if key == 'Teacher_file' and file_obj.filename:
+                        stored_name = Path(file_obj.filename).name
+                    path = self._save_asset_file(minio_client, file_obj,
+                                                 asset_type, stored_name)
+                    new_asset_paths[asset_type] = path
+                    if key == 'Teacher_file':
+                        ext = (Path(file_obj.filename or '').suffix
+                               or '').lower().lstrip('.')
+                        ext_map = {'c': 'c', 'cpp': 'cpp', 'py': 'py'}
+                        if ext in ext_map:
+                            inferred_teacher_lang = ext_map[ext]
+                        elif execution_mode == 'interactive':
+                            raise ValueError(
+                                "interactive mode requires Teacher_file filename ending with .c/.cpp/.py to infer teacherLang"
+                            )
+
             if new_asset_paths:
                 current_asset_paths = current_config.get('assetPaths', {})
                 current_asset_paths.update(new_asset_paths)
+                if inferred_teacher_lang and current_asset_paths.get(
+                        'teacherLang') is None:
+                    current_asset_paths['teacherLang'] = inferred_teacher_lang
                 current_config['assetPaths'] = current_asset_paths
             kwargs_for_edit = {}
             if meta_config or new_asset_paths:
@@ -260,8 +282,6 @@ class Problem(MongoBase, engine=engine.Problem):
             if pipeline_payload:
                 kwargs_for_edit['pipeline'] = pipeline_payload
 
-            execution_mode = (pipeline_payload.get('executionMode') or
-                              current_config.get('executionMode', 'general'))
             asset_paths = current_config.get('assetPaths', {})
             if execution_mode == 'functionOnly' and 'makefile' not in asset_paths:
                 raise ValueError('functionOnly mode requires makefile.zip')
