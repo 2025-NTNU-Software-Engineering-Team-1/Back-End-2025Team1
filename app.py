@@ -29,6 +29,7 @@ def app():
         (ann_api, '/ann'),
         (ranking_api, '/ranking'),
         (post_api, '/post'),
+        (discussion_api, '/discussion'),
         (copycat_api, '/copycat'),
         (health_api, '/health'),
         (user_api, '/user'),

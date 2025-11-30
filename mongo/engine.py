@@ -593,6 +593,61 @@ class Post(Document):
     thread = ReferenceField('PostThread', db_field='postThread')
 
 
+class DiscussionPost(Document):
+    meta = {
+        'indexes': ['problem_id'],
+    }
+    post_id = SequenceField(db_field='postId', required=True, unique=True)
+    title = StringField(required=True, max_length=128)
+    content = StringField(required=True, max_length=100000)
+    problem_id = StringField(required=True,
+                             max_length=64,
+                             db_field='problemId')
+    category = StringField(max_length=64, default='')
+    language = StringField(max_length=32, default='')
+    contains_code = BooleanField(default=False, db_field='containsCode')
+    reply_count = IntField(default=0, db_field='replyCount')
+    like_count = IntField(default=0, db_field='likeCount')
+    is_pinned = BooleanField(default=False, db_field='isPinned')
+    is_closed = BooleanField(default=False, db_field='isClosed')
+    is_solved = BooleanField(default=False, db_field='isSolved')
+    is_deleted = BooleanField(default=False, db_field='isDeleted')
+    author = ReferenceField('User', required=True)
+    created_time = DateTimeField(default=datetime.now, db_field='createdTime')
+    updated_time = DateTimeField(default=datetime.now, db_field='updatedTime')
+
+
+class DiscussionReply(Document):
+    meta = {
+        'indexes': ['reply_id', 'post'],
+    }
+    reply_id = SequenceField(db_field='replyId', required=True, unique=True)
+    post = ReferenceField('DiscussionPost', required=True)
+    parent_reply = ReferenceField('DiscussionReply', null=True)
+    reply_to_id = IntField(db_field='replyToId', required=True)
+    author = ReferenceField('User', required=True)
+    content = StringField(required=True, max_length=100000)
+    contains_code = BooleanField(default=False, db_field='containsCode')
+    created_time = DateTimeField(default=datetime.now, db_field='createdTime')
+    like_count = IntField(default=0, db_field='likeCount')
+    is_deleted = BooleanField(default=False, db_field='isDeleted')
+
+
+class DiscussionLike(Document):
+    meta = {
+        'indexes': [
+            {
+                'fields': ['user', 'target_type', 'target_id'],
+                'unique': True,
+            },
+        ],
+    }
+    user = ReferenceField('User', required=True)
+    target_type = StringField(required=True, choices=['post', 'reply'])
+    target_id = IntField(required=True)
+    created_time = DateTimeField(default=datetime.now, db_field='createdTime')
+
+
 class Config(Document):
     meta = {
         'allow_inheritance': True,
