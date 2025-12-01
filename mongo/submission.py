@@ -506,7 +506,8 @@ class BaseSubmission(abc.ABC):
 
     def process_result(self,
                        tasks: list,
-                       static_analysis: Optional[dict] = None):
+                       static_analysis: Optional[dict] = None,
+                       checker: Optional[dict] = None):
         '''
         process results from sandbox
 
@@ -529,6 +530,7 @@ class BaseSubmission(abc.ABC):
         minio_client = MinioClient()
 
         sa_updates = {}
+        checker_updates = {}
         if static_analysis:
             sa_status = static_analysis.get('status', '').lower()
             if sa_status == 'skip':
@@ -558,6 +560,37 @@ class BaseSubmission(abc.ABC):
                     content_type='text/plain',
                 )
                 sa_updates['sa_report_path'] = object_name
+        if checker:
+            messages = checker.get('messages') or []
+            summary_parts = []
+            for msg in messages:
+                case_no = msg.get('case')
+                status = msg.get('status')
+                text = msg.get('message') or ''
+                if not text:
+                    continue
+                prefix = f"{case_no}: " if case_no is not None else ''
+                status_part = f"[{status}]" if status else ''
+                summary_parts.append(f"{prefix}{status_part} {text}".strip())
+            if summary_parts:
+                checker_updates['checker_summary'] = "\n".join(summary_parts)
+            artifacts = checker.get('artifacts') or {}
+            artifact_path = (artifacts.get('checkResultPath')
+                             or artifacts.get('path')
+                             or artifacts.get('checkerPath'))
+            artifact_text = artifacts.get('checkResult')
+            if artifact_path:
+                checker_updates['checker_artifacts_path'] = artifact_path
+            elif artifact_text:
+                object_name = f'checker/{self.id}_{generate_ulid()}.txt'
+                data = artifact_text.encode('utf-8')
+                minio_client.upload_file_object(
+                    io.BytesIO(data),
+                    object_name=object_name,
+                    length=len(data),
+                    content_type='text/plain',
+                )
+                checker_updates['checker_artifacts_path'] = object_name
 
         for i, task_cases in enumerate(tasks):
             # process cases
@@ -631,6 +664,7 @@ class BaseSubmission(abc.ABC):
             exec_time=exec_time,
             memory_usage=memory_usage,
             **sa_updates,
+            **checker_updates,
         )
         self.reload()
         self.finish_judging()  # Call subclass's finish_judging
@@ -1023,7 +1057,6 @@ class Submission(MongoBase, BaseSubmission, engine=engine.Submission):
         Submission.assign_token(self.id, tar.token)
         post_data = {
             'token': tar.token,
-            'checker': 'print("not implement yet. qaq")',
             'problem_id': self.problem_id,
             'language': self.language,
             'submission_type': 'normal',  # Flag for sandbox

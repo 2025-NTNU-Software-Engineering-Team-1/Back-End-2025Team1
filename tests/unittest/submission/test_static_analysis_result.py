@@ -95,3 +95,47 @@ def test_sa_report_path_preserved(app):
 
         assert submission.sa_status == 0
         assert submission.sa_report_path == "custom/report.txt"
+
+
+def test_checker_payload_summary_and_artifact_upload(app):
+    with app.app_context():
+        user = utils.user.create_user()
+        problem = _simple_problem()
+        submission = _make_submission(user, problem)
+
+        tasks = _dummy_tasks(problem)
+        checker_payload = {
+            "type":
+            "custom",
+            "messages": [
+                {
+                    "case": "0000",
+                    "status": "WA",
+                    "message": "diff at line 3"
+                },
+                {
+                    "case": "0001",
+                    "status": "AC",
+                    "message": ""
+                },
+            ],
+            "artifacts": {
+                "checkResult": "checker body text"
+            },
+        }
+
+        submission.process_result(
+            tasks,
+            static_analysis=None,
+            checker=checker_payload,
+        )
+        submission.reload()
+
+        assert "diff at line 3" in (submission.checker_summary or "")
+        assert submission.checker_artifacts_path
+
+        # ensure uploaded
+        minio_client = MinioClient()
+        obj = minio_client.client.stat_object(
+            minio_client.bucket, submission.checker_artifacts_path)
+        assert obj is not None

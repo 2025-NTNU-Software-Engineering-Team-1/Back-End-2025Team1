@@ -1,6 +1,7 @@
 import json
 import enum
 import copy
+import ast
 from hashlib import md5
 from datetime import datetime, timedelta
 from typing import (
@@ -229,7 +230,7 @@ class Problem(MongoBase, engine=engine.Problem):
 
             minio_client = MinioClient()
             resource_files = {
-                'checker.py': ('checker', 'checker.py'),
+                'custom_checker.py': ('checker', 'custom_checker.py'),
                 'makefile.zip': ('makefile', 'makefile.zip'),
                 'Teacher_file': ('teacher_file', 'Teacher_file'),
                 'score.py': ('scoring_script', 'score.py'),
@@ -255,6 +256,17 @@ class Problem(MongoBase, engine=engine.Problem):
                     stored_name = filename
                     if key == 'Teacher_file' and file_obj.filename:
                         stored_name = Path(file_obj.filename).name
+                    if key == 'custom_checker.py':
+                        try:
+                            content = file_obj.read()
+                            compile(content, stored_name, 'exec')
+                            file_obj = BytesIO(content)
+                        except SyntaxError as exc:
+                            raise ValueError(
+                                f'invalid custom checker syntax: {exc}')
+                        except Exception as exc:
+                            raise ValueError(
+                                f'failed to read custom checker: {exc}')
                     path = self._save_asset_file(minio_client, file_obj,
                                                  asset_type, stored_name)
                     new_asset_paths[asset_type] = path

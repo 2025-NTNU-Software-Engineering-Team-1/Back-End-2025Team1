@@ -971,6 +971,44 @@ class TestProblem(BaseTester):
         assert payload['assetPaths'] == {}
         assert payload['teacherFirst'] is False
         assert payload['buildStrategy'] == 'compile'
+        assert payload.get('customChecker') is False
+
+    def test_get_meta_with_custom_checker(self, client_admin, monkeypatch):
+
+        class MockSandbox:
+            token = 'SandboxToken'
+
+        class MockConfig:
+            sandbox_instances = [MockSandbox()]
+
+        from mongo.sandbox import Submission
+        monkeypatch.setattr(Submission, 'config', MockConfig)
+        prob = utils.problem.create_problem()
+        buf = io.BytesIO()
+        with ZipFile(buf, 'w') as zf:
+            zf.writestr('Makefile', 'all:\n\t@touch a.out\n')
+        buf.seek(0)
+        data = {
+            'meta': json.dumps({
+                'pipeline': {
+                    'customChecker': True,
+                },
+            }),
+            'custom_checker.py':
+            (io.BytesIO(b'print("ok")'), 'custom_checker.py'),
+        }
+        rv = client_admin.put(
+            f'/problem/{prob.problem_id}/assets',
+            data=data,
+            content_type='multipart/form-data',
+        )
+        assert rv.status_code == 200
+        rv = client_admin.get(f'/problem/{prob.problem_id}/meta',
+                              query_string={'token': 'SandboxToken'})
+        assert rv.status_code == 200, rv.get_json()
+        payload = rv.get_json()['data']
+        assert payload['customChecker'] is True
+        assert payload['checkerAsset']
 
     def test_get_meta_build_strategy_variants(self, client_admin, client,
                                               monkeypatch):
@@ -1087,7 +1125,8 @@ class TestProblem(BaseTester):
         buf.seek(0)
         data = {
             'meta': json.dumps(meta_payload),
-            'checker.py': (io.BytesIO(b'print("ok")'), 'checker.py'),
+            'custom_checker.py':
+            (io.BytesIO(b'print("ok")'), 'custom_checker.py'),
             'makefile.zip': (buf, 'makefile.zip'),
         }
         rv = client_admin.put(

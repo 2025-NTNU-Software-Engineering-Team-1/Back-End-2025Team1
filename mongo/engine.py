@@ -510,6 +510,11 @@ class BaseSubmissionDocument(Document):
         max_length=256,
         db_field='codeMinioPath',
     )
+    checker_summary = StringField(default=None, null=True)
+    checker_artifacts_path = StringField(
+        null=True,
+        max_length=256,
+    )
     compiled_binary = FileField(default=None, null=True)
     compiled_binary_minio_path = StringField(
         null=True,

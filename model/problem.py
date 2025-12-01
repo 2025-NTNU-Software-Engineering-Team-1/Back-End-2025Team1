@@ -189,7 +189,7 @@ def upload_problem_assets(user: User, problem: Problem):
     try:
         files_data = {
             'case': request.files.get('case'),
-            'checker.py': request.files.get('checker.py'),
+            'custom_checker.py': request.files.get('custom_checker.py'),
             'makefile.zip': request.files.get('makefile.zip'),
             'Teacher_file': request.files.get('Teacher_file'),
             'score.py': request.files.get('score.py'),
@@ -651,6 +651,8 @@ def get_meta(token: str, problem_id: int):
         'submissionMode': submission_mode,
     }
     execution_mode = pipeline_payload.get('executionMode', 'general')
+    custom_checker = pipeline_payload.get(
+        'customChecker', config_payload.get('customChecker', False))
     meta.update({
         'executionMode':
         execution_mode,
@@ -664,6 +666,10 @@ def get_meta(token: str, problem_id: int):
             submission_mode=submission_mode,
             execution_mode=execution_mode,
         ),
+        'customChecker':
+        bool(custom_checker),
+        'checkerAsset': (config_payload.get('assetPaths', {})
+                         or {}).get('checker'),
     })
     network_cfg = config_payload.get('networkAccessRestriction')
     if network_cfg:

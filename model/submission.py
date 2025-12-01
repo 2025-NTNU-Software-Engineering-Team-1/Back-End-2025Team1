@@ -435,7 +435,10 @@ def on_submission_complete(submission: Submission, tasks, token):
         return HTTPError('i don\'t know you', 403)
     try:
         static_analysis = request.json.get('staticAnalysis')
-        submission.process_result(tasks, static_analysis=static_analysis)
+        checker_payload = request.json.get('checker')
+        submission.process_result(tasks,
+                                  static_analysis=static_analysis,
+                                  checker=checker_payload)
     except (ValidationError, KeyError) as e:
         return HTTPError(
             'invalid data!\n'
