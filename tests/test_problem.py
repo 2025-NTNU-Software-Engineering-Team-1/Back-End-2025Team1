@@ -1,11 +1,13 @@
 import io
 import json
+import hashlib
 import pytest
 from zipfile import ZipFile
 from tests.base_tester import BaseTester
 from mongo import *
 from mongo.problem import Problem
 from tests import utils
+from mongo.utils import MinioClient
 
 
 def get_file(file):
@@ -449,6 +451,56 @@ class TestProblem(BaseTester):
         assert rv.status_code == 200, rv.get_json()
         assert rv.get_json(
         )['data']['fillInTemplate'] == 'This is a fill in template.'
+
+
+def test_asset_checksum_ok(client_admin, problem_ids):
+    pid = problem_ids('teacher', 1, False)[0]
+    problem = Problem(pid)
+    mc = MinioClient()
+    data = b'hello-checker'
+    object_name = f'problem/{pid}/checker/custom_checker.py'
+    mc.upload_file_object(io.BytesIO(data),
+                          object_name=object_name,
+                          length=len(data))
+    problem.update(config={'assetPaths': {'checker': object_name}})
+    token = Submission.config().sandbox_instances[0].token
+    rv = client_admin.get(
+        f'/problem/{pid}/asset-checksum',
+        query_string={
+            'token': token,
+            'assetType': 'checker',
+        },
+    )
+    assert rv.status_code == 200
+    checksum = rv.get_json()['data']['checksum']
+    assert checksum == hashlib.md5(data).hexdigest()
+
+
+def test_asset_checksum_missing_asset_returns_none(client_admin, problem_ids):
+    pid = problem_ids('teacher', 1, False)[0]
+    token = Submission.config().sandbox_instances[0].token
+    rv = client_admin.get(
+        f'/problem/{pid}/asset-checksum',
+        query_string={
+            'token': token,
+            'assetType': 'checker',
+        },
+    )
+    assert rv.status_code == 200
+    assert rv.get_json()['data']['checksum'] is None
+
+
+def test_asset_checksum_invalid_type(client_admin, problem_ids):
+    pid = problem_ids('teacher', 1, False)[0]
+    token = Submission.config().sandbox_instances[0].token
+    rv = client_admin.get(
+        f'/problem/{pid}/asset-checksum',
+        query_string={
+            'token': token,
+            'assetType': 'unknown_type',
+        },
+    )
+    assert rv.status_code == 400
 
     # admin view offline problem (GET /problem/<problem_id>)
     def test_admin_view_offline_problem(self, client_admin):

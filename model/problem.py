@@ -10,6 +10,7 @@ from mongo import *
 from mongo import engine
 from mongo import sandbox
 from mongo.utils import drop_none, MinioClient
+import hashlib
 from mongo.problem import *
 from .utils.problem_utils import (build_config_and_pipeline as
                                   _build_config_and_pipeline)
@@ -611,6 +612,38 @@ def get_testdata(token: str, problem: Problem):
         as_attachment=True,
         download_name=f'testdata-{problem.id}.zip',
     )
+
+
+SUPPORTED_ASSET_TYPES = {
+    'checker',
+    'scoring_script',
+    'makefile',
+    'teacher_file',
+    'local_service',  # reserved
+}
+
+
+@problem_api.get('/<int:problem_id>/asset-checksum')
+@Request.args('token: str', 'asset_type: str')
+def get_asset_checksum(token: str, problem_id: int, asset_type: str):
+    if sandbox.find_by_token(token) is None:
+        return HTTPError('Invalid sandbox token', 401)
+    if asset_type not in SUPPORTED_ASSET_TYPES:
+        return HTTPError(f'Unsupported asset type: {asset_type}', 400)
+    problem = Problem(problem_id)
+    if not problem:
+        return HTTPError(f'Problem {problem_id} not found', 404)
+    asset_path = (problem.config or {}).get('assetPaths', {}).get(asset_type)
+    if not asset_path:
+        return HTTPResponse(data={'checksum': None})
+    minio_client = MinioClient()
+    try:
+        content = minio_client.download_file(asset_path)
+    except Exception as exc:
+        current_app.logger.exception("Failed to fetch asset checksum")
+        return HTTPError(f'Failed to fetch asset: {exc}', 500)
+    digest = hashlib.md5(content).hexdigest()
+    return HTTPResponse(data={'checksum': digest})
 
 
 @problem_api.route('/<int:problem_id>/checksum', methods=['GET'])
