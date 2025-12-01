@@ -7,7 +7,7 @@ import pathlib
 import io
 import zipfile
 import inspect
-from datetime import datetime
+from datetime import datetime, timedelta
 from pprint import pprint
 from mongo import *
 from mongo import engine
@@ -1457,3 +1457,45 @@ def test_download_compiled_binary_permission_denied(app, forge_client):
     client = forge_client(stranger.username)
     rv = client.get(f'/submission/{submission.id}/artifact/compiledBinary')
     assert rv.status_code == 403, rv.get_json()
+
+
+def test_get_late_seconds_with_homework(client_admin, problem_ids):
+    pid = problem_ids('teacher', 1, True)[0]
+    course = Course(engine.Course.objects(teacher='teacher').first())
+    end_time = datetime.now() - timedelta(hours=1)
+    utils.homework.add_homework(
+        user=course.teacher,
+        course=course.course_name,
+        hw_name='late-hw',
+        problem_ids=[pid],
+        markdown='',
+        scoreboard_status=0,
+        start=None,
+        end=end_time.timestamp(),
+        penalty='',
+    )
+    submission = Submission.add(problem_id=pid, username='student', lang=1)
+    submission.update(timestamp=end_time + timedelta(minutes=30))
+    resp = client_admin.get(
+        f'/submission/{submission.id}/late-seconds',
+        query_string={
+            'token': Submission.config().sandbox_instances[0].token,
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()['data']
+    assert data['lateSeconds'] >= 1800
+
+
+def test_get_late_seconds_without_homework(client_admin, problem_ids):
+    pid = problem_ids('teacher', 1, False)[0]
+    submission = Submission.add(problem_id=pid, username='student', lang=1)
+    resp = client_admin.get(
+        f'/submission/{submission.id}/late-seconds',
+        query_string={
+            'token': Submission.config().sandbox_instances[0].token,
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()['data']
+    assert data['lateSeconds'] == -1

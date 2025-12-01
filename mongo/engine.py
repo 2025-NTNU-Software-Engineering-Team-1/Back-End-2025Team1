@@ -521,6 +521,13 @@ class BaseSubmissionDocument(Document):
         max_length=256,
         db_field='compiledBinaryMinioPath',
     )
+    scorer_artifacts_path = StringField(
+        null=True,
+        max_length=256,
+        db_field='scorerArtifactsPath',
+    )
+    scoring_message = StringField(default=None, null=True)
+    scoring_breakdown = DictField(default=None, null=True)
     last_send = DateTimeField(db_field='lastSend', default=datetime.now)
     ip_addr = StringField(default=None, null=True)
     sa_status = IntField(null=True, db_field='saStatus')

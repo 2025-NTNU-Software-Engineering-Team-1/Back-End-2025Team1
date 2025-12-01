@@ -653,6 +653,12 @@ def get_meta(token: str, problem_id: int):
     execution_mode = pipeline_payload.get('executionMode', 'general')
     custom_checker = pipeline_payload.get(
         'customChecker', config_payload.get('customChecker', False))
+    scoring_cfg = pipeline_payload.get(
+        'scoringScript', config_payload.get('scoringScript',
+                                            {'custom': False}))
+    if isinstance(scoring_cfg, dict):
+        scoring_cfg = scoring_cfg.get('custom', False)
+    scoring_custom = bool(scoring_cfg)
     meta.update({
         'executionMode':
         execution_mode,
@@ -670,6 +676,10 @@ def get_meta(token: str, problem_id: int):
         bool(custom_checker),
         'checkerAsset': (config_payload.get('assetPaths', {})
                          or {}).get('checker'),
+        'scoringScript':
+        scoring_custom,
+        'scorerAsset': (config_payload.get('assetPaths', {})
+                        or {}).get('scoring_script'),
     })
     network_cfg = config_payload.get('networkAccessRestriction')
     if network_cfg:

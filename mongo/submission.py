@@ -163,6 +163,28 @@ class BaseSubmission(abc.ABC):
         tmp_dir.mkdir(exist_ok=True, parents=True)
         return tmp_dir
 
+    def calculate_late_seconds(self) -> int:
+        """Return late seconds relative to homework deadlines. -1 表示無作業資訊。"""
+        problem = self.problem
+        username = self.username
+        pid = str(self.problem_id)
+        candidates = []
+        for hw_ref in problem.homeworks:
+            hw = Homework(hw_ref.id) if hasattr(hw_ref,
+                                                "id") else Homework(hw_ref)
+            if not hw:
+                continue
+            student_status = hw.student_status.get(username)
+            if not student_status or pid not in student_status:
+                continue
+            end_time = hw.duration.end
+            if end_time is None:
+                continue
+            delta = (self.timestamp - end_time).total_seconds()
+            late = int(delta) if delta > 0 else 0
+            candidates.append(late)
+        return min(candidates) if candidates else -1
+
     @property
     def main_code_ext(self):
         lang2ext = {0: '.c', 1: '.cpp', 2: '.py', 3: '.pdf'}
@@ -507,7 +529,9 @@ class BaseSubmission(abc.ABC):
     def process_result(self,
                        tasks: list,
                        static_analysis: Optional[dict] = None,
-                       checker: Optional[dict] = None):
+                       checker: Optional[dict] = None,
+                       scoring: Optional[dict] = None,
+                       status_override: Optional[str] = None):
         '''
         process results from sandbox
 
@@ -531,6 +555,9 @@ class BaseSubmission(abc.ABC):
 
         sa_updates = {}
         checker_updates = {}
+        scoring_updates = {}
+        scoring_score_override = None
+        scoring_status_code = None
         if static_analysis:
             sa_status = static_analysis.get('status', '').lower()
             if sa_status == 'skip':
@@ -591,6 +618,39 @@ class BaseSubmission(abc.ABC):
                     content_type='text/plain',
                 )
                 checker_updates['checker_artifacts_path'] = object_name
+        if scoring:
+            if scoring.get('score') is not None:
+                try:
+                    scoring_score_override = int(scoring.get('score'))
+                except (TypeError, ValueError):
+                    scoring_score_override = 0
+            scoring_status = scoring.get('status')
+            if scoring_status:
+                scoring_status_code = self.status2code.get(scoring_status)
+            message = scoring.get('message')
+            if message:
+                scoring_updates['scoring_message'] = message
+            breakdown = scoring.get('breakdown')
+            if isinstance(breakdown, dict):
+                scoring_updates['scoring_breakdown'] = breakdown
+            artifacts = scoring.get('artifacts') or {}
+            artifact_path = (artifacts.get('path')
+                             or artifacts.get('scorerPath')
+                             or artifacts.get('checkResultPath'))
+            artifact_text = (artifacts.get('text') or artifacts.get('stdout')
+                             or artifacts.get('stderr'))
+            if artifact_path:
+                scoring_updates['scorer_artifacts_path'] = artifact_path
+            elif artifact_text:
+                object_name = f'scorer/{self.id}_{generate_ulid()}.txt'
+                data = artifact_text.encode('utf-8')
+                minio_client.upload_file_object(
+                    io.BytesIO(data),
+                    object_name=object_name,
+                    length=len(data),
+                    content_type='text/plain',
+                )
+                scoring_updates['scorer_artifacts_path'] = object_name
 
         for i, task_cases in enumerate(tasks):
             # process cases
@@ -657,14 +717,29 @@ class BaseSubmission(abc.ABC):
         exec_time = max(t.exec_time for t in tasks) if tasks else -1
         memory_usage = max(t.memory_usage for t in tasks) if tasks else -1
 
+        final_score = sum(task.score for task in tasks)
+        if scoring_score_override is not None:
+            final_score = scoring_score_override
+
+        final_status = status
+        override_status = status_override or None
+        if override_status:
+            override_status = self.status2code.get(override_status,
+                                                   final_status)
+        if scoring_status_code is not None:
+            override_status = scoring_status_code
+        if override_status is not None:
+            final_status = override_status
+
         self.update(
-            score=sum(task.score for task in tasks),
-            status=status,
+            score=final_score,
+            status=final_status,
             tasks=tasks,
             exec_time=exec_time,
             memory_usage=memory_usage,
             **sa_updates,
             **checker_updates,
+            **scoring_updates,
         )
         self.reload()
         self.finish_judging()  # Call subclass's finish_judging

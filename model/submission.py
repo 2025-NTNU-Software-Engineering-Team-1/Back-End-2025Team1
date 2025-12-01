@@ -12,6 +12,7 @@ from flask import (
 from datetime import datetime, timedelta
 from mongo import *
 from mongo import engine
+from mongo import sandbox
 from mongo.utils import (
     RedisCache,
     drop_none,
@@ -427,6 +428,16 @@ def get_static_analysis(user, submission: Submission):
     return HTTPResponse('', data={"report": report, "reportUrl": report_url})
 
 
+@submission_api.route('/<submission>/late-seconds', methods=['GET'])
+@Request.args('token: str')
+@Request.doc('submission', Submission)
+def get_late_seconds(submission: Submission, token: str):
+    if sandbox.find_by_token(token) is None:
+        return HTTPError('Invalid sandbox token', 401)
+    late_seconds = submission.calculate_late_seconds()
+    return HTTPResponse('', data={"lateSeconds": late_seconds})
+
+
 @submission_api.route('/<submission>/complete', methods=['PUT'])
 @Request.json('tasks: list', 'token: str')
 @Request.doc('submission', Submission)
@@ -436,9 +447,13 @@ def on_submission_complete(submission: Submission, tasks, token):
     try:
         static_analysis = request.json.get('staticAnalysis')
         checker_payload = request.json.get('checker')
+        scoring_payload = request.json.get('scoring')
+        status_override = request.json.get('statusOverride')
         submission.process_result(tasks,
                                   static_analysis=static_analysis,
-                                  checker=checker_payload)
+                                  checker=checker_payload,
+                                  scoring=scoring_payload,
+                                  status_override=status_override)
     except (ValidationError, KeyError) as e:
         return HTTPError(
             'invalid data!\n'
