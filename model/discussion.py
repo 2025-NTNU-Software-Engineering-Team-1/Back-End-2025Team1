@@ -166,6 +166,7 @@ def get_discussion_problem_meta(user, problem_id):
     return HTTPResponse('Success.',
                         data={
                             'Status': 'OK',
+                            'Problem_Name': problem.problem_name,
                             'Role': meta['role_label'],
                             'Deadline': deadline_str,
                             'Code_Allowed': meta['code_allowed'],
@@ -598,20 +599,39 @@ def _clamp_int(raw_value: Optional[str], default: int, min_value: int,
 
 
 def _build_feed(user, mode: str, limit: int, page: int) -> Dict:
-    allowed_course_ids = _get_viewable_course_ids(user)
-    posts = _collect_posts(allowed_course_ids)
-    sorted_posts = _sort_posts(posts, mode)
-    total = len(sorted_posts)
+    # 使用新的 DiscussionPost 系統而不是舊的 Post 系統
+    queryset = engine.DiscussionPost.objects(is_deleted=False)
+    
+    # 根據模式排序
+    if mode == 'Hot':
+        # 熱門：先置頂，再按讚數+回覆數排序，最後按時間
+        posts_list = list(queryset)
+        posts_list.sort(
+            key=lambda p: (
+                -int(p.is_pinned or False),
+                -(p.like_count or 0) - (p.reply_count or 0),
+                -p.created_time.timestamp()
+            )
+        )
+    else:  # New
+        # 最新：先置頂，再按時間排序
+        posts_list = list(queryset.order_by('-is_pinned', '-created_time'))
+    
+    total = len(posts_list)
     start = (page - 1) * limit
     end = start + limit
-    window = sorted_posts[start:end] if start < total else []
+    window = posts_list[start:end] if start < total else []
+    
+    # 序列化貼文
+    serialized_posts = [_serialize_problem_post(post) for post in window]
+    
     return {
         'Status': 'OK',
         'Mode': mode,
         'Limit': limit,
         'Page': page,
         'Total': total,
-        'Posts': window,
+        'Posts': serialized_posts,
     }
 
 
@@ -713,6 +733,9 @@ def _serialize_problem_post(post) -> Dict:
         'Like_Count': post.like_count or 0,
         'Reply_Count': post.reply_count or 0,
         'Is_Pinned': bool(post.is_pinned),
+        'Is_Solved': bool(post.is_solved),
+        'Is_Closed': bool(post.is_closed),
+        'Problem_id': post.problem_id,
     }
 
 
@@ -869,6 +892,8 @@ def _serialize_discussion_post(post, replies_qs) -> Dict:
         'Reply_Count': post.reply_count,
         'Category': post.category,
         'Is_Solved': bool(post.is_solved),
+        'Is_Pinned': bool(post.is_pinned),
+        'Is_Closed': bool(post.is_closed),
         'Replies': replies,
     }
 
