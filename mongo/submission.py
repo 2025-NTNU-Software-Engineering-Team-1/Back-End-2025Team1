@@ -1313,6 +1313,8 @@ class Submission(MongoBase, BaseSubmission, engine=engine.Submission):
             if not config or not isinstance(config, dict):
                 return False
             artifact_collection = config.get('artifactCollection', [])
+            if any(isinstance(v, str) for v in artifact_collection):
+                return 'zip' in artifact_collection
             return task_index in artifact_collection
         except (AttributeError, KeyError):
             return False
@@ -1365,6 +1367,30 @@ class Submission(MongoBase, BaseSubmission, engine=engine.Submission):
         except Exception as e:
             self.logger.error(f'Failed to set compiled binary: {e}')
             raise
+
+    def set_case_artifact(self, task_no: int, case_no: int,
+                          artifact_data: bytes) -> None:
+        if task_no < 0 or task_no >= len(self.tasks):
+            raise FileNotFoundError('task not exist')
+        task = self.tasks[task_no]
+        if case_no < 0 or case_no >= len(task.cases):
+            raise FileNotFoundError('case not exist')
+        minio_client = MinioClient()
+        object_name = self._generate_output_minio_path(task_no, case_no)
+        minio_client.upload_file_object(
+            io.BytesIO(artifact_data),
+            object_name,
+            len(artifact_data),
+            content_type='application/zip',
+        )
+        # ensure every case has output field to satisfy validation
+        for c in task.cases:
+            if not hasattr(c, "output"):
+                c.output = None
+        case = task.cases[case_no]
+        case.output = getattr(case, "output", None)
+        case.output_minio_path = object_name
+        self.save()
 
     def has_compiled_binary(self) -> bool:
         try:

@@ -20,11 +20,13 @@ def build_config_and_pipeline(problem: Problem) -> Tuple[Dict, Dict]:
     config_payload.setdefault('acceptedFormat', 'code')
     config_payload.setdefault('compilation',
                               config_payload.get('compilation', False))
+    config_payload.setdefault('exposeTestcase', False)
     config_payload['trialMode'] = config_payload.get(
         'trialMode', config_payload.get('testMode', False))
     pipeline_payload = {
         'fopen': config_payload.get('fopen', False),
         'fwrite': config_payload.get('fwrite', False),
+        'exposeTestcase': config_payload.get('exposeTestcase', False),
         'executionMode': config_payload.get('executionMode', 'general'),
         'customChecker': config_payload.get('customChecker', False),
         'teacherFirst': config_payload.get('teacherFirst', False),

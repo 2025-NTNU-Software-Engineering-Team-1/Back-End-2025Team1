@@ -1459,6 +1459,49 @@ def test_download_compiled_binary_permission_denied(app, forge_client):
     assert rv.status_code == 403, rv.get_json()
 
 
+def test_upload_case_artifact_api(app, forge_client):
+    with app.app_context():
+        submission, _, _, owner = _create_submission_with_artifact(app, [0])
+        token = Submission.config().sandbox_instances[0].token
+        client = app.test_client()
+        payload = b'PK\x03\x04'  # dummy zip header start
+        rv = client.put(
+            f'/submission/{submission.id}/artifact/upload/case',
+            query_string={
+                'task': 0,
+                'case': 0,
+                'token': token
+            },
+            data=payload,
+            content_type='application/zip',
+        )
+        assert rv.status_code == 200, rv.get_json()
+        submission.reload()
+        path = submission.tasks[0].cases[0].output_minio_path
+        assert path
+        data = MinioClient().download_file(path)
+        assert data.startswith(payload)
+
+
+def test_upload_compiled_binary_api(app):
+    with app.app_context():
+        submission, _, _ = _create_submission_with_compiled_binary(
+            app, enable_compilation=True, with_binary=False)
+        token = Submission.config().sandbox_instances[0].token
+        client = app.test_client()
+        binary = b'\x00\x01binary'
+        rv = client.put(
+            f'/submission/{submission.id}/artifact/upload/binary',
+            query_string={'token': token},
+            data=binary,
+            content_type='application/octet-stream',
+        )
+        assert rv.status_code == 200, rv.get_json()
+        submission.reload()
+        assert submission.has_compiled_binary()
+        assert submission.get_compiled_binary().read() == binary
+
+
 def test_get_late_seconds_with_homework(client_admin, problem_ids):
     pid = problem_ids('teacher', 1, True)[0]
     course = Course(engine.Course.objects(teacher='teacher').first())

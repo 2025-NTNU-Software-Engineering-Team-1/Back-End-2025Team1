@@ -268,6 +268,7 @@ def create_problem(user: User, **ks):
             'artifactCollection',
             'maxStudentZipSizeMB',
             'networkAccessRestriction',
+            'exposeTestcase',
     ):
         if config_payload.get(key) is not None:
             legacy_config[key] = config_payload[key]
@@ -285,10 +286,12 @@ def create_problem(user: User, **ks):
         ks['config'] = drop_none(legacy_config)
 
     legacy_pipeline = {}
-    for key in ('fopen', 'fwrite', 'executionMode', 'customChecker',
-                'teacherFirst'):
+    for key in ('fopen', 'fwrite', 'exposeTestcase', 'executionMode',
+                'customChecker', 'teacherFirst'):
         if pipeline_payload.get(key) is not None:
             legacy_pipeline[key] = pipeline_payload[key]
+            if key == 'exposeTestcase' and 'exposeTestcase' not in legacy_config:
+                legacy_config['exposeTestcase'] = pipeline_payload[key]
     if 'scoringScript' in pipeline_payload and pipeline_payload[
             'scoringScript'] is not None:
         legacy_pipeline['scoringScript'] = pipeline_payload['scoringScript']
@@ -705,6 +708,8 @@ def get_meta(token: str, problem_id: int):
             submission_mode=submission_mode,
             execution_mode=execution_mode,
         ),
+        'exposeTestcase':
+        config_payload.get('exposeTestcase', False),
         'customChecker':
         bool(custom_checker),
         'checkerAsset': (config_payload.get('assetPaths', {})
@@ -713,6 +718,8 @@ def get_meta(token: str, problem_id: int):
         scoring_custom,
         'scorerAsset': (config_payload.get('assetPaths', {})
                         or {}).get('scoring_script'),
+        'artifactCollection':
+        config_payload.get('artifactCollection', []),
     })
     network_cfg = config_payload.get('networkAccessRestriction')
     if network_cfg:

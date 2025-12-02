@@ -367,7 +367,9 @@ def download_submission_compiled_binary(user, submission: Submission):
                       or user.username == submission.username)
     if not has_permission:
         return HTTPError('permission denied', 403)
-    if not (problem.config or {}).get('compilation'):
+    artifact_collection = (problem.config or {}).get('artifactCollection', [])
+    if not ((problem.config or {}).get('compilation') or
+            ('compiledBinary' in artifact_collection)):
         return HTTPError('compiled binary not available', 404)
     if not submission.has_compiled_binary():
         return HTTPError('compiled binary not found', 404)
@@ -382,6 +384,46 @@ def download_submission_compiled_binary(user, submission: Submission):
         as_attachment=True,
         download_name=f'submission-{submission.id}-compiled.bin',
     )
+
+
+@submission_api.put('/<submission>/artifact/upload/case')
+@Request.args('task', 'case', 'token')
+@Request.doc('submission', Submission)
+def upload_submission_case_artifact(submission: Submission, task, case,
+                                    token: str):
+    try:
+        task_no = int(task)
+        case_no = int(case)
+    except (TypeError, ValueError):
+        return HTTPError('invalid task/case', 400)
+    if sandbox.find_by_token(token) is None:
+        return HTTPError('Invalid sandbox token', 401)
+    data = request.get_data()
+    if not data:
+        return HTTPError('no data', 400)
+    try:
+        submission.set_case_artifact(task_no, case_no, data)
+    except FileNotFoundError as e:
+        return HTTPError(str(e), 404)
+    except Exception as e:
+        return HTTPError(f'failed to upload artifact: {e}', 500)
+    return HTTPResponse('artifact uploaded', data={'ok': True})
+
+
+@submission_api.put('/<submission>/artifact/upload/binary')
+@Request.args('token')
+@Request.doc('submission', Submission)
+def upload_submission_compiled_binary(submission: Submission, token: str):
+    if sandbox.find_by_token(token) is None:
+        return HTTPError('Invalid sandbox token', 401)
+    data = request.get_data()
+    if not data:
+        return HTTPError('no data', 400)
+    try:
+        submission.set_compiled_binary(data)
+    except Exception as e:
+        return HTTPError(f'failed to upload compiled binary: {e}', 500)
+    return HTTPResponse('binary uploaded', data={'ok': True})
 
 
 @submission_api.route('/<submission>/pdf/<item>', methods=['GET'])
