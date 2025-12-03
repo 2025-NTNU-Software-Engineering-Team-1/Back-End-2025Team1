@@ -236,6 +236,8 @@ class Problem(MongoBase, engine=engine.Problem):
                 'score.py': ('scoring_script', 'score.py'),
                 'score.json': ('scoring_config', 'score.json'),
                 'local_service.zip': ('local_service', 'local_service.zip'),
+                'resource_data.zip': ('resource_data', 'resource_data.zip'),
+                'resourcedata.zip': ('resource_data', 'resource_data.zip'),
             }
 
             meta = meta or {}

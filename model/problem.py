@@ -1,9 +1,10 @@
 import json
 import hashlib
 import statistics
+import logging
 from dataclasses import asdict
 from io import BytesIO
-from flask import Blueprint, request, send_file
+from flask import Blueprint, request, send_file, current_app
 from urllib import parse
 from zipfile import BadZipFile
 from mongo import *
@@ -189,13 +190,23 @@ def upload_problem_assets(user: User, problem: Problem):
 
     try:
         files_data = {
-            'case': request.files.get('case'),
-            'custom_checker.py': request.files.get('custom_checker.py'),
-            'makefile.zip': request.files.get('makefile.zip'),
-            'Teacher_file': request.files.get('Teacher_file'),
-            'score.py': request.files.get('score.py'),
-            'score.json': request.files.get('score.json'),
-            'local_service.zip': request.files.get('local_service.zip'),
+            'case':
+            request.files.get('case'),
+            'custom_checker.py':
+            request.files.get('custom_checker.py'),
+            'makefile.zip':
+            request.files.get('makefile.zip'),
+            'Teacher_file':
+            request.files.get('Teacher_file'),
+            'score.py':
+            request.files.get('score.py'),
+            'score.json':
+            request.files.get('score.json'),
+            'local_service.zip':
+            request.files.get('local_service.zip'),
+            'resource_data.zip':
+            request.files.get('resource_data.zip')
+            or request.files.get('resourcedata.zip'),
         }
 
         valid_files = {k: v for k, v in files_data.items() if v is not None}
@@ -268,7 +279,7 @@ def create_problem(user: User, **ks):
             'artifactCollection',
             'maxStudentZipSizeMB',
             'networkAccessRestriction',
-            'exposeTestcase',
+            'resourceData',
     ):
         if config_payload.get(key) is not None:
             legacy_config[key] = config_payload[key]
@@ -286,12 +297,12 @@ def create_problem(user: User, **ks):
         ks['config'] = drop_none(legacy_config)
 
     legacy_pipeline = {}
-    for key in ('fopen', 'fwrite', 'exposeTestcase', 'executionMode',
+    for key in ('fopen', 'fwrite', 'resourceData', 'executionMode',
                 'customChecker', 'teacherFirst'):
         if pipeline_payload.get(key) is not None:
             legacy_pipeline[key] = pipeline_payload[key]
-            if key == 'exposeTestcase' and 'exposeTestcase' not in legacy_config:
-                legacy_config['exposeTestcase'] = pipeline_payload[key]
+            if key == 'resourceData' and 'resourceData' not in legacy_config:
+                legacy_config['resourceData'] = pipeline_payload[key]
     if 'scoringScript' in pipeline_payload and pipeline_payload[
             'scoringScript'] is not None:
         legacy_pipeline['scoringScript'] = pipeline_payload['scoringScript']
@@ -405,6 +416,7 @@ def manage_problem(user: User, problem: Problem):
                 'artifactCollection',
                 'maxStudentZipSizeMB',
                 'networkAccessRestriction',
+                'resourceData',
         ):
             if config_payload.get(key) is not None:
                 legacy_config[key] = config_payload[key]
@@ -422,10 +434,12 @@ def manage_problem(user: User, problem: Problem):
             kwargs['config'] = drop_none(legacy_config)
 
         legacy_pipeline = kwargs.get('pipeline') or {}
-        for key in ('fopen', 'fwrite', 'executionMode', 'customChecker',
-                    'teacherFirst'):
+        for key in ('fopen', 'fwrite', 'resourceData', 'executionMode',
+                    'customChecker', 'teacherFirst'):
             if pipeline_payload.get(key) is not None:
                 legacy_pipeline[key] = pipeline_payload[key]
+                if key == 'resourceData' and 'resourceData' not in legacy_config:
+                    legacy_config['resourceData'] = pipeline_payload[key]
         if 'scoringScript' in pipeline_payload and pipeline_payload[
                 'scoringScript'] is not None:
             legacy_pipeline['scoringScript'] = pipeline_payload[
@@ -623,6 +637,7 @@ SUPPORTED_ASSET_TYPES = {
     'makefile',
     'teacher_file',
     'local_service',  # reserved
+    'resource_data',
 }
 
 
@@ -643,7 +658,13 @@ def get_asset_checksum(token: str, problem_id: int, asset_type: str):
     try:
         content = minio_client.download_file(asset_path)
     except Exception as exc:
-        current_app.logger.exception("Failed to fetch asset checksum")
+        logger = None
+        try:
+            logger = current_app.logger
+        except Exception:
+            logger = logging.getLogger(__name__)
+        if logger:
+            logger.exception("Failed to fetch asset checksum")
         return HTTPError(f'Failed to fetch asset: {exc}', 500)
     digest = hashlib.md5(content).hexdigest()
     return HTTPResponse(data={'checksum': digest})
@@ -708,8 +729,8 @@ def get_meta(token: str, problem_id: int):
             submission_mode=submission_mode,
             execution_mode=execution_mode,
         ),
-        'exposeTestcase':
-        config_payload.get('exposeTestcase', False),
+        'resourceData':
+        config_payload.get('resourceData', False),
         'customChecker':
         bool(custom_checker),
         'checkerAsset': (config_payload.get('assetPaths', {})
