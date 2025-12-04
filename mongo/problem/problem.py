@@ -238,6 +238,8 @@ class Problem(MongoBase, engine=engine.Problem):
                 'local_service.zip': ('local_service', 'local_service.zip'),
                 'resource_data.zip': ('resource_data', 'resource_data.zip'),
                 'resourcedata.zip': ('resource_data', 'resource_data.zip'),
+                'resource_data_teacher.zip':
+                ('resource_data_teacher', 'resource_data_teacher.zip'),
             }
 
             meta = meta or {}

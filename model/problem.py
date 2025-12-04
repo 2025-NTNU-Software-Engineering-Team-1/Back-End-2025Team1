@@ -207,6 +207,8 @@ def upload_problem_assets(user: User, problem: Problem):
             'resource_data.zip':
             request.files.get('resource_data.zip')
             or request.files.get('resourcedata.zip'),
+            'resource_data_teacher.zip':
+            request.files.get('resource_data_teacher.zip'),
         }
 
         valid_files = {k: v for k, v in files_data.items() if v is not None}
@@ -227,6 +229,14 @@ def upload_problem_assets(user: User, problem: Problem):
             files_data=valid_files,
             meta=meta,
         )
+        # 校驗：resourceData 需要 allowRead
+        cfg_check = (meta or {}).get('config') or {}
+        pipe_check = (meta or {}).get('pipeline') or {}
+        allow_read = pipe_check.get('allowRead', cfg_check.get('allowRead'))
+        resource_data_enabled = cfg_check.get(
+            'resourceData') or pipe_check.get('resourceData')
+        if resource_data_enabled and not allow_read:
+            return HTTPError('resourceData requires allowRead=true', 400)
 
         return HTTPResponse('Success.', data={'ok':
                                               True})  # (returns ok: true)
@@ -297,7 +307,7 @@ def create_problem(user: User, **ks):
         ks['config'] = drop_none(legacy_config)
 
     legacy_pipeline = {}
-    for key in ('fopen', 'fwrite', 'resourceData', 'executionMode',
+    for key in ('allowRead', 'allowWrite', 'resourceData', 'executionMode',
                 'customChecker', 'teacherFirst'):
         if pipeline_payload.get(key) is not None:
             legacy_pipeline[key] = pipeline_payload[key]
@@ -433,13 +443,13 @@ def manage_problem(user: User, problem: Problem):
         if legacy_config:
             kwargs['config'] = drop_none(legacy_config)
 
-        legacy_pipeline = kwargs.get('pipeline') or {}
-        for key in ('fopen', 'fwrite', 'resourceData', 'executionMode',
-                    'customChecker', 'teacherFirst'):
-            if pipeline_payload.get(key) is not None:
-                legacy_pipeline[key] = pipeline_payload[key]
-                if key == 'resourceData' and 'resourceData' not in legacy_config:
-                    legacy_config['resourceData'] = pipeline_payload[key]
+    legacy_pipeline = kwargs.get('pipeline') or {}
+    for key in ('allowRead', 'allowWrite', 'resourceData', 'executionMode',
+                'customChecker', 'teacherFirst'):
+        if pipeline_payload.get(key) is not None:
+            legacy_pipeline[key] = pipeline_payload[key]
+            if key == 'resourceData' and 'resourceData' not in legacy_config:
+                legacy_config['resourceData'] = pipeline_payload[key]
         if 'scoringScript' in pipeline_payload and pipeline_payload[
                 'scoringScript'] is not None:
             legacy_pipeline['scoringScript'] = pipeline_payload[
@@ -638,6 +648,7 @@ SUPPORTED_ASSET_TYPES = {
     'teacher_file',
     'local_service',  # reserved
     'resource_data',
+    'resource_data_teacher',
 }
 
 
@@ -721,6 +732,12 @@ def get_meta(token: str, problem_id: int):
         execution_mode,
         'teacherFirst':
         pipeline_payload.get('teacherFirst', False),
+        'allowRead':
+        pipeline_payload.get('allowRead',
+                             config_payload.get('allowRead', False)),
+        'allowWrite':
+        pipeline_payload.get('allowWrite',
+                             config_payload.get('allowWrite', False)),
         'assetPaths':
         config_payload.get('assetPaths', {}),
         'buildStrategy':
@@ -731,6 +748,8 @@ def get_meta(token: str, problem_id: int):
         ),
         'resourceData':
         config_payload.get('resourceData', False),
+        'resourceDataTeacher':
+        config_payload.get('resourceDataTeacher', False),
         'customChecker':
         bool(custom_checker),
         'checkerAsset': (config_payload.get('assetPaths', {})
@@ -796,7 +815,7 @@ def update_problem_meta(user: User, problem: Problem):
         kwargs['config'] = drop_none(legacy_config)
 
     legacy_pipeline = {}
-    for key in ('fopen', 'fwrite', 'executionMode', 'customChecker',
+    for key in ('allowRead', 'allowWrite', 'executionMode', 'customChecker',
                 'teacherFirst'):
         if pipeline_payload.get(key) is not None:
             legacy_pipeline[key] = pipeline_payload[key]
