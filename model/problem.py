@@ -443,27 +443,29 @@ def manage_problem(user: User, problem: Problem):
         if legacy_config:
             kwargs['config'] = drop_none(legacy_config)
 
-    legacy_pipeline = kwargs.get('pipeline') or {}
-    for key in ('allowRead', 'allowWrite', 'resourceData', 'executionMode',
-                'customChecker', 'teacherFirst'):
-        if pipeline_payload.get(key) is not None:
-            legacy_pipeline[key] = pipeline_payload[key]
-            if key == 'resourceData' and 'resourceData' not in legacy_config:
-                legacy_config['resourceData'] = pipeline_payload[key]
-        if 'scoringScript' in pipeline_payload and pipeline_payload[
-                'scoringScript'] is not None:
-            legacy_pipeline['scoringScript'] = pipeline_payload[
-                'scoringScript']
-            legacy_pipeline['scoringScrip'] = pipeline_payload['scoringScript']
-        if 'scoringScrip' in pipeline_payload and pipeline_payload[
-                'scoringScrip'] is not None:
-            legacy_pipeline['scoringScript'] = pipeline_payload['scoringScrip']
-        if 'staticAnalysis' in pipeline_payload and pipeline_payload[
-                'staticAnalysis'] is not None:
-            legacy_pipeline['staticAnalysis'] = pipeline_payload[
-                'staticAnalysis']
-        if legacy_pipeline:
-            kwargs['pipeline'] = drop_none(legacy_pipeline)
+        legacy_pipeline = kwargs.get('pipeline') or {}
+        for key in ('allowRead', 'allowWrite', 'resourceData', 'executionMode',
+                    'customChecker', 'teacherFirst'):
+            if pipeline_payload.get(key) is not None:
+                legacy_pipeline[key] = pipeline_payload[key]
+                if key == 'resourceData' and 'resourceData' not in legacy_config:
+                    legacy_config['resourceData'] = pipeline_payload[key]
+            if 'scoringScript' in pipeline_payload and pipeline_payload[
+                    'scoringScript'] is not None:
+                legacy_pipeline['scoringScript'] = pipeline_payload[
+                    'scoringScript']
+                legacy_pipeline['scoringScrip'] = pipeline_payload[
+                    'scoringScript']
+            if 'scoringScrip' in pipeline_payload and pipeline_payload[
+                    'scoringScrip'] is not None:
+                legacy_pipeline['scoringScript'] = pipeline_payload[
+                    'scoringScrip']
+            if 'staticAnalysis' in pipeline_payload and pipeline_payload[
+                    'staticAnalysis'] is not None:
+                legacy_pipeline['staticAnalysis'] = pipeline_payload[
+                    'staticAnalysis']
+            if legacy_pipeline:
+                kwargs['pipeline'] = drop_none(legacy_pipeline)
 
         test_mode_payload = data.get('Test_Mode') or kwargs.get(
             'Test_Mode') or {}

@@ -181,7 +181,7 @@ class Pipeline(EmbeddedDocument):
     interaction_config   ：教師/學生 Binary 名稱、執行順序、stdin/stdout 配置、Checker 需求。
     custom_scoring       ：是否啟用、自訂 Score.py 路徑、I/O 介面描述。
     artifact_manifest    ：可提供下載的產物種類。
-    test_case_policy     ：命名規則（legacy/ssttnn）、允許的輸入/輸出模式（stdin/fopen、stdout/fwrite）。
+    test_case_policy     ：命名規則（legacy/ssttnn）、允許的輸入/輸出模式（stdin/allowRead、stdout/allowWrite）。
     """
 
 

@@ -25,24 +25,17 @@ def build_config_and_pipeline(problem: Problem) -> Tuple[Dict, Dict]:
     config_payload['trialMode'] = config_payload.get(
         'trialMode', config_payload.get('testMode', False))
     pipeline_payload = {
-        'allowRead':
-        config_payload.get('allowRead', config_payload.get('fopen', False)),
-        'allowWrite':
-        config_payload.get('allowWrite', config_payload.get('fwrite', False)),
-        'resourceData':
-        config_payload.get('resourceData', False),
-        'resourceDataTeacher':
-        config_payload.get('resourceDataTeacher', False),
-        'executionMode':
-        config_payload.get('executionMode', 'general'),
-        'customChecker':
-        config_payload.get('customChecker', False),
-        'teacherFirst':
-        config_payload.get('teacherFirst', False),
-        'scoringScript':
-        config_payload.get('scoringScript', {'custom': False}),
-        'staticAnalysis':
-        static_analysis,
+        'allowRead': config_payload.get('allowRead', False),
+        'allowWrite': config_payload.get('allowWrite', False),
+        'resourceData': config_payload.get('resourceData', False),
+        'resourceDataTeacher': config_payload.get('resourceDataTeacher',
+                                                  False),
+        'executionMode': config_payload.get('executionMode', 'general'),
+        'customChecker': config_payload.get('customChecker', False),
+        'teacherFirst': config_payload.get('teacherFirst', False),
+        'scoringScript': config_payload.get('scoringScript',
+                                            {'custom': False}),
+        'staticAnalysis': static_analysis,
     }
     return config_payload, pipeline_payload
 

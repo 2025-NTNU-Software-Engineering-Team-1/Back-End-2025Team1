@@ -1383,12 +1383,12 @@ class Submission(MongoBase, BaseSubmission, engine=engine.Submission):
             len(artifact_data),
             content_type='application/zip',
         )
-        # ensure every case has output field to satisfy validation
-        for c in task.cases:
-            if not hasattr(c, "output"):
-                c.output = None
+        # ensure ALL tasks' cases have output field to satisfy validation
+        for t in self.tasks:
+            for c in t.cases:
+                if not hasattr(c, "output") or c.output is None:
+                    c.output = None
         case = task.cases[case_no]
-        case.output = getattr(case, "output", None)
         case.output_minio_path = object_name
         self.save()
 

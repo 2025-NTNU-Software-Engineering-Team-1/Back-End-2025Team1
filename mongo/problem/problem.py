@@ -442,8 +442,8 @@ class Problem(MongoBase, engine=engine.Problem):
             'staticAnalys': static_analysis_cfg,
             'staticAnalysis': static_analysis_cfg,
             'artifactCollection': config.get('artifactCollection', []),
-            'fopen': pipeline.get('fopen', False),
-            'fwrite': pipeline.get('fwrite', False),
+            'allowRead': pipeline.get('allowRead', False),
+            'allowWrite': pipeline.get('allowWrite', False),
             'executionMode': pipeline.get('executionMode', 'general'),
             'customChecker': pipeline.get('customChecker', False),
             'teacherFirst': pipeline.get('teacherFirst', False),
@@ -567,10 +567,10 @@ class Problem(MongoBase, engine=engine.Problem):
 
             if 'pipeline' in kwargs and kwargs.get('pipeline') is not None:
                 pipeline = kwargs.pop('pipeline')
-                if 'fopen' in pipeline:
-                    full_config['fopen'] = pipeline['fopen']
-                if 'fwrite' in pipeline:
-                    full_config['fwrite'] = pipeline['fwrite']
+                if 'allowRead' in pipeline:
+                    full_config['allowRead'] = pipeline['allowRead']
+                if 'allowWrite' in pipeline:
+                    full_config['allowWrite'] = pipeline['allowWrite']
                 if 'executionMode' in pipeline:
                     full_config['executionMode'] = pipeline['executionMode']
                 if 'customChecker' in pipeline:

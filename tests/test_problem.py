@@ -33,8 +33,8 @@ def assert_basic_problem_config(config):
     assert config['compilation'] is False
     assert config['customChecker'] is False
     assert config['executionMode'] == 'general'
-    assert config['fopen'] is False
-    assert config['fwrite'] is False
+    assert config['allowRead'] is False
+    assert config['allowWrite'] is False
     assert config['scoringScript'] == {'custom': False}
     assert config['teacherFirst'] is False
     assert config['testMode'] is False
@@ -70,8 +70,8 @@ def advanced_config_payload():
 
 def advanced_pipeline_payload():
     return {
-        'fopen': True,
-        'fwrite': True,
+        'allowRead': True,
+        'allowWrite': True,
         'executionMode': 'general',
         'customChecker': False,
         'teacherFirst': False,
@@ -289,8 +289,8 @@ class TestProblem(BaseTester):
         assert config['aiVTuber'] is True
         assert config['aiVTuberMaxToken'] == 3
         assert config['artifactCollection'] == ['zip', 'compiledBinary']
-        assert config['fopen'] is True
-        assert config['fwrite'] is True
+        assert config['allowRead'] is True
+        assert config['allowWrite'] is True
         assert config['executionMode'] == 'general'
         assert config['staticAnalysis']['networkAccessRestriction'][
             'firewallExtranet']['whitelist'] == ['192.168.1.1']
