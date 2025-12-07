@@ -806,13 +806,13 @@ def get_network_config(token: str, problem_id: int):
 
     external_model = external.get("model") or "Black"
     external_ip = external.get("ip") or []
-    extrrnal_url = external.get("url") or []
+    external_url = external.get("url") or []
     network_cfg = {
         "sidecars": sidecars,
         "external": {
             "model": external_model,
             "ip": external_ip,
-            "url": extrrnal_url,
+            "url": external_url,
         },
     }
     return HTTPResponse(data=network_cfg)
