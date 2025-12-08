@@ -20,28 +20,28 @@ from .utils.problem_utils import derive_build_strategy as _derive_build_strategy
 from .auth import *
 from .utils import *
 
-__all__ = ["problem_api"]
+__all__ = ['problem_api']
 
-problem_api = Blueprint("problem_api", __name__)
+problem_api = Blueprint('problem_api', __name__)
 
 
 def permission_error_response():
-    return HTTPError("Not enough permission", 403)
+    return HTTPError('Not enough permission', 403)
 
 
 def online_error_response():
-    return HTTPError("Problem is unavailable", 403)
+    return HTTPError('Problem is unavailable', 403)
 
 
-@problem_api.route("/", methods=["GET"])
+@problem_api.route('/', methods=['GET'])
 @login_required
 @Request.args(
-    "offset",
-    "count",
-    "problem_id",
-    "tags",
-    "name",
-    "course",
+    'offset',
+    'count',
+    'problem_id',
+    'tags',
+    'name',
+    'course',
 )
 def view_problem_list(
     user,
@@ -60,44 +60,44 @@ def view_problem_list(
             count = int(count)
     except (TypeError, ValueError):
         return HTTPError(
-            "offset and count must be integer!",
+            'offset and count must be integer!',
             400,
         )
-    problem_id, name, tags, course = (parse.unquote(p or "") or None
+    problem_id, name, tags, course = (parse.unquote(p or '') or None
                                       for p in (problem_id, name, tags,
                                                 course))
     try:
         ks = {
-            "user": user,
-            "offset": offset,
-            "count": count,
-            "tags": tags and tags.split(","),
-            "problem_id": problem_id,
-            "name": name,
-            "course": course,
+            'user': user,
+            'offset': offset,
+            'count': count,
+            'tags': tags and tags.split(','),
+            'problem_id': problem_id,
+            'name': name,
+            'course': course,
         }
         ks = {k: v for k, v in ks.items() if v is not None}
         data = Problem.get_problem_list(**ks)
     except IndexError:
-        return HTTPError("invalid offset", 400)
+        return HTTPError('invalid offset', 400)
     data = [{
-        "problemId": p.problem_id,
-        "problemName": p.problem_name,
-        "status": p.problem_status,
-        "ACUser": p.ac_user,
-        "submitter": p.submitter,
-        "tags": p.tags,
-        "type": p.problem_type,
-        "quota": p.quota,
-        "submitCount": Problem(p.problem_id).submit_count(user),
+        'problemId': p.problem_id,
+        'problemName': p.problem_name,
+        'status': p.problem_status,
+        'ACUser': p.ac_user,
+        'submitter': p.submitter,
+        'tags': p.tags,
+        'type': p.problem_type,
+        'quota': p.quota,
+        'submitCount': Problem(p.problem_id).submit_count(user),
     } for p in data]
-    return HTTPResponse("Success.", data=data)
+    return HTTPResponse('Success.', data=data)
 
 
-@problem_api.route("/<int:problem_id>", methods=["GET"])
-@problem_api.route("/view/<int:problem_id>", methods=["GET"])
+@problem_api.route('/<int:problem_id>', methods=['GET'])
+@problem_api.route('/view/<int:problem_id>', methods=['GET'])
 @login_required
-@Request.doc("problem_id", "problem", Problem)
+@Request.doc('problem_id', 'problem', Problem)
 def view_problem(user: User, problem: Problem):
     if not problem.permission(user=user, req=problem.Permission.VIEW):
         return permission_error_response()
@@ -106,80 +106,80 @@ def view_problem(user: User, problem: Problem):
 
     # ip validation
     if not problem.is_valid_ip(get_ip()):
-        return HTTPError("Invalid IP address.", 403)
+        return HTTPError('Invalid IP address.', 403)
     # filter data
     data = problem.detailed_info(
-        "problemName",
-        "description",
-        "owner",
-        "tags",
-        "allowedLanguage",
-        "courses",
-        "quota",
-        "ACUser",
-        "submitter",
-        "canViewStdout",
-        "config",
-        defaultCode="defaultCode",
-        status="problemStatus",
-        type="problemType",
-        testCase="testCase__tasks",
+        'problemName',
+        'description',
+        'owner',
+        'tags',
+        'allowedLanguage',
+        'courses',
+        'quota',
+        'ACUser',
+        'submitter',
+        'canViewStdout',
+        'config',
+        defaultCode='defaultCode',
+        status='problemStatus',
+        type='problemType',
+        testCase='testCase__tasks',
     )
     if problem.obj.problem_type == 1:
-        data.update({"fillInTemplate": problem.obj.test_case.fill_in_template})
+        data.update({'fillInTemplate': problem.obj.test_case.fill_in_template})
     data.update({
-        "submitCount": problem.submit_count(user),
-        "highScore": problem.get_high_score(user=user),
+        'submitCount': problem.submit_count(user),
+        'highScore': problem.get_high_score(user=user),
     })
     config_payload, pipeline_payload = _build_config_and_pipeline(problem)
     if config_payload:
-        data["config"] = config_payload
+        data['config'] = config_payload
     if pipeline_payload:
-        data["pipeline"] = pipeline_payload
-    return HTTPResponse("Problem can view.", data=data)
+        data['pipeline'] = pipeline_payload
+    return HTTPResponse('Problem can view.', data=data)
 
 
-@problem_api.route("/manage/<int:problem_id>", methods=["GET"])
-@Request.doc("problem_id", "problem", Problem)
+@problem_api.route('/manage/<int:problem_id>', methods=['GET'])
+@Request.doc('problem_id', 'problem', Problem)
 @identity_verify(0, 1)  # admin and teacher only
 def get_problem_detailed(user, problem: Problem):
-    """
+    '''
     Get problem's detailed information
-    """
+    '''
     if not problem.permission(user, problem.Permission.MANAGE):
         return permission_error_response()
     if not problem.permission(user=user, req=problem.Permission.ONLINE):
         return online_error_response()
     info = problem.detailed_info(
-        "courses",
-        "problemName",
-        "description",
-        "tags",
-        "testCase",
-        "ACUser",
-        "submitter",
-        "allowedLanguage",
-        "canViewStdout",
-        "quota",
-        "config",
-        status="problemStatus",
-        type="problemType",
+        'courses',
+        'problemName',
+        'description',
+        'tags',
+        'testCase',
+        'ACUser',
+        'submitter',
+        'allowedLanguage',
+        'canViewStdout',
+        'quota',
+        'config',
+        status='problemStatus',
+        type='problemType',
     )
     config_payload, pipeline_payload = _build_config_and_pipeline(problem)
     if config_payload:
-        info["config"] = config_payload
+        info['config'] = config_payload
     if pipeline_payload:
-        info["pipeline"] = pipeline_payload
-    info.update({"submitCount": problem.submit_count(user)})
+        info['pipeline'] = pipeline_payload
+    info.update({'submitCount': problem.submit_count(user)})
     return HTTPResponse(
-        "Success.",
+        'Success.',
         data=info,
     )
 
 
-@problem_api.route("/<int:problem>/assets", methods=["PUT"])
+@problem_api.route('/<int:problem>/assets', methods=['PUT'])
 @identity_verify(0, 1)
-@Request.doc("problem", Problem)
+@Request.doc('problem', Problem)
 def upload_problem_assets(user: User, problem: Problem):
 
     if not problem.permission(user, problem.Permission.MANAGE):
@@ -189,39 +189,41 @@ def upload_problem_assets(user: User, problem: Problem):
 
     try:
         files_data = {
-            "case":
-            request.files.get("case"),
-            "custom_checker.py":
-            request.files.get("custom_checker.py"),
-            "makefile.zip":
-            request.files.get("makefile.zip"),
-            "Teacher_file":
-            request.files.get("Teacher_file"),
-            "score.py":
-            request.files.get("score.py"),
-            "score.json":
-            request.files.get("score.json"),
-            "local_service.zip":
-            request.files.get("local_service.zip"),
-            "resource_data.zip":
-            request.files.get("resource_data.zip")
-            or request.files.get("resourcedata.zip"),
-            "resource_data_teacher.zip":
-            request.files.get("resource_data_teacher.zip"),
+            'case':
+            request.files.get('case'),
+            'custom_checker.py':
+            request.files.get('custom_checker.py'),
+            'makefile.zip':
+            request.files.get('makefile.zip'),
+            'Teacher_file':
+            request.files.get('Teacher_file'),
+            'score.py':
+            request.files.get('score.py'),
+            'score.json':
+            request.files.get('score.json'),
+            'local_service.zip':
+            request.files.get('local_service.zip'),
+            'resource_data.zip':
+            request.files.get('resource_data.zip')
+            or request.files.get('resourcedata.zip'),
+            'resource_data_teacher.zip':
+            request.files.get('resource_data_teacher.zip'),
+            'dockerfiles.zip':
+            request.files.get('dockerfiles.zip'),
         }
 
         valid_files = {k: v for k, v in files_data.items() if v is not None}
         # 如果之前已經有 asset，可以只更新 meta，不強制上傳檔案
-        has_existing_assets = bool((problem.config or {}).get("assetPaths"))
+        has_existing_assets = bool((problem.config or {}).get('assetPaths'))
         if not valid_files and not has_existing_assets:
-            return HTTPError("No files provided", 400)
-        meta_raw = request.form.get("meta")
+            return HTTPError('No files provided', 400)
+        meta_raw = request.form.get('meta')
         try:
             meta = json.loads(meta_raw) if meta_raw else {}
             if meta is not None and not isinstance(meta, dict):
-                raise ValueError("meta must be a JSON object")
+                raise ValueError('meta must be a JSON object')
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
-            return HTTPError(f"Invalid meta payload: {exc}", 400)
+            return HTTPError(f'Invalid meta payload: {exc}', 400)
 
         problem.update_assets(
             user=user,
@@ -229,115 +231,115 @@ def upload_problem_assets(user: User, problem: Problem):
             meta=meta,
         )
         # 校驗：resourceData 需要 allowRead
-        cfg_check = (meta or {}).get("config") or {}
-        pipe_check = (meta or {}).get("pipeline") or {}
-        allow_read = pipe_check.get("allowRead", cfg_check.get("allowRead"))
+        cfg_check = (meta or {}).get('config') or {}
+        pipe_check = (meta or {}).get('pipeline') or {}
+        allow_read = pipe_check.get('allowRead', cfg_check.get('allowRead'))
         resource_data_enabled = cfg_check.get(
-            "resourceData") or pipe_check.get("resourceData")
+            'resourceData') or pipe_check.get('resourceData')
         if resource_data_enabled and not allow_read:
-            return HTTPError("resourceData requires allowRead=true", 400)
+            return HTTPError('resourceData requires allowRead=true', 400)
 
-        return HTTPResponse("Success.", data={"ok":
+        return HTTPResponse('Success.', data={'ok':
                                               True})  # (returns ok: true)
 
     except BadZipFile as e:
-        return HTTPError(f"Invalid zip file: {str(e)}", 400)
+        return HTTPError(f'Invalid zip file: {str(e)}', 400)
     except Exception as e:
         return HTTPError(str(e), 400)
 
 
-@problem_api.route("/manage", methods=["POST"])
+@problem_api.route('/manage', methods=['POST'])
 @identity_verify(0, 1)
 @Request.json(
-    "courses: list",
-    "status",
-    "type",
-    "description",
-    "tags",
-    "problem_name",
-    "quota",
-    "test_case_info",
-    "can_view_stdout",
-    "allowed_language",
-    "default_code",
+    'courses: list',
+    'status',
+    'type',
+    'description',
+    'tags',
+    'problem_name',
+    'quota',
+    'test_case_info',
+    'can_view_stdout',
+    'allowed_language',
+    'default_code',
 )
 def create_problem(user: User, **ks):
     data = request.json or {}
 
     alias_pairs = (
-        ("problem_name", "problemName"),
-        ("allowed_language", "allowedLanguage"),
-        ("can_view_stdout", "canViewStdout"),
-        ("default_code", "defaultCode"),
-        ("test_case_info", "testCaseInfo"),
+        ('problem_name', 'problemName'),
+        ('allowed_language', 'allowedLanguage'),
+        ('can_view_stdout', 'canViewStdout'),
+        ('default_code', 'defaultCode'),
+        ('test_case_info', 'testCaseInfo'),
     )
     for dest, src in alias_pairs:
         if ks.get(dest) is None and data.get(src) is not None:
             ks[dest] = data[src]
 
-    config_payload = data.get("config") or {}
-    pipeline_payload = data.get("pipeline") or {}
+    config_payload = data.get('config') or {}
+    pipeline_payload = data.get('pipeline') or {}
 
     legacy_config = {}
     for key in (
-            "compilation",
-            "aiVTuber",
-            "aiVTuberMaxToken",
-            "aiVTuberMode",
-            "acceptedFormat",
-            "artifactCollection",
-            "maxStudentZipSizeMB",
-            "networkAccessRestriction",
-            "resourceData",
+            'compilation',
+            'aiVTuber',
+            'aiVTuberMaxToken',
+            'aiVTuberMode',
+            'acceptedFormat',
+            'artifactCollection',
+            'maxStudentZipSizeMB',
+            'networkAccessRestriction',
+            'resourceData',
     ):
         if config_payload.get(key) is not None:
             legacy_config[key] = config_payload[key]
-    static_analysis = (config_payload.get("staticAnalysis")
-                       or config_payload.get("staticAnalys")
-                       or pipeline_payload.get("staticAnalysis"))
-    if config_payload.get("networkAccessRestriction"):
+    static_analysis = (config_payload.get('staticAnalysis')
+                       or config_payload.get('staticAnalys')
+                       or pipeline_payload.get('staticAnalysis'))
+    if config_payload.get('networkAccessRestriction'):
         static_analysis = static_analysis or {}
-        static_analysis["networkAccessRestriction"] = config_payload[
-            "networkAccessRestriction"]
+        static_analysis['networkAccessRestriction'] = config_payload[
+            'networkAccessRestriction']
     if static_analysis:
-        legacy_config["staticAnalysis"] = static_analysis
-        legacy_config["staticAnalys"] = static_analysis
+        legacy_config['staticAnalysis'] = static_analysis
+        legacy_config['staticAnalys'] = static_analysis
     if legacy_config:
-        ks["config"] = drop_none(legacy_config)
+        ks['config'] = drop_none(legacy_config)
 
     legacy_pipeline = {}
     for key in (
-            "allowRead",
-            "allowWrite",
-            "resourceData",
-            "executionMode",
-            "customChecker",
-            "teacherFirst",
+            'allowRead',
+            'allowWrite',
+            'resourceData',
+            'executionMode',
+            'customChecker',
+            'teacherFirst',
     ):
         if pipeline_payload.get(key) is not None:
             legacy_pipeline[key] = pipeline_payload[key]
-            if key == "resourceData" and "resourceData" not in legacy_config:
-                legacy_config["resourceData"] = pipeline_payload[key]
-    if ("scoringScript" in pipeline_payload
-            and pipeline_payload["scoringScript"] is not None):
-        legacy_pipeline["scoringScript"] = pipeline_payload["scoringScript"]
-        legacy_pipeline["scoringScrip"] = pipeline_payload["scoringScript"]
-    if ("scoringScrip" in pipeline_payload
-            and pipeline_payload["scoringScrip"] is not None):
-        legacy_pipeline["scoringScript"] = pipeline_payload["scoringScrip"]
-    if ("staticAnalysis" in pipeline_payload
-            and pipeline_payload["staticAnalysis"] is not None):
-        legacy_pipeline["staticAnalysis"] = pipeline_payload["staticAnalysis"]
+            if key == 'resourceData' and 'resourceData' not in legacy_config:
+                legacy_config['resourceData'] = pipeline_payload[key]
+    if ('scoringScript' in pipeline_payload
+            and pipeline_payload['scoringScript'] is not None):
+        legacy_pipeline['scoringScript'] = pipeline_payload['scoringScript']
+        legacy_pipeline['scoringScrip'] = pipeline_payload['scoringScript']
+    if ('scoringScrip' in pipeline_payload
+            and pipeline_payload['scoringScrip'] is not None):
+        legacy_pipeline['scoringScript'] = pipeline_payload['scoringScrip']
+    if ('staticAnalysis' in pipeline_payload
+            and pipeline_payload['staticAnalysis'] is not None):
+        legacy_pipeline['staticAnalysis'] = pipeline_payload['staticAnalysis']
     if legacy_pipeline:
-        ks["pipeline"] = drop_none(legacy_pipeline)
+        ks['pipeline'] = drop_none(legacy_pipeline)
 
-    test_mode_payload = data.get("Test_Mode") or {}
+    test_mode_payload = data.get('Test_Mode') or {}
     derived_test_mode = {}
-    if "trialMode" in config_payload:
-        derived_test_mode["Enabled"] = config_payload["trialMode"]
-    if "trialModeQuotaPerStudent" in config_payload:
-        derived_test_mode["Quota_Per_Student"] = config_payload[
-            "trialModeQuotaPerStudent"]
+    if 'trialMode' in config_payload:
+        derived_test_mode['Enabled'] = config_payload['trialMode']
+    if 'trialModeQuotaPerStudent' in config_payload:
+        derived_test_mode['Quota_Per_Student'] = config_payload[
+            'trialModeQuotaPerStudent']
     if not test_mode_payload:
         test_mode_payload = derived_test_mode
     else:
@@ -349,143 +351,143 @@ def create_problem(user: User, **ks):
             },
         }
     if test_mode_payload:
-        ks["Test_Mode"] = drop_none(test_mode_payload)
+        ks['Test_Mode'] = drop_none(test_mode_payload)
 
     try:
         pid = Problem.add(user=user, **ks)
     except ValidationError as e:
         return HTTPError(
-            "Invalid or missing arguments.",
+            'Invalid or missing arguments.',
             400,
             data=e.to_dict(),
         )
     except DoesNotExist as e:
-        return HTTPError("Course not found", 404)
+        return HTTPError('Course not found', 404)
     except ValueError as e:
         return HTTPError(str(e), 400)
-    return HTTPResponse(data={"problemId": pid})
+    return HTTPResponse(data={'problemId': pid})
 
 
-@problem_api.route("/manage/<int:problem>", methods=["DELETE"])
+@problem_api.route('/manage/<int:problem>', methods=['DELETE'])
 @identity_verify(0, 1)
-@Request.doc("problem", Problem)
+@Request.doc('problem', Problem)
 def delete_problem(user: User, problem: Problem):
     if not problem.permission(user, problem.Permission.MANAGE):
         return permission_error_response()
     if not problem.permission(user=user, req=problem.Permission.ONLINE):
         return online_error_response()
     problem.delete()
-    return HTTPResponse("Success.", data={"ok": True})
+    return HTTPResponse('Success.', data={'ok': True})
 
 
-@problem_api.route("/manage/<int:problem>", methods=["PUT"])
+@problem_api.route('/manage/<int:problem>', methods=['PUT'])
 @identity_verify(0, 1)
-@Request.doc("problem", Problem)
+@Request.doc('problem', Problem)
 def manage_problem(user: User, problem: Problem):
 
     @Request.json(
-        "problemName",
-        "description",
-        "courses",
-        "tags",
-        "allowedLanguage",
-        "quota",
-        "type",
-        "status",
-        "testCaseInfo",
-        "canViewStdout",
-        "defaultCode",
-        "config",
-        "pipeline",
-        "Test_Mode",
+        'problemName',
+        'description',
+        'courses',
+        'tags',
+        'allowedLanguage',
+        'quota',
+        'type',
+        'status',
+        'testCaseInfo',
+        'canViewStdout',
+        'defaultCode',
+        'config',
+        'pipeline',
+        'Test_Mode',
     )
     def modify_problem(**p_ks):
         kwargs = {
-            "problem_name": p_ks.pop("problemName", None),
-            "description": p_ks.pop("description", None),
-            "courses": p_ks.pop("courses", None),
-            "tags": p_ks.pop("tags", None),
-            "allowed_language": p_ks.pop("allowedLanguage", None),
-            "quota": p_ks.pop("quota", None),
-            "type": p_ks.pop("type", None),
-            "status": p_ks.pop("status", None),
-            "test_case_info": p_ks.pop("testCaseInfo", None),
-            "can_view_stdout": p_ks.pop("canViewStdout", None),
-            "default_code": p_ks.pop("defaultCode", None),
-            "config": p_ks.pop("config", None),
-            "pipeline": p_ks.pop("pipeline", None),
-            "Test_Mode": p_ks.pop("Test_Mode", None),
+            'problem_name': p_ks.pop('problemName', None),
+            'description': p_ks.pop('description', None),
+            'courses': p_ks.pop('courses', None),
+            'tags': p_ks.pop('tags', None),
+            'allowed_language': p_ks.pop('allowedLanguage', None),
+            'quota': p_ks.pop('quota', None),
+            'type': p_ks.pop('type', None),
+            'status': p_ks.pop('status', None),
+            'test_case_info': p_ks.pop('testCaseInfo', None),
+            'can_view_stdout': p_ks.pop('canViewStdout', None),
+            'default_code': p_ks.pop('defaultCode', None),
+            'config': p_ks.pop('config', None),
+            'pipeline': p_ks.pop('pipeline', None),
+            'Test_Mode': p_ks.pop('Test_Mode', None),
         }
 
         data = request.json or {}
-        config_payload = data.get("config") or {}
-        pipeline_payload = data.get("pipeline") or {}
+        config_payload = data.get('config') or {}
+        pipeline_payload = data.get('pipeline') or {}
 
-        legacy_config = kwargs.get("config") or {}
+        legacy_config = kwargs.get('config') or {}
         for key in (
-                "compilation",
-                "aiVTuber",
-                "aiVTuberMaxToken",
-                "aiVTuberMode",
-                "acceptedFormat",
-                "artifactCollection",
-                "maxStudentZipSizeMB",
-                "networkAccessRestriction",
-                "resourceData",
+                'compilation',
+                'aiVTuber',
+                'aiVTuberMaxToken',
+                'aiVTuberMode',
+                'acceptedFormat',
+                'artifactCollection',
+                'maxStudentZipSizeMB',
+                'networkAccessRestriction',
+                'resourceData',
         ):
             if config_payload.get(key) is not None:
                 legacy_config[key] = config_payload[key]
-        static_analysis = (config_payload.get("staticAnalysis")
-                           or config_payload.get("staticAnalys")
-                           or pipeline_payload.get("staticAnalysis"))
-        if config_payload.get("networkAccessRestriction"):
+        static_analysis = (config_payload.get('staticAnalysis')
+                           or config_payload.get('staticAnalys')
+                           or pipeline_payload.get('staticAnalysis'))
+        if config_payload.get('networkAccessRestriction'):
             static_analysis = static_analysis or {}
-            static_analysis["networkAccessRestriction"] = config_payload[
-                "networkAccessRestriction"]
+            static_analysis['networkAccessRestriction'] = config_payload[
+                'networkAccessRestriction']
         if static_analysis:
-            legacy_config["staticAnalysis"] = static_analysis
-            legacy_config["staticAnalys"] = static_analysis
+            legacy_config['staticAnalysis'] = static_analysis
+            legacy_config['staticAnalys'] = static_analysis
         if legacy_config:
-            kwargs["config"] = drop_none(legacy_config)
+            kwargs['config'] = drop_none(legacy_config)
 
-        legacy_pipeline = kwargs.get("pipeline") or {}
+        legacy_pipeline = kwargs.get('pipeline') or {}
         for key in (
-                "allowRead",
-                "allowWrite",
-                "resourceData",
-                "executionMode",
-                "customChecker",
-                "teacherFirst",
+                'allowRead',
+                'allowWrite',
+                'resourceData',
+                'executionMode',
+                'customChecker',
+                'teacherFirst',
         ):
             if pipeline_payload.get(key) is not None:
                 legacy_pipeline[key] = pipeline_payload[key]
-                if key == "resourceData" and "resourceData" not in legacy_config:
-                    legacy_config["resourceData"] = pipeline_payload[key]
-            if ("scoringScript" in pipeline_payload
-                    and pipeline_payload["scoringScript"] is not None):
-                legacy_pipeline["scoringScript"] = pipeline_payload[
-                    "scoringScript"]
-                legacy_pipeline["scoringScrip"] = pipeline_payload[
-                    "scoringScript"]
-            if ("scoringScrip" in pipeline_payload
-                    and pipeline_payload["scoringScrip"] is not None):
-                legacy_pipeline["scoringScript"] = pipeline_payload[
-                    "scoringScrip"]
-            if ("staticAnalysis" in pipeline_payload
-                    and pipeline_payload["staticAnalysis"] is not None):
-                legacy_pipeline["staticAnalysis"] = pipeline_payload[
-                    "staticAnalysis"]
+                if key == 'resourceData' and 'resourceData' not in legacy_config:
+                    legacy_config['resourceData'] = pipeline_payload[key]
+            if ('scoringScript' in pipeline_payload
+                    and pipeline_payload['scoringScript'] is not None):
+                legacy_pipeline['scoringScript'] = pipeline_payload[
+                    'scoringScript']
+                legacy_pipeline['scoringScrip'] = pipeline_payload[
+                    'scoringScript']
+            if ('scoringScrip' in pipeline_payload
+                    and pipeline_payload['scoringScrip'] is not None):
+                legacy_pipeline['scoringScript'] = pipeline_payload[
+                    'scoringScrip']
+            if ('staticAnalysis' in pipeline_payload
+                    and pipeline_payload['staticAnalysis'] is not None):
+                legacy_pipeline['staticAnalysis'] = pipeline_payload[
+                    'staticAnalysis']
             if legacy_pipeline:
-                kwargs["pipeline"] = drop_none(legacy_pipeline)
+                kwargs['pipeline'] = drop_none(legacy_pipeline)
 
-        test_mode_payload = data.get("Test_Mode") or kwargs.get(
-            "Test_Mode") or {}
+        test_mode_payload = data.get('Test_Mode') or kwargs.get(
+            'Test_Mode') or {}
         derived_test_mode = {}
-        if "trialMode" in config_payload:
-            derived_test_mode["Enabled"] = config_payload["trialMode"]
-        if "trialModeQuotaPerStudent" in config_payload:
-            derived_test_mode["Quota_Per_Student"] = config_payload[
-                "trialModeQuotaPerStudent"]
+        if 'trialMode' in config_payload:
+            derived_test_mode['Enabled'] = config_payload['trialMode']
+        if 'trialModeQuotaPerStudent' in config_payload:
+            derived_test_mode['Quota_Per_Student'] = config_payload[
+                'trialModeQuotaPerStudent']
         if derived_test_mode:
             test_mode_payload = {
                 **test_mode_payload,
@@ -495,7 +497,7 @@ def manage_problem(user: User, problem: Problem):
                 },
             }
         if test_mode_payload:
-            kwargs["Test_Mode"] = drop_none(test_mode_payload)
+            kwargs['Test_Mode'] = drop_none(test_mode_payload)
 
         Problem.edit_problem(
             user=user,
@@ -505,7 +507,7 @@ def manage_problem(user: User, problem: Problem):
 
         return HTTPResponse()
 
-    @Request.files("case")
+    @Request.files('case')
     def modify_problem_test_case(case):
         try:
             problem.update_test_case(case)
@@ -515,7 +517,7 @@ def manage_problem(user: User, problem: Problem):
             return HTTPError(str(e), 400)
         except BadTestCase as e:
             return HTTPError(str(e), 400)
-        return HTTPResponse("Success.")
+        return HTTPResponse('Success.')
 
     if not problem.permission(user, problem.Permission.MANAGE):
         return permission_error_response()
@@ -525,31 +527,31 @@ def manage_problem(user: User, problem: Problem):
     # edit problem
     try:
         # modify problem meta
-        if request.content_type.startswith("application/json"):
+        if request.content_type.startswith('application/json'):
             return modify_problem()
         # upload testcase file
-        elif request.content_type.startswith("multipart/form-data"):
+        elif request.content_type.startswith('multipart/form-data'):
             return modify_problem_test_case()
         else:
             return HTTPError(
-                "Unknown content type",
+                'Unknown content type',
                 400,
-                data={"contentType": request.content_type},
+                data={'contentType': request.content_type},
             )
     except ValidationError as ve:
         return HTTPError(
-            "Invalid or missing arguments.",
+            'Invalid or missing arguments.',
             400,
             data=ve.to_dict(),
         )
     except engine.DoesNotExist:
-        return HTTPError("Course not found.", 404)
+        return HTTPError('Course not found.', 404)
 
 
-@problem_api.post("/<int:problem>/initiate-test-case-upload")
+@problem_api.post('/<int:problem>/initiate-test-case-upload')
 @identity_verify(0, 1)
-@Request.doc("problem", Problem)
-@Request.json("length: int", "part_size: int")
+@Request.doc('problem', Problem)
+@Request.json('length: int', 'part_size: int')
 def initiate_test_case_upload(
     user: User,
     problem: Problem,
@@ -562,29 +564,29 @@ def initiate_test_case_upload(
         return online_error_response()
     try:
         if length <= 0 or part_size <= 0:
-            return HTTPError("Invalid length or part_size", 400)
+            return HTTPError('Invalid length or part_size', 400)
 
         if part_size > length:
-            return HTTPError("part_size cannot be greater than length", 400)
+            return HTTPError('part_size cannot be greater than length', 400)
         upload_info = problem.generate_urls_for_uploading_test_case(
             length, part_size)
         return HTTPResponse(
-            "Test case upload initiated",
+            'Test case upload initiated',
             data={
-                "upload_id": upload_info.upload_id,
-                "urls": upload_info.urls,
+                'upload_id': upload_info.upload_id,
+                'urls': upload_info.urls,
             },
         )
     except ValueError as e:
-        return HTTPError(f"Invalid parameters: {str(e)}", 400)
+        return HTTPError(f'Invalid parameters: {str(e)}', 400)
     except Exception as e:
         return HTTPError(str(e), 400)
 
 
-@problem_api.post("/<int:problem>/complete-test-case-upload")
+@problem_api.post('/<int:problem>/complete-test-case-upload')
 @identity_verify(0, 1)
-@Request.doc("problem", Problem)
-@Request.json("upload_id", "parts: list")
+@Request.doc('problem', Problem)
+@Request.json('upload_id', 'parts: list')
 def complete_test_case_upload(
     user: User,
     problem: Problem,
@@ -600,33 +602,33 @@ def complete_test_case_upload(
         from minio.datatypes import Part
 
         if not isinstance(parts, list) or len(parts) == 0:
-            return HTTPError("Invalid parts list", 400)
+            return HTTPError('Invalid parts list', 400)
 
         part_objects = []
         for part in parts:
-            if (not isinstance(part, dict) or "ETag" not in part
-                    or "PartNumber" not in part):
-                return HTTPError("Invalid part format", 400)
+            if (not isinstance(part, dict) or 'ETag' not in part
+                    or 'PartNumber' not in part):
+                return HTTPError('Invalid part format', 400)
 
             part_objects.append(
-                Part(part_number=part["PartNumber"], etag=part["ETag"]))
+                Part(part_number=part['PartNumber'], etag=part['ETag']))
         problem.complete_test_case_upload(upload_id, part_objects)
-        return HTTPResponse("Test case upload completed",
-                            data={"ok": True},
+        return HTTPResponse('Test case upload completed',
+                            data={'ok': True},
                             status_code=200)
 
     except BadTestCase as e:
         return HTTPError(str(e), 400)
     except ValueError as e:
-        return HTTPError(f"Invalid parameters: {str(e)}", 400)
+        return HTTPError(f'Invalid parameters: {str(e)}', 400)
     except Exception as e:
         return HTTPError(str(e), 400)
 
 
-@problem_api.route("/<int:problem_id>/test-case", methods=["GET"])
-@problem_api.route("/<int:problem_id>/testcase", methods=["GET"])
+@problem_api.route('/<int:problem_id>/test-case', methods=['GET'])
+@problem_api.route('/<int:problem_id>/testcase', methods=['GET'])
 @login_required
-@Request.doc("problem_id", "problem", Problem)
+@Request.doc('problem_id', 'problem', Problem)
 def get_test_case(user: User, problem: Problem):
     can_manage = problem.permission(user, problem.Permission.MANAGE)
     if not can_manage and not problem.has_course_modify_permission(user):
@@ -635,51 +637,51 @@ def get_test_case(user: User, problem: Problem):
         return online_error_response()
     return send_file(
         problem.get_test_case(),
-        mimetype="application/zip",
+        mimetype='application/zip',
         as_attachment=True,
-        download_name=f"testdata-{problem.id}.zip",
+        download_name=f'testdata-{problem.id}.zip',
     )
 
 
 # FIXME: Find a better name
-@problem_api.route("/<int:problem_id>/testdata", methods=["GET"])
-@Request.args("token: str")
-@Request.doc("problem_id", "problem", Problem)
+@problem_api.route('/<int:problem_id>/testdata', methods=['GET'])
+@Request.args('token: str')
+@Request.doc('problem_id', 'problem', Problem)
 def get_testdata(token: str, problem: Problem):
     if sandbox.find_by_token(token) is None:
-        return HTTPError("Invalid sandbox token", 401)
+        return HTTPError('Invalid sandbox token', 401)
     return send_file(
         problem.get_test_case(),
-        mimetype="application/zip",
+        mimetype='application/zip',
         as_attachment=True,
-        download_name=f"testdata-{problem.id}.zip",
+        download_name=f'testdata-{problem.id}.zip',
     )
 
 
 SUPPORTED_ASSET_TYPES = {
-    "checker",
-    "scoring_script",
-    "makefile",
-    "teacher_file",
-    "local_service",  # reserved
-    "resource_data",
-    "resource_data_teacher",
+    'checker',
+    'scoring_script',
+    'makefile',
+    'teacher_file',
+    'local_service',  # reserved
+    'resource_data',
+    'resource_data_teacher',
 }
 
 
-@problem_api.get("/<int:problem_id>/asset-checksum")
-@Request.args("token: str", "asset_type: str")
+@problem_api.get('/<int:problem_id>/asset-checksum')
+@Request.args('token: str', 'asset_type: str')
 def get_asset_checksum(token: str, problem_id: int, asset_type: str):
     if sandbox.find_by_token(token) is None:
-        return HTTPError("Invalid sandbox token", 401)
+        return HTTPError('Invalid sandbox token', 401)
     if asset_type not in SUPPORTED_ASSET_TYPES:
-        return HTTPError(f"Unsupported asset type: {asset_type}", 400)
+        return HTTPError(f'Unsupported asset type: {asset_type}', 400)
     problem = Problem(problem_id)
     if not problem:
-        return HTTPError(f"Problem {problem_id} not found", 404)
-    asset_path = (problem.config or {}).get("assetPaths", {}).get(asset_type)
+        return HTTPError(f'Problem {problem_id} not found', 404)
+    asset_path = (problem.config or {}).get('assetPaths', {}).get(asset_type)
     if not asset_path:
-        return HTTPResponse(data={"checksum": None})
+        return HTTPResponse(data={'checksum': None})
     minio_client = MinioClient()
     try:
         content = minio_client.download_file(asset_path)
@@ -690,25 +692,25 @@ def get_asset_checksum(token: str, problem_id: int, asset_type: str):
         except Exception:
             logger = logging.getLogger(__name__)
         if logger:
-            logger.exception("Failed to fetch asset checksum")
-        return HTTPError(f"Failed to fetch asset: {exc}", 500)
+            logger.exception('Failed to fetch asset checksum')
+        return HTTPError(f'Failed to fetch asset: {exc}', 500)
     digest = hashlib.md5(content).hexdigest()
-    return HTTPResponse(data={"checksum": digest})
+    return HTTPResponse(data={'checksum': digest})
 
 
-@problem_api.route("/<int:problem_id>/checksum", methods=["GET"])
-@Request.args("token: str")
+@problem_api.route('/<int:problem_id>/checksum', methods=['GET'])
+@Request.args('token: str')
 def get_checksum(token: str, problem_id: int):
     if sandbox.find_by_token(token) is None:
-        return HTTPError("Invalid sandbox token", 401)
+        return HTTPError('Invalid sandbox token', 401)
     problem = Problem(problem_id)
     if not problem:
-        return HTTPError(f"{problem} not found", 404)
-    submission_mode = getattr(problem.test_case, "submission_mode", 0) or 0
+        return HTTPError(f'{problem} not found', 404)
+    submission_mode = getattr(problem.test_case, 'submission_mode', 0) or 0
     meta = json.dumps({
-        "tasks":
+        'tasks':
         [json.loads(task.to_json()) for task in problem.test_case.tasks],
-        "submissionMode":
+        'submissionMode':
         submission_mode,
     }).encode()
     # TODO: use etag of bucket object
@@ -717,184 +719,148 @@ def get_checksum(token: str, problem_id: int):
     return HTTPResponse(data=digest)
 
 
-@problem_api.route("/<int:problem_id>/meta", methods=["GET"])
-@Request.args("token: str")
+@problem_api.route('/<int:problem_id>/meta', methods=['GET'])
+@Request.args('token: str')
 def get_meta(token: str, problem_id: int):
-    """Serve sandbox metadata (tasks, submission/execution modes, assets)."""
+    '''Serve sandbox metadata (tasks, submission/execution modes, assets).'''
     if sandbox.find_by_token(token) is None:
-        return HTTPError("Invalid sandbox token", 401)
+        return HTTPError('Invalid sandbox token', 401)
     problem = Problem(problem_id)
     if not problem:
-        return HTTPError(f"{problem} not found", 404)
-    submission_mode = getattr(problem.test_case, "submission_mode", 0) or 0
+        return HTTPError(f'{problem} not found', 404)
+    submission_mode = getattr(problem.test_case, 'submission_mode', 0) or 0
     config_payload, pipeline_payload = _build_config_and_pipeline(problem)
     meta = {
-        "tasks":
+        'tasks':
         [json.loads(task.to_json()) for task in problem.test_case.tasks],
-        "submissionMode": submission_mode,
+        'submissionMode': submission_mode,
     }
-    execution_mode = pipeline_payload.get("executionMode", "general")
+    execution_mode = pipeline_payload.get('executionMode', 'general')
     custom_checker = pipeline_payload.get(
-        "customChecker", config_payload.get("customChecker", False))
+        'customChecker', config_payload.get('customChecker', False))
     scoring_cfg = pipeline_payload.get(
-        "scoringScript", config_payload.get("scoringScript",
-                                            {"custom": False}))
+        'scoringScript', config_payload.get('scoringScript',
+                                            {'custom': False}))
     if isinstance(scoring_cfg, dict):
-        scoring_cfg = scoring_cfg.get("custom", False)
+        scoring_cfg = scoring_cfg.get('custom', False)
     scoring_custom = bool(scoring_cfg)
     meta.update({
-        "executionMode":
+        'executionMode':
         execution_mode,
-        "teacherFirst":
-        pipeline_payload.get("teacherFirst", False),
-        "allowRead":
-        pipeline_payload.get("allowRead",
-                             config_payload.get("allowRead", False)),
-        "allowWrite":
-        pipeline_payload.get("allowWrite",
-                             config_payload.get("allowWrite", False)),
-        "assetPaths":
-        config_payload.get("assetPaths", {}),
-        "buildStrategy":
+        'teacherFirst':
+        pipeline_payload.get('teacherFirst', False),
+        'allowRead':
+        pipeline_payload.get('allowRead',
+                             config_payload.get('allowRead', False)),
+        'allowWrite':
+        pipeline_payload.get('allowWrite',
+                             config_payload.get('allowWrite', False)),
+        'assetPaths':
+        config_payload.get('assetPaths', {}),
+        'buildStrategy':
         _derive_build_strategy(
             problem=problem,
             submission_mode=submission_mode,
             execution_mode=execution_mode,
         ),
-        "resourceData":
-        config_payload.get("resourceData", False),
-        "resourceDataTeacher":
-        config_payload.get("resourceDataTeacher", False),
-        "customChecker":
+        'resourceData':
+        config_payload.get('resourceData', False),
+        'resourceDataTeacher':
+        config_payload.get('resourceDataTeacher', False),
+        'customChecker':
         bool(custom_checker),
-        "checkerAsset": (config_payload.get("assetPaths", {})
-                         or {}).get("checker"),
-        "scoringScript":
+        'checkerAsset': (config_payload.get('assetPaths', {})
+                         or {}).get('checker'),
+        'scoringScript':
         scoring_custom,
-        "scorerAsset": (config_payload.get("assetPaths", {})
-                        or {}).get("scoring_script"),
-        "artifactCollection":
-        config_payload.get("artifactCollection", []),
+        'scorerAsset': (config_payload.get('assetPaths', {})
+                        or {}).get('scoring_script'),
+        'artifactCollection':
+        config_payload.get('artifactCollection', []),
     })
-    network_cfg = config_payload.get("networkAccessRestriction")
+    network_cfg = config_payload.get('networkAccessRestriction')
     if network_cfg:
-        meta["networkAccessRestriction"] = network_cfg
+        meta['networkAccessRestriction'] = network_cfg
     return HTTPResponse(data=meta)
 
 
-@problem_api.route("/<int:problem_id>/network", methods=["GET"])
-@Request.args("token: str")
-def get_network_config(token: str, problem_id: int):
-    """
-    Expose network configuration for sandbox.
-    Currently we just unwrap `config.networkAccessRestriction` and return it as-is.
-    More advanced schema (sidecars/external) can be derived by sandbox's
-    network_control.py.
-    """
-    if sandbox.find_by_token(token) is None:
-        return HTTPError("Invalid sandbox token", 401)
-
-    problem = Problem(problem_id)
-    if not problem:
-        return HTTPError(f"{problem} not found", 404)
-
-    config_payload, pipeline_payload = _build_config_and_pipeline(problem)
-    raw = config_payload.get("networkAccessRestriction") or {}
-
-    sidecars = raw.get("sidecars") or []
-    external = raw.get("external") or {}
-
-    external_model = external.get("model") or "Black"
-    external_ip = external.get("ip") or []
-    external_url = external.get("url") or []
-    network_cfg = {
-        "sidecars": sidecars,
-        "external": {
-            "model": external_model,
-            "ip": external_ip,
-            "url": external_url,
-        },
-    }
-    return HTTPResponse(data=network_cfg)
-
-
-@problem_api.route("/<int:problem_id>/meta", methods=["PUT"])
+@problem_api.route('/<int:problem_id>/meta', methods=['PUT'])
 @identity_verify(0, 1)
-@Request.doc("problem_id", "problem", Problem)
+@Request.doc('problem_id', 'problem', Problem)
 def update_problem_meta(user: User, problem: Problem):
-    """Update problem config/pipeline only (no files)."""
+    '''Update problem config/pipeline only (no files).'''
     if not problem.permission(user, problem.Permission.MANAGE):
         return permission_error_response()
     if not problem.permission(user=user, req=problem.Permission.ONLINE):
         return online_error_response()
     if not request.content_type or not request.content_type.startswith(
-            "application/json"):
+            'application/json'):
         return HTTPError(
-            "Content-Type must be application/json",
+            'Content-Type must be application/json',
             400,
-            data={"contentType": request.content_type},
+            data={'contentType': request.content_type},
         )
     data = request.json or {}
-    config_payload = data.get("config") or {}
-    pipeline_payload = data.get("pipeline") or {}
+    config_payload = data.get('config') or {}
+    pipeline_payload = data.get('pipeline') or {}
 
     legacy_config = {}
     for key in (
-            "compilation",
-            "aiVTuber",
-            "aiVTuberMaxToken",
-            "aiVTuberMode",
-            "acceptedFormat",
-            "artifactCollection",
-            "maxStudentZipSizeMB",
-            "networkAccessRestriction",
+            'compilation',
+            'aiVTuber',
+            'aiVTuberMaxToken',
+            'aiVTuberMode',
+            'acceptedFormat',
+            'artifactCollection',
+            'maxStudentZipSizeMB',
+            'networkAccessRestriction',
     ):
         if config_payload.get(key) is not None:
             legacy_config[key] = config_payload[key]
-    static_analysis = (config_payload.get("staticAnalysis")
-                       or config_payload.get("staticAnalys")
-                       or pipeline_payload.get("staticAnalysis"))
-    if config_payload.get("networkAccessRestriction"):
+    static_analysis = (config_payload.get('staticAnalysis')
+                       or config_payload.get('staticAnalys')
+                       or pipeline_payload.get('staticAnalysis'))
+    if config_payload.get('networkAccessRestriction'):
         static_analysis = static_analysis or {}
-        static_analysis["networkAccessRestriction"] = config_payload[
-            "networkAccessRestriction"]
+        static_analysis['networkAccessRestriction'] = config_payload[
+            'networkAccessRestriction']
     if static_analysis:
-        legacy_config["staticAnalysis"] = static_analysis
-        legacy_config["staticAnalys"] = static_analysis
+        legacy_config['staticAnalysis'] = static_analysis
+        legacy_config['staticAnalys'] = static_analysis
     kwargs = {}
     if legacy_config:
-        kwargs["config"] = drop_none(legacy_config)
+        kwargs['config'] = drop_none(legacy_config)
 
     legacy_pipeline = {}
     for key in (
-            "allowRead",
-            "allowWrite",
-            "executionMode",
-            "customChecker",
-            "teacherFirst",
+            'allowRead',
+            'allowWrite',
+            'executionMode',
+            'customChecker',
+            'teacherFirst',
     ):
         if pipeline_payload.get(key) is not None:
             legacy_pipeline[key] = pipeline_payload[key]
-    if ("scoringScript" in pipeline_payload
-            and pipeline_payload["scoringScript"] is not None):
-        legacy_pipeline["scoringScript"] = pipeline_payload["scoringScript"]
-        legacy_pipeline["scoringScrip"] = pipeline_payload["scoringScript"]
-    if ("scoringScrip" in pipeline_payload
-            and pipeline_payload["scoringScrip"] is not None):
-        legacy_pipeline["scoringScript"] = pipeline_payload["scoringScrip"]
-    if ("staticAnalysis" in pipeline_payload
-            and pipeline_payload["staticAnalysis"] is not None):
-        legacy_pipeline["staticAnalysis"] = pipeline_payload["staticAnalysis"]
+    if ('scoringScript' in pipeline_payload
+            and pipeline_payload['scoringScript'] is not None):
+        legacy_pipeline['scoringScript'] = pipeline_payload['scoringScript']
+        legacy_pipeline['scoringScrip'] = pipeline_payload['scoringScript']
+    if ('scoringScrip' in pipeline_payload
+            and pipeline_payload['scoringScrip'] is not None):
+        legacy_pipeline['scoringScript'] = pipeline_payload['scoringScrip']
+    if ('staticAnalysis' in pipeline_payload
+            and pipeline_payload['staticAnalysis'] is not None):
+        legacy_pipeline['staticAnalysis'] = pipeline_payload['staticAnalysis']
     if legacy_pipeline:
-        kwargs["pipeline"] = drop_none(legacy_pipeline)
+        kwargs['pipeline'] = drop_none(legacy_pipeline)
 
-    test_mode_payload = data.get("Test_Mode") or {}
+    test_mode_payload = data.get('Test_Mode') or {}
     derived_test_mode = {}
-    if "trialMode" in config_payload:
-        derived_test_mode["Enabled"] = config_payload["trialMode"]
-    if "trialModeQuotaPerStudent" in config_payload:
-        derived_test_mode["Quota_Per_Student"] = config_payload[
-            "trialModeQuotaPerStudent"]
+    if 'trialMode' in config_payload:
+        derived_test_mode['Enabled'] = config_payload['trialMode']
+    if 'trialModeQuotaPerStudent' in config_payload:
+        derived_test_mode['Quota_Per_Student'] = config_payload[
+            'trialModeQuotaPerStudent']
     if derived_test_mode:
         test_mode_payload = {
             **test_mode_payload,
@@ -904,10 +870,10 @@ def update_problem_meta(user: User, problem: Problem):
             },
         }
     if test_mode_payload:
-        kwargs["Test_Mode"] = drop_none(test_mode_payload)
+        kwargs['Test_Mode'] = drop_none(test_mode_payload)
 
     if not kwargs:
-        return HTTPResponse("Success.")
+        return HTTPResponse('Success.')
     try:
         Problem.edit_problem(
             user=user,
@@ -916,30 +882,30 @@ def update_problem_meta(user: User, problem: Problem):
         )
     except ValidationError as ve:
         return HTTPError(
-            "Invalid or missing arguments.",
+            'Invalid or missing arguments.',
             400,
             data=ve.to_dict(),
         )
     except engine.DoesNotExist:
-        return HTTPError("Course not found", 404)
+        return HTTPError('Course not found', 404)
     except ValueError as exc:
         return HTTPError(str(exc), 400)
-    return HTTPResponse("Success.")
+    return HTTPResponse('Success.')
 
 
-@problem_api.route("/<int:problem_id>/asset/<asset_type>", methods=["GET"])
-@Request.args("token: str")
+@problem_api.route('/<int:problem_id>/asset/<asset_type>', methods=['GET'])
+@Request.args('token: str')
 def download_problem_asset(token: str, problem_id: int, asset_type: str):
-    """Allow sandbox to download teacher-provided assets via assetPaths."""
+    '''Allow sandbox to download teacher-provided assets via assetPaths.'''
     if sandbox.find_by_token(token) is None:
-        return HTTPError("Invalid sandbox token", 401)
+        return HTTPError('Invalid sandbox token', 401)
     problem = Problem(problem_id)
     if not problem:
-        return HTTPError(f"{problem} not found", 404)
-    asset_paths = (problem.config or {}).get("assetPaths", {})
+        return HTTPError(f'{problem} not found', 404)
+    asset_paths = (problem.config or {}).get('assetPaths', {})
     path = asset_paths.get(asset_type)
     if not path:
-        return HTTPError("Asset not found", 404)
+        return HTTPError('Asset not found', 404)
     minio_client = MinioClient()
     try:
         obj = minio_client.client.get_object(minio_client.bucket, path)
@@ -952,30 +918,30 @@ def download_problem_asset(token: str, problem_id: int, asset_type: str):
             obj.release_conn()
         except Exception:
             pass
-    filename = path.split("/")[-1] or f"{asset_type}"
+    filename = path.split('/')[-1] or f'{asset_type}'
     return send_file(
         BytesIO(data),
-        mimetype="application/octet-stream",
+        mimetype='application/octet-stream',
         as_attachment=True,
         download_name=filename,
     )
 
 
-@problem_api.route("/<int:problem_id>/asset/<asset_type>/download",
-                   methods=["GET"])
+@problem_api.route('/<int:problem_id>/asset/<asset_type>/download',
+                   methods=['GET'])
 @login_required
-@Request.doc("problem_id", "problem", Problem)
+@Request.doc('problem_id', 'problem', Problem)
 def download_problem_asset_manage(user: User, problem: Problem,
                                   asset_type: str):
-    """Allow managers (teacher/admin) to download uploaded assets."""
+    '''Allow managers (teacher/admin) to download uploaded assets.'''
     if not problem.permission(user, problem.Permission.MANAGE):
         return permission_error_response()
     if not problem.permission(user=user, req=problem.Permission.ONLINE):
         return online_error_response()
-    asset_paths = (problem.config or {}).get("assetPaths", {})
+    asset_paths = (problem.config or {}).get('assetPaths', {})
     path = asset_paths.get(asset_type)
     if not path:
-        return HTTPError("Asset not found", 404)
+        return HTTPError('Asset not found', 404)
     minio_client = MinioClient()
     try:
         obj = minio_client.client.get_object(minio_client.bucket, path)
@@ -988,43 +954,43 @@ def download_problem_asset_manage(user: User, problem: Problem,
             obj.release_conn()
         except Exception:
             pass
-    filename = path.split("/")[-1] or f"{asset_type}"
+    filename = path.split('/')[-1] or f'{asset_type}'
     return send_file(
         BytesIO(data),
-        mimetype="application/octet-stream",
+        mimetype='application/octet-stream',
         as_attachment=True,
         download_name=filename,
     )
 
 
-@problem_api.route("/<int:problem_id>/rules", methods=["GET"])
-@Request.args("token: str")
+@problem_api.route('/<int:problem_id>/rules', methods=['GET'])
+@Request.args('token: str')
 def get_static_analysis_rules(token: str, problem_id: int):
-    """Expose static-analysis library restrictions for sandbox."""
+    '''Expose static-analysis library restrictions for sandbox.'''
     if sandbox.find_by_token(token) is None:
-        return HTTPError("Invalid sandbox token", 401)
+        return HTTPError('Invalid sandbox token', 401)
     problem = Problem(problem_id)
     if not problem:
-        return HTTPError(f"{problem} not found", 404)
+        return HTTPError(f'{problem} not found', 404)
     rules = _build_static_analysis_rules(problem) or {}
 
     return HTTPResponse(data=rules)
 
 
-@problem_api.route("/<int:problem_id>/high-score", methods=["GET"])
+@problem_api.route('/<int:problem_id>/high-score', methods=['GET'])
 @login_required
-@Request.doc("problem_id", "problem", Problem)
+@Request.doc('problem_id', 'problem', Problem)
 def high_score(user: User, problem: Problem):
     return HTTPResponse(data={
-        "score": problem.get_high_score(user=user),
+        'score': problem.get_high_score(user=user),
     })
 
 
-@problem_api.route("/clone", methods=["POST"])
-@problem_api.route("/copy", methods=["POST"])
+@problem_api.route('/clone', methods=['POST'])
+@problem_api.route('/copy', methods=['POST'])
 @identity_verify(0, 1)
-@Request.json("problem_id: int", "target", "status")
-@Request.doc("problem_id", "problem", Problem)
+@Request.json('problem_id: int', 'target', 'status')
+@Request.doc('problem_id', 'problem', Problem)
 def clone_problem(
     user: User,
     problem: Problem,
@@ -1032,33 +998,33 @@ def clone_problem(
     status,
 ):
     if not problem.permission(user, problem.Permission.VIEW):
-        return HTTPError("Problem can not view.", 403)
-    override = drop_none({"status": status})
+        return HTTPError('Problem can not view.', 403)
+    override = drop_none({'status': status})
     new_problem_id = problem.copy_to(
         user=user,
         target=target,
         **override,
     )
     return HTTPResponse(
-        "Success.",
-        data={"problemId": new_problem_id},
+        'Success.',
+        data={'problemId': new_problem_id},
     )
 
 
-@problem_api.route("/publish", methods=["POST"])
+@problem_api.route('/publish', methods=['POST'])
 @identity_verify(0, 1)
-@Request.json("problem_id")
-@Request.doc("problem_id", "problem", Problem)
+@Request.json('problem_id')
+@Request.doc('problem_id', 'problem', Problem)
 def publish_problem(user, problem: Problem):
     if user.role == 1 and problem.owner != user.username:
-        return HTTPError("Not the owner.", 403)
+        return HTTPError('Not the owner.', 403)
     Problem.release_problem(problem.problem_id)
-    return HTTPResponse("Success.")
+    return HTTPResponse('Success.')
 
 
-@problem_api.route("/<int:problem_id>/stats", methods=["GET"])
+@problem_api.route('/<int:problem_id>/stats', methods=['GET'])
 @login_required
-@Request.doc("problem_id", "problem", Problem)
+@Request.doc('problem_id', 'problem', Problem)
 def problem_stats(user: User, problem: Problem):
     if not problem.permission(user, problem.Permission.VIEW):
         return permission_error_response()
@@ -1085,106 +1051,106 @@ def problem_stats(user: User, problem: Problem):
                 problem=problem.id,
                 status=0,
                 user__in=student_docs,
-            ).distinct("user"))
+            ).distinct('user'))
         tried_users = len(
             engine.Submission.objects(problem=problem.id,
-                                      user__in=student_docs).distinct("user"))
+                                      user__in=student_docs).distinct('user'))
     else:
         ac_users = 0
         tried_users = 0
-    ret["acUserRatio"] = [ac_users, total_students]
-    ret["triedUserCount"] = tried_users
-    ret["average"] = (None if total_students == 0 else
+    ret['acUserRatio'] = [ac_users, total_students]
+    ret['triedUserCount'] = tried_users
+    ret['average'] = (None if total_students == 0 else
                       statistics.mean(students_high_scores))
-    ret["std"] = (None if total_students <= 1 else
+    ret['std'] = (None if total_students <= 1 else
                   statistics.pstdev(students_high_scores))
-    ret["scoreDistribution"] = students_high_scores
+    ret['scoreDistribution'] = students_high_scores
 
     # Submission status counts (only include statuses that actually exist)
     status_count = {}
     for key, value in problem.get_submission_status().items():
         status_count[str(key)] = value
-    ret["statusCount"] = status_count
+    ret['statusCount'] = status_count
     params = {
-        "user": user,
-        "offset": 0,
-        "count": 10,
-        "problem": problem.id,
-        "status": 0,
+        'user': user,
+        'offset': 0,
+        'count': 10,
+        'problem': problem.id,
+        'status': 0,
     }
     top_10_runtime_submissions = [
-        s.to_dict() for s in Submission.filter(**params, sort_by="runTime")
+        s.to_dict() for s in Submission.filter(**params, sort_by='runTime')
     ]
-    ret["top10RunTime"] = top_10_runtime_submissions
+    ret['top10RunTime'] = top_10_runtime_submissions
     top_10_memory_submissions = [
-        s.to_dict() for s in Submission.filter(**params, sort_by="memoryUsage")
+        s.to_dict() for s in Submission.filter(**params, sort_by='memoryUsage')
     ]
-    ret["top10MemoryUsage"] = top_10_memory_submissions
-    return HTTPResponse("Success.", data=ret)
+    ret['top10MemoryUsage'] = top_10_memory_submissions
+    return HTTPResponse('Success.', data=ret)
 
 
-@problem_api.post("/<int:problem_id>/migrate-test-case")
+@problem_api.post('/<int:problem_id>/migrate-test-case')
 @login_required
 @identity_verify(0)  # admin only
-@Request.doc("problem_id", "problem", Problem)
+@Request.doc('problem_id', 'problem', Problem)
 def problem_migrate_test_case(user: User, problem: Problem):
     if not problem.permission(user, problem.Permission.MANAGE):
         return permission_error_response()
     problem.migrate_gridfs_to_minio()
-    return HTTPResponse("Success.")
+    return HTTPResponse('Success.')
 
 
 #
 
 
-@problem_api.route("/static-analysis/options", methods=["GET"])
+@problem_api.route('/static-analysis/options', methods=['GET'])
 def get_static_analysis_options():
     try:
         symbols = [
-            "stdio.h",
-            "stdlib.h",
-            "string.h",
-            "math.h",
-            "time.h",
-            "ctype.h",
-            "assert.h",
-            "errno.h",
-            "float.h",
-            "limits.h",
-            "locale.h",
-            "setjmp.h",
-            "signal.h",
-            "stdarg.h",
-            "stddef.h",
-            "stdint.h",
-            "stdbool.h",
-            "sys/types.h",
-            "sys/stat.h",
-            "fcntl.h",
-            "unistd.h",
-            "pthread.h",
-            "iostream",
-            "vector",
-            "string",
-            "algorithm",
-            "map",
-            "set",
-            "queue",
-            "stack",
-            "deque",
-            "memory",
+            'stdio.h',
+            'stdlib.h',
+            'string.h',
+            'math.h',
+            'time.h',
+            'ctype.h',
+            'assert.h',
+            'errno.h',
+            'float.h',
+            'limits.h',
+            'locale.h',
+            'setjmp.h',
+            'signal.h',
+            'stdarg.h',
+            'stddef.h',
+            'stdint.h',
+            'stdbool.h',
+            'sys/types.h',
+            'sys/stat.h',
+            'fcntl.h',
+            'unistd.h',
+            'pthread.h',
+            'iostream',
+            'vector',
+            'string',
+            'algorithm',
+            'map',
+            'set',
+            'queue',
+            'stack',
+            'deque',
+            'memory',
         ]
-        headers = sorted({s for s in symbols if s.endswith(".h")})
-        functions = sorted({s for s in symbols if not s.endswith(".h")})
+        headers = sorted({s for s in symbols if s.endswith('.h')})
+        functions = sorted({s for s in symbols if not s.endswith('.h')})
         imports = []  # Python import list is intentionally empty for now
 
         return HTTPResponse(
-            "Success.",
+            'Success.',
             data={
-                "librarySymbols": {
-                    "imports": imports,
-                    "headers": headers,
-                    "functions": functions,
+                'librarySymbols': {
+                    'imports': imports,
+                    'headers': headers,
+                    'functions': functions,
                 }
             },
         )

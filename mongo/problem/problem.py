@@ -240,6 +240,7 @@ class Problem(MongoBase, engine=engine.Problem):
                 'resourcedata.zip': ('resource_data', 'resource_data.zip'),
                 'resource_data_teacher.zip':
                 ('resource_data_teacher', 'resource_data_teacher.zip'),
+                'dockerfiles.zip': ('network_dockerfile', 'Dockerfiles.zip'),
             }
 
             meta = meta or {}
