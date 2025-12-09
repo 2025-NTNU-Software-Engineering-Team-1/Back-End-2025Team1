@@ -666,6 +666,7 @@ SUPPORTED_ASSET_TYPES = {
     'local_service',  # reserved
     'resource_data',
     'resource_data_teacher',
+    'network_dockerfile',
 }
 
 
