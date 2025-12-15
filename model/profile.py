@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from mongoengine import ValidationError
 
 from mongo import *
-from mongo.engine import PersonalAccessToken
+# from mongo.engine import PersonalAccessToken  <-- Removing this
 from mongo.user import ROLE_SCOPE_MAP
 from .auth import *
 from .utils import *

@@ -137,6 +137,27 @@ class PersonalAccessToken(MongoBase, engine=engine.PersonalAccessToken):
         """Computes SHA-256 hash for the Personal Access Token."""
         return hashlib.sha256(token.encode('utf-8')).hexdigest()
 
+    @classmethod
+    def get_by_hash(cls, token_hash: str) -> 'PersonalAccessToken':
+        """
+        Retrieves a PAT by its hash.
+        Raises DoesNotExist if not found.
+        """
+        # We return the engine document wrapped in our class is not necessary if we inherit properly
+        # But this class wraps engine document in __init__?
+        # Wait, previous code:
+        # class PersonalAccessToken(MongoBase, engine=engine.PersonalAccessToken):
+        # objects = engine.PersonalAccessToken.objects
+        #
+        # cls.engine is engine.PersonalAccessToken (from MongoBase logic presumably)
+        #
+        # Let's check how other methods do it.
+        # add() uses cls.engine(...).save() and returns cls(pat)
+        # So we should probably return cls(doc).
+
+        pat_doc = cls.engine.objects.get(hash=token_hash)
+        return cls(pat_doc)
+
     @staticmethod
     def validate_scope_for_role(scope_set: list, user_role_key,
                                 role_scope_map) -> bool:
