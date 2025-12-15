@@ -199,6 +199,7 @@ class Homework(Document):
 
 
 class Course(Document):
+    meta = {'strict': False}
     course_name = StringField(
         max_length=64,
         required=True,
