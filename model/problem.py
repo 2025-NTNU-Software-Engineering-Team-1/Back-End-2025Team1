@@ -27,7 +27,7 @@ def online_error_response():
 
 
 @problem_api.route('/', methods=['GET'])
-@login_required
+@login_required(pat_scope=['read:problems'])
 @Request.args(
     'offset',
     'count',
@@ -89,7 +89,7 @@ def view_problem_list(
 
 @problem_api.route('/<int:problem_id>', methods=['GET'])
 @problem_api.route('/view/<int:problem_id>', methods=['GET'])
-@login_required
+@login_required(pat_scope=['read:problems'])
 @Request.doc('problem_id', 'problem', Problem)
 def view_problem(user: User, problem: Problem):
     if not problem.permission(user=user, req=problem.Permission.VIEW):
@@ -124,7 +124,7 @@ def view_problem(user: User, problem: Problem):
 
 @problem_api.route('/manage/<int:problem_id>', methods=['GET'])
 @Request.doc('problem_id', 'problem', Problem)
-@identity_verify(0, 1)  # admin and teacher only
+@identity_verify(0, 1, pat_scope=['read:problems'])  # admin and teacher only
 def get_problem_detailed(user, problem: Problem):
     '''
     Get problem's detailed information
@@ -155,7 +155,7 @@ def get_problem_detailed(user, problem: Problem):
 
 
 @problem_api.route('/manage', methods=['POST'])
-@identity_verify(0, 1)
+@identity_verify(0, 1, pat_scope=['write:problems'])
 @Request.json(
     'type',
     'courses: list',
@@ -187,7 +187,7 @@ def create_problem(user: User, **ks):
 
 
 @problem_api.route('/manage/<int:problem>', methods=['DELETE'])
-@identity_verify(0, 1)
+@identity_verify(0, 1, pat_scope=['write:problems'])
 @Request.doc('problem', Problem)
 def delete_problem(user: User, problem: Problem):
     if not problem.permission(user, problem.Permission.MANAGE):
@@ -199,7 +199,7 @@ def delete_problem(user: User, problem: Problem):
 
 
 @problem_api.route('/manage/<int:problem>', methods=['PUT'])
-@identity_verify(0, 1)
+@identity_verify(0, 1, pat_scope=['write:problems'])
 @Request.doc('problem', Problem)
 def manage_problem(user: User, problem: Problem):
 

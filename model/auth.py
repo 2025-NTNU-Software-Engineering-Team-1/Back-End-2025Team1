@@ -95,7 +95,7 @@ def login_required(func=None, *, pat_scope=None):
     return internal_wrapper
 
 
-def identity_verify(*roles):
+def identity_verify(*roles, pat_scope=None):
     '''Verify a logged in user's identity
 
     You can find an example in `model/test.py`
@@ -104,7 +104,7 @@ def identity_verify(*roles):
     def verify(func):
 
         @wraps(func)
-        @login_required
+        @login_required(pat_scope=pat_scope)
         def wrapper(user, *args, **kwargs):
             if user.role not in roles:
                 return HTTPError('Insufficient Permissions', 403)
