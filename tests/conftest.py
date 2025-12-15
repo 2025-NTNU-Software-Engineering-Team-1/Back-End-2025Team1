@@ -15,6 +15,25 @@ from tests.test_problem import get_file
 from tests import utils
 from testcontainers.minio import MinioContainer
 import mongo.config
+import shutil
+import subprocess
+
+
+@pytest.fixture(scope="session", autouse=True)
+def check_docker():
+    """Check if Docker is running before starting tests."""
+    if shutil.which('docker') is None:
+        pytest.fail("Docker is not installed or not in PATH.")
+
+    try:
+        subprocess.run(["docker", "info"],
+                       check=True,
+                       stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+    except subprocess.CalledProcessError:
+        pytest.fail("Docker is not running. Please start Docker.")
+    except Exception as e:
+        pytest.fail(f"Could not check Docker status: {e}")
 
 
 # use a tmp minio for entire test session

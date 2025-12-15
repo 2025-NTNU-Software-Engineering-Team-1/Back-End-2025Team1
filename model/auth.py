@@ -12,7 +12,7 @@ from mongo import *
 from mongo import engine
 from mongo.utils import hash_id
 from .utils import *
-from .utils.pat import hash_pat_token
+from mongo.pat import PersonalAccessToken
 
 import string
 
@@ -116,7 +116,7 @@ def pat_required(*required_scopes: str) -> Callable[[Callable], Callable]:
             pat_token = auth_header.split(' ', 1)[1]
 
             # 2. Hash Calculation and DB Lookup
-            token_hash = hash_pat_token(pat_token)
+            token_hash = PersonalAccessToken.hash_token(pat_token)
 
             try:
                 pat_record = engine.PersonalAccessToken.objects.get(
