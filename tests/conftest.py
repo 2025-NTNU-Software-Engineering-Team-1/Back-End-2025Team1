@@ -23,7 +23,7 @@ import subprocess
 def check_docker():
     """Check if Docker is running before starting tests."""
     if shutil.which('docker') is None:
-        pytest.fail("Docker is not installed or not in PATH.")
+        pytest.exit("Docker is not installed or not in PATH.", 1)
 
     try:
         subprocess.run(["docker", "info"],
@@ -31,9 +31,9 @@ def check_docker():
                        stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL)
     except subprocess.CalledProcessError:
-        pytest.fail("Docker is not running. Please start Docker.")
+        pytest.exit("Docker is not running. Please start Docker.", 1)
     except Exception as e:
-        pytest.fail(f"Could not check Docker status: {e}")
+        pytest.exit(f"Could not check Docker status: {e}", 1)
 
 
 # use a tmp minio for entire test session
