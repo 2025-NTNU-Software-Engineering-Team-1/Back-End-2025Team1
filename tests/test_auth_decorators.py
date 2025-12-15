@@ -1,12 +1,9 @@
-from datetime import datetime, timedelta, timezone
 import pytest
-from flask import Flask, request
 from model import auth
 from model.utils import HTTPResponse
 from mongo import engine, User
 from mongo.pat import PAT
 from tests.base_tester import BaseTester
-import secrets
 
 
 class TestAuthDecorators(BaseTester):

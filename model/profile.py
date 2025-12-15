@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from mongoengine import ValidationError
 
 from mongo import *
+from mongo import engine
 # from mongo.engine import PersonalAccessToken  <-- Removing this
 from mongo.user import ROLE_SCOPE_MAP
 from .auth import *
@@ -120,20 +121,10 @@ def create_token(user, Name, Scope):
                 },
             )
 
-    # Ensure Due_Time is in the future if provided
+    # Ensure Due_Time is in the future if provided -> Handled by PAT.generate
     if due_time_obj:
-        now = datetime.now(timezone.utc)
         if due_time_obj.tzinfo is None:
             due_time_obj = due_time_obj.replace(tzinfo=timezone.utc)
-        if due_time_obj <= now:
-            return HTTPError(
-                "Due_Time must be in the future",
-                400,
-                data={
-                    "Type": "ERR",
-                    "Message": "Due_Time must be in the future"
-                },
-            )
 
     # Ensure Scope is a list of unique values
     Scope_Set = list(set(Scope)) if Scope else []
@@ -188,8 +179,10 @@ def edit_token(user, pat_id, data):
                          })
 
     # Retrieve via mongo layer wrapper
-    pat = PAT(pat_id)
-    if not pat:
+    try:
+        pat_doc = PAT.objects.get(pat_id=pat_id)
+        pat = PAT(pat_doc)
+    except engine.DoesNotExist:
         return HTTPError("Token not found",
                          404,
                          data={
@@ -226,7 +219,17 @@ def edit_token(user, pat_id, data):
                 },
             )
     if "Scope" in data:
-        update_data["scope"] = list(data["Scope"])
+        new_scope = list(set(data["Scope"]))
+        # Validate scope usage against user role
+        if not PAT.validate_scope_for_role(new_scope, user.role,
+                                           ROLE_SCOPE_MAP):
+            return HTTPError("Invalid Scope",
+                             400,
+                             data={
+                                 "Type": "ERR",
+                                 "Message": "Invalid Scope"
+                             })
+        update_data["scope"] = new_scope
 
     try:
         if update_data:
@@ -251,8 +254,10 @@ def edit_token(user, pat_id, data):
 @login_required
 def deactivate_token(user, pat_id):
     # Retrieve via mongo layer wrapper
-    pat = PAT(pat_id)
-    if not pat:
+    try:
+        pat_doc = PAT.objects.get(pat_id=pat_id)
+        pat = PAT(pat_doc)
+    except engine.DoesNotExist:
         return HTTPError("Token not found",
                          404,
                          data={

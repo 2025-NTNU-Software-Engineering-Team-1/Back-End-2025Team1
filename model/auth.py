@@ -187,8 +187,7 @@ def validate_pat_request(required_scopes: list[str]) -> Any:
 
     if not required_set.issubset(token_scopes):
         missing_scopes = ','.join(required_set - token_scopes)
-        return HTTPError(f'Insufficient Scopes Required: {missing_scopes}',
-                         403)
+        return HTTPError(f'Missing required scopes: {missing_scopes}', 403)
 
     # Inject User
     try:

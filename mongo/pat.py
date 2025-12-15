@@ -49,7 +49,7 @@ class PersonalAccessToken(MongoBase, engine=engine.PersonalAccessToken):
     def add(cls, pat_id: str, name: str, owner: str, hash_val: str,
             scope: List[str],
             due_time: Optional[datetime]) -> 'PersonalAccessToken':
-        """Calculates hash and adds a new PAT to the database."""
+        """Adds a new PAT to the database using a pre-calculated hash value."""
         try:
             pat = cls.engine(
                 pat_id=pat_id,
@@ -110,12 +110,8 @@ class PersonalAccessToken(MongoBase, engine=engine.PersonalAccessToken):
     def to_dict(self) -> Dict[str, Any]:
         """
         Convert to API response format.
-        Timestamps are converted to ISO 8601 format.
+        Timestamps are converted to TAIPEI_TIMEZONE for API responses.
         """
-        # Using UTC for API consistency, or we could import TAIPEI_TIMEZONE if needed
-        # But to match original behavior, let's keep it simple or import TAIPEI_TIMEZONE
-        # Original code imported TAIPEI_TIMEZONE from mongo.engine
-
         from .engine import TAIPEI_TIMEZONE
 
         def fmt(dt):
@@ -143,17 +139,6 @@ class PersonalAccessToken(MongoBase, engine=engine.PersonalAccessToken):
         Retrieves a PAT by its hash.
         Raises DoesNotExist if not found.
         """
-        # We return the engine document wrapped in our class is not necessary if we inherit properly
-        # But this class wraps engine document in __init__?
-        # Wait, previous code:
-        # class PersonalAccessToken(MongoBase, engine=engine.PersonalAccessToken):
-        # objects = engine.PersonalAccessToken.objects
-        #
-        # cls.engine is engine.PersonalAccessToken (from MongoBase logic presumably)
-        #
-        # Let's check how other methods do it.
-        # add() uses cls.engine(...).save() and returns cls(pat)
-        # So we should probably return cls(doc).
 
         pat_doc = cls.engine.objects.get(hash=token_hash)
         return cls(pat_doc)
