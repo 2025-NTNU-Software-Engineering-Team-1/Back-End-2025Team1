@@ -190,7 +190,7 @@ def edit_token(user, pat_id, data):
                              "Message": "Token not found"
                          })
 
-    if pat.owner != user.username:
+    if pat.owner != user.username and user.role != Role.ADMIN:
         return HTTPError("Not token owner",
                          403,
                          data={

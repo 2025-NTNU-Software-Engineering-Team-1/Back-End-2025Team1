@@ -314,6 +314,29 @@ class TestPATRoutes(BaseTester):
         assert token.is_revoked is True
         assert token.revoked_by == 'admin'
 
+    def test_admin_edit_user_token(self, client_admin):
+        """Test that admin can edit any user's token"""
+        pat_id = 'student_001'
+        edit_data = {
+            'data': {
+                'Name': 'Admin Edited Token',
+                'Scope': ['read:user']  # Admin can assign scopes
+            }
+        }
+
+        rv = client_admin.patch(f'/profile/api_token/edit/{pat_id}',
+                                json=edit_data)
+        json_data = rv.get_json()
+
+        assert rv.status_code == 200
+        assert json_data['status'] == 'ok'
+        assert json_data['message'] == 'Token updated'
+
+        # Verify in DB
+        token = PersonalAccessToken.objects.get(pat_id=pat_id)
+        assert token.name == 'Admin Edited Token'
+        assert token.scope == ['read:user']
+
     def test_unauthorized_access(self, client):
         """Test that endpoints require authentication"""
         endpoints = [
