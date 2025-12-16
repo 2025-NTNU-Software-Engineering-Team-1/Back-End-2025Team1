@@ -1,4 +1,5 @@
 import io
+import pytest
 from zipfile import ZipFile
 from mongo import Submission, engine
 from mongo.utils import MinioClient
@@ -88,7 +89,10 @@ def test_artifact_collector_limits(monkeypatch, tmp_path):
     repo_root = Path(__file__).resolve().parents[2]
     sandbox_path = repo_root / "Sandbox"
     sys.path.insert(0, str(sandbox_path))
-    from dispatcher.artifact_collector import ArtifactCollector, _CASE_FILE_LIMIT
+    try:
+        from dispatcher.artifact_collector import ArtifactCollector, _CASE_FILE_LIMIT
+    except ImportError:
+        pytest.skip("Sandbox environment not set up yet")
 
     class DummyResp:
 

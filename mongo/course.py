@@ -3,7 +3,7 @@ from .user import *
 from .utils import *
 import re
 import enum
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from .base import MongoBase
 from datetime import datetime
 
@@ -259,3 +259,16 @@ class Course(MongoBase, engine=engine.Course):
         """
 
         return bool(self.own_permission(user) & req)
+
+    def get_ai_settings(self) -> Dict[str, Any]:
+        """
+        Get AI settings for the course.
+        """
+        model_name = DEFAULT_AI_MODEL
+        if self.obj.ai_model:
+            model_name = self.obj.ai_model.name
+
+        return {
+            "is_ai_enabled": self.obj.is_ai_vt_enabled,
+            "ai_model": model_name
+        }

@@ -247,6 +247,22 @@ def get_course_scoreboard(
     )
 
 
+@course_api.route('/<course_name>/ai/settings', methods=['GET'])
+@login_required
+def get_course_ai_settings(user, course_name):
+    """
+    Get Course AI Settings
+    """
+    course = Course(course_name)
+    if not course:
+        return HTTPError('Course not found', 404)
+
+    if not course.permission(user, Course.Permission.VIEW):
+        return HTTPError('You are not in this course.', 403)
+
+    return HTTPResponse('Success', data=course.get_ai_settings())
+
+
 # =========================================
 # AI API Sections
 # =========================================
