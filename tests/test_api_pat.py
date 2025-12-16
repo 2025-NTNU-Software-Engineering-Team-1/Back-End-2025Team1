@@ -15,16 +15,16 @@ class TestAPIUserIPs(BaseTester):
         student_user = utils.user.create_user(role=engine.User.Role.STUDENT)
         course = utils.course.create_course(students=[student_user])
 
-        from model.utils.pat import add_pat_to_database, hash_pat_token
+        from mongo.pat import PAT
 
         token_string = 'noj_pat_test_invalid_scope_token_12345'
         pat_id = secrets.token_hex(8)
 
-        add_pat_to_database(
+        PAT.add(
             pat_id=pat_id,
             name='test_token',
             owner=student_user.username,
-            hash_val=hash_pat_token(token_string),
+            hash_val=PAT.hash_token(token_string),
             scope=['read:self'],
             due_time=None,
         )
