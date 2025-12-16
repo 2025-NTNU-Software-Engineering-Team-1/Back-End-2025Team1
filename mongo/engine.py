@@ -10,6 +10,8 @@ from zipfile import ZipFile, BadZipFile
 __all__ = [*mongoengine.__all__]
 
 TAIPEI_TIMEZONE = timezone(timedelta(hours=8))
+DEFAULT_AI_MODEL = 'gemini-2.5-flash-lite'
+RPD_RESET_INTERVAL = timedelta(hours=24)
 
 MONGO_HOST = os.environ.get('MONGO_HOST', 'mongomock://localhost')
 
@@ -263,6 +265,13 @@ class Course(Document):
     announcements = ListField(ReferenceField('Announcement'))
     posts = ListField(ReferenceField('Post'), default=list)
     student_scores = DictField(db_field='studentScores')
+
+    # for AI_vt
+    is_ai_vt_enabled = BooleanField(db_field='isAIEnabled', default=True)
+    ai_model = ReferenceField('AiModel',
+                              db_field='aiModel',
+                              null=True,
+                              default=DEFAULT_AI_MODEL)
 
 
 class Number(Document):
@@ -717,3 +726,84 @@ class PersonalAccessToken(Document):
     description = StringField(
         required=False,
         max_length=256)  # Record the purpose of the token (Optional)
+
+
+class AiModel(Document):
+    # AI model that can be used.
+    name = StringField(max_length=64, required=True, unique=True)
+    rpm_limit = IntField(db_field='RPM_limit', required=True)
+    tpm_limit = IntField(db_field='TPM_limit', required=True)
+    rpd_limit = IntField(db_field='RPD_limit', required=True)
+    description = StringField(max_length=256, default='')
+    is_active = BooleanField(default=True)
+
+    meta = {
+        'collection': 'ai_model',
+    }
+
+
+class AiApiKey(Document):
+    # API key for accessing AI models.
+    key_value = StringField(db_field='keyValue', required=True)
+    key_name = StringField(db_field='keyName', required=True)
+    course_name = ReferenceField('Course',
+                                 db_field='course_name',
+                                 required=True)
+    input_token = IntField(db_field='inputToken', default=0)
+    output_token = IntField(db_field='outputToken', default=0)
+    is_active = BooleanField(db_field='isActive', default=True)
+    request_count = IntField(db_field='requestCount', default=0)
+    rpd = IntField(db_field='RPD', default=0)  # 紀錄當日累積請求量
+    last_reset_date = DateTimeField(default=datetime.now,
+                                    db_field='lastResetDate')
+    created_by = ReferenceField('User', db_field='createdBy', required=True)
+    meta = {'collection': 'ai_api_key'}
+    created_at = DateTimeField(default=datetime.now, db_field='createdAt')
+    updated_at = DateTimeField(default=datetime.now, db_field='updatedAt')
+    created_by = ReferenceField('User', db_field='createdBy', required=True)
+    is_active = BooleanField(db_field='isActive', default=True)
+    meta = {
+        'collection': 'ai_api_key',
+        'indexes': [{
+            'fields': ['course_name', 'key_name'],
+            'unique': True
+        }]
+    }
+
+
+class AiApiLog(Document):
+    # Log of AI API requests.
+    course_name = ReferenceField('Course',
+                                 db_field='course_name',
+                                 required=True)
+    username = StringField(required=True)
+    # history: list: [{"role": "user/model", "parts": [...]}, ...]
+    history = ListField(DictField(), default=list)
+    total_tokens = IntField(db_field='totalTokens', default=0)
+
+    meta = {
+        'collection': 'ai_api_log',
+        'indexes': [('course_name', 'username')]
+    }
+
+
+class AiTokenUsage(Document):
+    """
+    Focus on tracking token usage for AI API keys.
+    """
+    api_key = ReferenceField('AiApiKey', db_field='apiKey', required=True)
+    problem_id = ReferenceField('Problem',
+                                db_field='problemId',
+                                required=False)
+    course_name = ReferenceField('Course',
+                                 db_field='courseName',
+                                 required=True)
+
+    input_tokens = IntField(default=0)
+    output_tokens = IntField(default=0)
+    timestamp = DateTimeField(default=datetime.now)
+
+    meta = {
+        'collection': 'ai_token_usage',
+        'indexes': ['api_key', ('course_name', 'problem_id')]
+    }

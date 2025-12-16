@@ -4,6 +4,7 @@ from logging.config import dictConfig
 from flask import Flask
 from model import *
 from mongo import *
+from mongo.ai_vtuber import migrate_ai_data
 from config import LOGGING_CONFIG, LOG_DIR
 
 
@@ -18,23 +19,14 @@ def app():
     app.url_map.strict_slashes = False
     setup_smtp(app)
     # Register flask blueprint
-    api2prefix = [
-        (auth_api, '/auth'),
-        (profile_api, '/profile'),
-        (problem_api, '/problem'),
-        (submission_api, '/submission'),
-        (course_api, '/course'),
-        (homework_api, '/homework'),
-        (test_api, '/test'),
-        (ann_api, '/ann'),
-        (ranking_api, '/ranking'),
-        (post_api, '/post'),
-        (copycat_api, '/copycat'),
-        (health_api, '/health'),
-        (user_api, '/user'),
-        (pat_api, '/pat'),
-        (trial_submission_api, '/trial-submission'),
-    ]
+    api2prefix = [(auth_api, '/auth'), (profile_api, '/profile'),
+                  (problem_api, '/problem'), (submission_api, '/submission'),
+                  (course_api, '/course'), (homework_api, '/homework'),
+                  (test_api, '/test'), (ann_api, '/ann'),
+                  (ranking_api, '/ranking'), (post_api, '/post'),
+                  (copycat_api, '/copycat'), (health_api, '/health'),
+                  (user_api, '/user'), (pat_api, '/pat'),
+                  (trial_submission_api, '/trial-submission'), (ai_api, '/ai')]
     for api, prefix in api2prefix:
         app.register_blueprint(api, url_prefix=prefix)
 
@@ -62,6 +54,13 @@ def app():
         )
     if not Course('Public'):
         Course.add_course('Public', 'first_admin')
+
+    # Initialize AI Models and Data
+    try:
+        AiModel.initialize_default_models()
+        migrate_ai_data()
+    except Exception as e:
+        app.logger.warning(f"AI initialization failed: {e}")
 
     if __name__ != '__main__':
         logger = logging.getLogger('gunicorn.error')

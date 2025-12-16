@@ -1108,8 +1108,6 @@ def problem_migrate_test_case(user: User, problem: Problem):
 
 
 #
-
-
 @problem_api.route('/static-analysis/options', methods=['GET'])
 def get_static_analysis_options():
     try:
@@ -1249,14 +1247,14 @@ def get_public_testcases(user, problem_id: int):
         except Exception:
             outp = ""
         cases.append({
-            "file_name": base,
-            "memory_limit": default_mem,
-            "time_limit": default_time,
-            "input_content": inp,
-            "output_content": outp,
+            "File_Name": base,
+            "Memory_Limit": default_mem,
+            "Time_Limit": default_time,
+            "Input_Content": inp,
+            "Output_Content": outp,
         })
 
-    response_data = {"trial_cases": cases}
+    response_data = {"Trial_Cases": cases}
 
     # Store in Redis Cache
     try:
@@ -1269,38 +1267,32 @@ def get_public_testcases(user, problem_id: int):
     return HTTPResponse("OK", data=response_data)
 
 
-@problem_api.get("/<int:problem_id>/trial/history")
+@problem_api.route('/<int:problem_id>/trial/history', methods=['GET'])
 @login_required
-def get_trial_history(user, problem_id: int):
+@Request.doc('problem_id', 'problem', Problem)
+def view_trial_history(
+    user: User,
+    problem: Problem,
+):
     """
-    Get user's trial submission history for a problem
-    
-    Returns:
-        List of trial submissions
+    Get trial submission history for a problem
     """
-    try:
-        # Check if user has permission to submit
-        problem = Problem(problem_id)
-        if not problem or not getattr(problem, "obj", None):
-            return HTTPError("Problem not found.", 404)
-
-        permissions = [
-            problem.permission(user, Problem.Permission.ONLINE),
-        ]
-        if not all(permissions):
-            return HTTPError(
-                "You don't have permission to view trial history for this problem.",
-                403)
-
-        # Get trial submissions for this user and problem
-        history = TrialSubmission.filter(
-            user=user,
-            problem=problem_id,
-            count=10  # Limit to last 10 trials
+    current_app.logger.info(
+        f"User {user.username} is requesting trial history for problem id-{problem.id}"
+    )
+    # 1. Permission Check: Pass if user has VIEW permission
+    if not problem.permission(user, problem.Permission.VIEW):
+        current_app.logger.info(
+            f"User {user.username} attempted to access trial history for problem id-{problem.id} without permission."
         )
+        return permission_error_response()
 
-        return HTTPResponse("Trial history retrieved successfully.",
-                            data={"history": [s.to_dict() for s in history]})
+    # 2. Call Model to handle business logic
+    try:
+        data = TrialSubmission.get_history_for_api(user=user, problem=problem)
+
+        # 3. Return the result
+        return HTTPResponse('Success.', data=data)
     except Exception as e:
         current_app.logger.error(f"Error retrieving trial history: {str(e)}")
         return HTTPError(f"Failed to retrieve trial history: {str(e)}", 500)
@@ -1354,7 +1346,7 @@ def request_trial_submission(user,
 
         return HTTPResponse(
             "Trial submission created successfully.",
-            data={"trial_submission_id": str(trial_submission.id)})
+            data={"Trial_Submission_Id": str(trial_submission.id)})
     except PermissionError as e:
         current_app.logger.info(
             f"Permission error for trial submission by user {user.username} on problem id-{problem_id}: {str(e)}"

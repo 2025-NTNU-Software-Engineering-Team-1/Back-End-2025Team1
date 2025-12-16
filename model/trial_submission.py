@@ -197,7 +197,12 @@ def upload_trial_files(user, trial_id: str):
 
     current_app.logger.info(
         f"Successfully uploaded files for trial_id: {trial_id}")
-    return HTTPResponse("Files received.", )
+    return HTTPResponse("Files received.",
+                        data={
+                            "Trial_Submission_Id": str(ts.id),
+                            "Code_Path": code_path,
+                            "Custom_Testcases_Path": custom_path,
+                        })
 
 
 @trial_submission_api.route("/<trial_id>", methods=["GET"])

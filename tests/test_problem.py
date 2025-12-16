@@ -1582,18 +1582,18 @@ class TestTrialSubmissionAPI(BaseTester):
 
         data = rv.get_json()
         assert data['status'] == 'ok'
-        assert 'trial_cases' in data['data']
+        assert 'Trial_Cases' in data['data']
 
-        cases = data['data']['trial_cases']
+        cases = data['data']['Trial_Cases']
         assert len(cases) == 2
-        assert cases[0]['file_name'] == 'case1'
-        assert cases[0]['input_content'] == '1 2\n'
-        assert cases[0]['output_content'] == '3\n'
-        assert cases[0]['memory_limit'] == 256000
-        assert cases[0]['time_limit'] == 1000
-        assert cases[1]['file_name'] == 'case2'
-        assert cases[1]['input_content'] == '5 7\n'
-        assert cases[1]['output_content'] == '12\n'
+        assert cases[0]['File_Name'] == 'case1'
+        assert cases[0]['Input_Content'] == '1 2\n'
+        assert cases[0]['Output_Content'] == '3\n'
+        assert cases[0]['Memory_Limit'] == 256000
+        assert cases[0]['Time_Limit'] == 1000
+        assert cases[1]['File_Name'] == 'case2'
+        assert cases[1]['Input_Content'] == '5 7\n'
+        assert cases[1]['Output_Content'] == '12\n'
 
     def test_get_public_testcases_problem_not_found(self, forge_client):
         client = forge_client('student')
@@ -1660,10 +1660,10 @@ class TestTrialSubmissionAPI(BaseTester):
         assert rv.status_code == 200
 
         data = rv.get_json()
-        cases = data['data']['trial_cases']
+        cases = data['data']['Trial_Cases']
         assert len(cases) == 1
-        assert cases[0]['input_content'] == '1 2\n'
-        assert cases[0]['output_content'] == ''
+        assert cases[0]['Input_Content'] == '1 2\n'
+        assert cases[0]['Output_Content'] == ''
 
         try:
             minio.client.remove_object(minio.bucket, path)
@@ -1707,9 +1707,9 @@ class TestTrialSubmissionAPI(BaseTester):
         assert rv.status_code == 200
 
         data = rv.get_json()
-        cases = data['data']['trial_cases']
-        assert cases[0]['memory_limit'] is None
-        assert cases[0]['time_limit'] is None
+        cases = data['data']['Trial_Cases']
+        assert cases[0]['Memory_Limit'] is None
+        assert cases[0]['Time_Limit'] is None
 
     def test_request_trial_submission_success(self, forge_client,
                                               setup_problem_with_testcases):
@@ -1725,8 +1725,8 @@ class TestTrialSubmissionAPI(BaseTester):
         assert rv.status_code == 200
         data = rv.get_json()
         assert data['status'] == 'ok'
-        assert 'trial_submission_id' in data['data']
-        trial_id = data['data']['trial_submission_id']
+        assert 'Trial_Submission_Id' in data['data']
+        trial_id = data['data']['Trial_Submission_Id']
 
         # Verify record
         from mongo.submission import TrialSubmission
@@ -1784,5 +1784,5 @@ class TestTrialSubmissionAPI(BaseTester):
             })
         assert rv.status_code == 200
         from mongo.submission import TrialSubmission
-        ts = TrialSubmission(rv.get_json()['data']['trial_submission_id'])
+        ts = TrialSubmission(rv.get_json()['data']['Trial_Submission_Id'])
         assert ts.use_default_case is False
