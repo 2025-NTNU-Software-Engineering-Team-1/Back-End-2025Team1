@@ -22,6 +22,7 @@ from flask import current_app
 from tempfile import NamedTemporaryFile
 from datetime import date, datetime, timedelta
 from zipfile import ZipFile, is_zipfile, BadZipFile
+from ulid import ULID
 import abc
 
 from . import engine
@@ -40,6 +41,12 @@ __all__ = [
     'TestCaseNotFound',
     'SubmissionCodeNotFound',
 ]
+
+SUBMISSION_ALLOWED_SORT_BY = [
+    'runTime', 'memoryUsage', 'timestamp', '-timestamp'
+]
+OUTPUT_TRUNCATE_SIZE = 4096  # 4KB
+OUTPUT_TRUNCATE_MSG = "\n... (Content too long, please download output file) ..."
 
 # TODO: modular token function
 
@@ -1248,18 +1255,26 @@ class Submission(MongoBase, BaseSubmission, engine=engine.Submission):
             raise ValueError(f'offset must >= 0!')
         if count < -1:
             raise ValueError(f'count must >=-1!')
-        if sort_by is not None and sort_by not in ['runTime', 'memoryUsage']:
-            raise ValueError(f'can only sort by runTime or memoryUsage')
+        if sort_by is not None and sort_by not in SUBMISSION_ALLOWED_SORT_BY:
+            raise ValueError(
+                f'can only sort by {", ".join(SUBMISSION_ALLOWED_SORT_BY)}')
         wont_have_results = False
+
         if isinstance(problem, int):
             problem = Problem(problem).obj
             if problem is None:
                 wont_have_results = True
+        elif hasattr(problem, 'obj'):
+            problem = problem.obj
+
         if isinstance(q_user, str):
             q_user = User(q_user)
             if not q_user:
                 wont_have_results = True
             q_user = q_user.obj
+        elif hasattr(q_user, 'obj'):
+            q_user = q_user.obj
+
         if isinstance(course, str):
             course = Course(course)
             if not course:
@@ -1636,6 +1651,11 @@ class TrialSubmission(MongoBase, BaseSubmission,
 
     # --- TrialSubmission-specific Classmethods ---
 
+    @property
+    def code2status(self):
+        # 將Status從數字轉回字串
+        return {v: k for k, v in self.status2code.items()}
+
     @staticmethod
     def count():
         return len(engine.TrialSubmission.objects)
@@ -1668,18 +1688,26 @@ class TrialSubmission(MongoBase, BaseSubmission,
             raise ValueError(f'offset must >= 0!')
         if count < -1:
             raise ValueError(f'count must >=-1!')
-        if sort_by is not None and sort_by not in ['runTime', 'memoryUsage']:
-            raise ValueError(f'can only sort by runTime or memoryUsage')
+        if sort_by is not None and sort_by not in SUBMISSION_ALLOWED_SORT_BY:
+            raise ValueError(
+                f'can only sort by {", ".join(SUBMISSION_ALLOWED_SORT_BY)}')
         wont_have_results = False
+
         if isinstance(problem, int):
             problem = Problem(problem).obj
             if problem is None:
                 wont_have_results = True
+        elif hasattr(problem, 'obj'):
+            problem = problem.obj
+
         if isinstance(q_user, str):
             q_user = User(q_user)
             if not q_user:
                 wont_have_results = True
             q_user = q_user.obj
+        elif hasattr(q_user, 'obj'):
+            q_user = q_user.obj
+
         if isinstance(course, str):
             course = Course(course)
             if not course:
@@ -1737,6 +1765,7 @@ class TrialSubmission(MongoBase, BaseSubmission,
         lang: int,
         timestamp: Optional[date] = None,
         ip_addr: Optional[str] = None,
+        use_default_case: bool = True,
     ) -> 'TrialSubmission':
         '''
         Insert a new test submission into db
@@ -1759,6 +1788,111 @@ class TrialSubmission(MongoBase, BaseSubmission,
                                             user=user.obj,
                                             language=lang,
                                             timestamp=timestamp,
-                                            ip_addr=ip_addr)
+                                            ip_addr=ip_addr,
+                                            use_default_case=use_default_case)
         submission.save()
         return cls(submission.id)
+
+    @classmethod
+    def get_history_for_api(cls,
+                            user: User,
+                            problem: Problem,
+                            offset: int = 0,
+                            count: int = -1) -> Dict[str, Any]:
+        """
+        Method for URI: /problem/<id>/trial/history
+        """
+        current_app.logger.debug(
+            f"Getting trial submission history for user {user.username} on problem id-{problem.problem_id}"
+        )
+        try:
+            # 1. 使用 filter 查詢資料
+            submissions, total_count = cls.filter(
+                user=user,
+                q_user=user,
+                problem=problem,
+                offset=offset,
+                count=count,
+                with_count=True,
+                sort_by='-timestamp'  # 預設依時間倒序
+            )
+
+            # 2. 轉成 API 規定的格式
+            history_list = []
+            for sub in submissions:
+                # 取得狀態字串，如果找不到對應代碼 (如 -1 pending) 則顯示 'Pending' 或其他預設值
+                status_str = sub.code2status.get(sub.status, 'Judging')
+                if sub.status == -1:
+                    status_str = 'Judging'
+                elif sub.status == -2:
+                    status_str = 'Pending'
+
+                history_list.append({
+                    "trial_submission_id": str(sub.id),
+                    "problem_id": str(sub.problem_id),
+                    "status": status_str,
+                    "score": sub.score,
+                    "language_type": sub.language,  # 0: C, 1: C++, 2: Python
+                    "timestamp":
+                    sub.timestamp.timestamp()  # 回傳 Unix Timestamp 方便前端處理
+                })
+
+            return {"total_count": total_count, "history": history_list}
+        except Exception as e:
+            current_app.logger.error(
+                f"Error getting trial submission history: {e}")
+            raise e
+
+    def get_trial_api_info(self) -> Dict[str, Any]:
+        """
+            Format the trial submission data for API response.
+            Includes Truncated Stdout/Stderr text for each task.
+            """
+        # Convert status code
+        status_str = self.code2status.get(self.status, 'Judging')
+        if self.status < 0:
+            status_str = 'Judging' if self.status == -1 else 'Pending'
+
+        tasks_data = []
+        for i, task in enumerate(self.tasks):
+            # One task for one case only
+            if not task.cases:
+                continue
+
+            case = task.cases[0]
+
+            # Get Stdout/Stderr
+            try:
+                output_content = self.get_single_output(i, 0, text=True)
+                stdout_text = output_content.get('stdout', '')
+                stderr_text = output_content.get('stderr', '')
+            except (FileNotFoundError, AttributeError):
+                stdout_text = ''
+                stderr_text = ''
+
+            # === Apply Truncate Logic ===
+            # Truncate if exceeds OUTPUT_TRUNCATE_SIZE
+            if len(stdout_text) > OUTPUT_TRUNCATE_SIZE:
+                stdout_text = stdout_text[:OUTPUT_TRUNCATE_SIZE] + OUTPUT_TRUNCATE_MSG
+
+            if len(stderr_text) > OUTPUT_TRUNCATE_SIZE:
+                stderr_text = stderr_text[:OUTPUT_TRUNCATE_SIZE] + OUTPUT_TRUNCATE_MSG
+
+            task_status_str = self.code2status.get(case.status, 'Unknown')
+
+            tasks_data.append({
+                "status": task_status_str,
+                "exec_time": case.exec_time,
+                "memory_usage": case.memory_usage,
+                "score": task.score,
+                "stdout": stdout_text,
+                "stderr": stderr_text
+            })
+
+        return {
+            "trial_submission_id": str(self.id),
+            "timestamp": self.timestamp.timestamp(),
+            "status": status_str,
+            "score": self.score,
+            "tasks": tasks_data
+        }

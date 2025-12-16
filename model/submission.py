@@ -284,19 +284,41 @@ def get_submission(user, submission: Submission):
     if has_code:
         try:
             code = submission.get_main_code()
-            if submission.is_zip_mode and code:
-                ret['codeDownloadUrl'] = code
+            if submission.is_zip_mode:
+                ret['codeDownloadUrl'] = submission.get_code_download_url()
                 ret['code'] = None
             else:
                 ret['code'] = code if code is not None else ''
         except (UnicodeDecodeError, SubmissionCodeNotFound):
-            ret['code'] = ''
+            # If main code reading fails, checks if it is zip mode as a fallback or primary check depending on logic flow
+            # The original feature branch logic prioritized zip mode check.
+            # Let's respect the structure: if zip mode, we might not even need get_main_code() if it fails for zip?
+            # Actually, looking at mongo/submission.py, get_main_code checks if is_zip_mode and returns download url or similar.
+            # But let's look at the conflicting blocks again.
+
+            # HEAD tries get_main_code().
+            # feature branch checks is_zip_mode first.
+
+            # Correct merged logic:
+            if submission.is_zip_mode:
+                ret['code'] = None
+                ret['codeDownloadUrl'] = submission.get_code_download_url()
+            else:
+                try:
+                    code = submission.get_main_code()
+                    ret['code'] = code if code is not None else ''
+                except (UnicodeDecodeError, SubmissionCodeNotFound):
+                    ret['code'] = ''  # Or False as in feature branch? HEAD uses '', feature uses False.
+                    # HEAD seems to be the one dealing with "SubmissionCodeNotFound", so '' seems safer for UI.
+                    # Wait, submission-test-mode says: ret['code'] = False in exception.
+                    # HEAD says ret['code'] = ''.
+                    # I will stick to HEAD's '' as it seems more robust for a string field.
+                    pass
         except Exception as e:  # MinIO/network issues or other unexpected errors
             current_app.logger.error(
                 f"failed to load submission code [{submission.id}]: {e}")
             ret['code'] = ''
             ret['codeDownloadUrl'] = None
-
     if has_output:
         try:
             ret['tasks'] = submission.get_detailed_result()

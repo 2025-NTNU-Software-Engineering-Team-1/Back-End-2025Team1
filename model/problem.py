@@ -4,21 +4,27 @@ import statistics
 import logging
 from dataclasses import asdict
 from io import BytesIO
+import zipfile
+import io
+from datetime import datetime
 from flask import Blueprint, request, send_file, current_app
 from urllib import parse
 from zipfile import BadZipFile
 from mongo import *
 from mongo import engine
 from mongo import sandbox
-from mongo.utils import drop_none, MinioClient
+from mongo.utils import drop_none, MinioClient, RedisCache
 import hashlib
 from mongo.problem import *
+from mongo.submission import TrialSubmission
 from .utils.problem_utils import build_config_and_pipeline as _build_config_and_pipeline
 from .utils.problem_utils import (
     build_static_analysis_rules as _build_static_analysis_rules, )
 from .utils.problem_utils import derive_build_strategy as _derive_build_strategy
 from .auth import *
 from .utils import *
+
+PUBLIC_TESTCASES_TTL = 3600  # 1 hour Time-to-Live for Redis cache
 
 __all__ = ['problem_api']
 
@@ -1158,3 +1164,202 @@ def get_static_analysis_options():
 
     except Exception as e:
         return HTTPError(str(e), 400)
+
+
+@problem_api.get("/<int:problem_id>/public-testcases")
+@login_required
+def get_public_testcases(user, problem_id: int):
+    # Load problem
+    problem = Problem(problem_id)
+    if not problem or not getattr(problem, "obj", None):
+        return HTTPError("Problem not found.", 404)
+
+    # Enforce test mode: if field exists and is False -> forbid
+    if hasattr(problem.obj, "test_mode_enabled") and not getattr(
+            problem.obj, "test_mode_enabled", False):
+        return HTTPError("Test mode disabled.", 403)
+
+    # Redis Cache Lookup
+    cache_key = f'PROBLEM_PUBLIC_TESTCASES_{problem_id}'
+    cache = RedisCache()
+
+    if cache.exists(cache_key):
+        try:
+            # Cache hit: load from cache
+            current_app.logger.debug(f"Cache hit for {cache_key}")
+            cached_data = json.loads(cache.get(cache_key))
+            return HTTPResponse("OK", data=cached_data)
+        except Exception as e:
+            current_app.logger.error(
+                f"Cache hit but failed to parse for {cache_key}: {e}")
+            # If fails: continue to fetch from MinIO
+
+    # Cache miss or fail: Fetch from MinIO
+    zip_path = getattr(problem, "public_cases_zip_minio_path", None)
+    if not zip_path:
+        return HTTPError("No public testcases.", 404)
+
+    # Fetch ZIP from MinIO
+    minio = MinioClient()
+    try:
+        obj = minio.client.get_object(minio.bucket, zip_path)
+        raw = obj.read()
+    except Exception as e:
+        current_app.logger.error(
+            f"Error loading public testcases for problem id-{problem_id}: {e}")
+        return HTTPError(f"Failed to load testcases: {e}", 500)
+    finally:
+        try:
+            obj.close()
+            obj.release_conn()
+        except Exception:
+            pass
+
+    # Defaults from first task (if exists)
+    default_mem = None
+    default_time = None
+    try:
+        if getattr(problem, "test_case", None) and problem.test_case.tasks:
+            default_mem = problem.test_case.tasks[0].memory_limit
+            default_time = problem.test_case.tasks[0].time_limit
+    except Exception:
+        pass
+
+    # Parse ZIP
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(raw))
+    except zipfile.BadZipFile:
+        current_app.logger.warning(
+            f"Invalid ZIP content for problem id-{problem_id}.")
+        return HTTPError("Invalid ZIP content.", 500)
+
+    names = set(zf.namelist())
+    ins = [n for n in names if n.lower().endswith(".in")]
+    cases = []
+    for name in sorted(ins):
+        base = name[:-3]  # strip '.in'
+        out_name = base + ".out"
+        try:
+            inp = zf.read(name).decode("utf-8", errors="replace")
+        except Exception:
+            inp = ""
+        try:
+            outp = (zf.read(out_name).decode("utf-8", errors="replace")
+                    if out_name in names else "")
+        except Exception:
+            outp = ""
+        cases.append({
+            "file_name": base,
+            "memory_limit": default_mem,
+            "time_limit": default_time,
+            "input_content": inp,
+            "output_content": outp,
+        })
+
+    response_data = {"trial_cases": cases}
+
+    # Store in Redis Cache
+    try:
+        cache.set(cache_key,
+                  json.dumps(response_data),
+                  ex=PUBLIC_TESTCASES_TTL)
+    except Exception as e:
+        current_app.logger.warning(f"Failed to set cache for {cache_key}: {e}")
+
+    return HTTPResponse("OK", data=response_data)
+
+
+@problem_api.get("/<int:problem_id>/trial/history")
+@login_required
+def get_trial_history(user, problem_id: int):
+    """
+    Get user's trial submission history for a problem
+    
+    Returns:
+        List of trial submissions
+    """
+    try:
+        # Check if user has permission to submit
+        problem = Problem(problem_id)
+        if not problem or not getattr(problem, "obj", None):
+            return HTTPError("Problem not found.", 404)
+
+        permissions = [
+            problem.permission(user, Problem.Permission.ONLINE),
+        ]
+        if not all(permissions):
+            return HTTPError(
+                "You don't have permission to view trial history for this problem.",
+                403)
+
+        # Get trial submissions for this user and problem
+        history = TrialSubmission.filter(
+            user=user,
+            problem=problem_id,
+            count=10  # Limit to last 10 trials
+        )
+
+        return HTTPResponse("Trial history retrieved successfully.",
+                            data={"history": [s.to_dict() for s in history]})
+    except Exception as e:
+        current_app.logger.error(f"Error retrieving trial history: {str(e)}")
+        return HTTPError(f"Failed to retrieve trial history: {str(e)}", 500)
+
+
+@problem_api.post("/<int:problem_id>/trial/request")
+@login_required
+@Request.json(
+    "language_type: int",
+    "use_default_test_cases: bool?",
+)
+def request_trial_submission(user,
+                             problem_id: int,
+                             language_type: int,
+                             use_default_test_cases: bool = True):
+    """
+    Create a trial submission request
+    
+    Returns:
+        Trial_Submission_Id if successful
+    """
+    current_app.logger.info(
+        f"Requesting trial submission for problem id-{problem_id} by user {user.username}"
+    )
+    # Load problem
+    problem_proxy = Problem(problem_id)
+    if not problem_proxy or not getattr(problem_proxy, "obj", None):
+        return HTTPError("Problem not found.", 404)
+
+    problem = problem_proxy
+
+    # Validate language type (0: C, 1: C++, 2: Python)
+    if language_type not in [0, 1, 2]:
+        return HTTPError(
+            "Invalid language type. Must be 0 (C), 1: C++, 2: Python).", 400)
+
+    # Check if user has permission to submit
+    if not problem.permission(user, Problem.Permission.ONLINE):
+        return HTTPError(
+            "You don't have permission to submit to this problem.", 403)
+
+    # Use TrialSubmission.add() instead of creating engine object directly
+    try:
+        trial_submission = TrialSubmission.add(
+            problem_id=problem_id,
+            username=user.username,
+            lang=language_type,
+            timestamp=datetime.now(),
+            ip_addr=request.remote_addr,
+            use_default_case=use_default_test_cases)
+
+        return HTTPResponse(
+            "Trial submission created successfully.",
+            data={"trial_submission_id": str(trial_submission.id)})
+    except PermissionError as e:
+        current_app.logger.info(
+            f"Permission error for trial submission by user {user.username} on problem id-{problem_id}: {str(e)}"
+        )
+        return HTTPError(str(e), 403)
+    except Exception as e:
+        current_app.logger.error(f"Error creating trial submission: {str(e)}")
+        return HTTPError(f"Failed to create trial submission: {str(e)}", 500)

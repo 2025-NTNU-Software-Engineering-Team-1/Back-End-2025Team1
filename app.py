@@ -1,11 +1,17 @@
 import os
 import logging
+from logging.config import dictConfig
 from flask import Flask
 from model import *
 from mongo import *
+from config import LOGGING_CONFIG, LOG_DIR
 
 
 def app():
+    # Setup logging
+    os.makedirs(LOG_DIR, exist_ok=True)
+    dictConfig(LOGGING_CONFIG)
+
     # Create a flask app
     app = Flask(__name__)
     app.config['PREFERRED_URL_SCHEME'] = 'https'
@@ -27,6 +33,7 @@ def app():
         (health_api, '/health'),
         (user_api, '/user'),
         (pat_api, '/pat'),
+        (trial_submission_api, '/trial-submission'),
     ]
     for api, prefix in api2prefix:
         app.register_blueprint(api, url_prefix=prefix)
@@ -58,7 +65,9 @@ def app():
 
     if __name__ != '__main__':
         logger = logging.getLogger('gunicorn.error')
-        app.logger.handlers = logger.handlers
+        # Avoid mixing Flask default logger and Gunicorn logger
+        # So I quoted the following line
+        # app.logger.handlers = logger.handlers
         app.logger.setLevel(logger.level)
 
     return app

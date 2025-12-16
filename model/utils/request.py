@@ -21,6 +21,7 @@ type_map = {
 }
 
 
+# Refactored: The old one had terrible readability
 class _Request(type):
 
     def __getattr__(self, content_type):
@@ -31,32 +32,104 @@ class _Request(type):
 
                 @wraps(func)
                 def wrapper(*args, **kwargs):
-                    data = getattr(request, content_type)
-                    if data == None:
-                        # FIXME: This exception doesn't mean the content type is wrong
+                    # 1. Acquiring the [Request] data
+                    request_data = getattr(request, content_type)
+                    if request_data is None:
                         return HTTPError(
                             f'Unaccepted Content-Type {content_type}', 415)
-                    try:
-                        # Magic
-                        # yapf: disable
-                        kwargs.update({
-                            k: (lambda v: v
-                                if t is None or type(v) is t else int(''))(
-                                    data.get((lambda s, *t: s + ''.join(
-                                        map(str.capitalize, t))
-                                              )(*filter(bool, k.split('_')))))
-                            for k, t in map(
-                                lambda x:
-                                (x[0], (x[1:] or None) and type_map.get(x[1].strip())),
-                                map(lambda q: q.split(':', 1), keys))
-                        })
-                        # yapf: enable
-                    except ValueError as ve:
-                        return HTTPError('Requested Value With Wrong Type',
-                                         400)
-                    kwargs.update(
-                        {v: data.get(vars_dict[v])
-                         for v in vars_dict})
+
+                    parsed_kwargs = {}
+
+                    for key_spec in keys:
+                        # 2. Parsing parameter specifications
+                        if ':' in key_spec:
+                            param_name, type_str = key_spec.split(':', 1)
+                            param_name = param_name.strip()
+                            target_type = type_map.get(type_str.strip())
+                        else:
+                            param_name = key_spec.strip()
+                            target_type = None
+
+                        # 3. Smart key lookup (Snake/Camel/Title)
+                        #    Determine key name candidates
+                        parts = [p for p in param_name.split('_') if p]
+                        if not parts:
+                            camel_key = param_name
+                        else:
+                            camel_key = parts[0] + ''.join(p.capitalize()
+                                                           for p in parts[1:])
+
+                        possible_keys = [
+                            camel_key,  # languageType
+                            param_name,  # language_type
+                            param_name.title(),  # Language_Type
+                            param_name.upper()  # LANGUAGE_TYPE
+                        ]
+
+                        value = None
+                        found_key = None
+
+                        for k in possible_keys:
+                            if k in request_data:
+                                value = request_data[k]
+                                found_key = k
+                                break
+
+                        # 4. Checking for missing values
+                        #    Required fields missing should directly report error
+                        if value is None and target_type is not None:
+                            if param_name not in vars_dict:
+                                current_app.logger.error(
+                                    f"[Request Parsing] Missing required field '{param_name}'. "
+                                    f"Tried keys: {possible_keys}. "
+                                    f"Received: {request_data}. Caller: {func.__name__}"
+                                )
+                                return HTTPError(
+                                    'Requested Value With Wrong Type', 400)
+
+                        # 5. Type conversion and validation
+                        if target_type is not None and value is not None:
+                            if not isinstance(value, target_type):
+                                try:
+                                    # Special handling for bool
+                                    if target_type is bool:
+                                        if isinstance(value, str):
+                                            lower_val = value.lower()
+                                            if lower_val == 'true':
+                                                value = True
+                                            elif lower_val == 'false':
+                                                value = False
+                                            else:
+                                                raise ValueError(
+                                                    f"Invalid boolean string: {value}"
+                                                )
+                                        else:
+                                            # Strict bool check: reject int or other types
+                                            raise ValueError(
+                                                f"Strict bool check: cannot cast {type(value)} to bool"
+                                            )
+                                    else:
+                                        # Other types attempt automatic conversion
+                                        value = target_type(value)
+
+                                except (ValueError, TypeError) as e:
+                                    current_app.logger.error(
+                                        f"[Request Parsing] Type mismatch for field '{found_key}'. "
+                                        f"Expected {target_type.__name__}, got {type(value).__name__} ('{value}') "
+                                        f"and failed to cast. Error: {e}")
+                                    current_app.logger.error(
+                                        f"[Request Parsing] Caller = {func.__name__}"
+                                    )
+                                    return HTTPError(
+                                        'Requested Value With Wrong Type', 400)
+
+                        parsed_kwargs[param_name] = value
+
+                    # 6. Processing vars_dict
+                    for v in vars_dict:
+                        parsed_kwargs[v] = request_data.get(vars_dict[v])
+
+                    kwargs.update(parsed_kwargs)
                     return func(*args, **kwargs)
 
                 return wrapper

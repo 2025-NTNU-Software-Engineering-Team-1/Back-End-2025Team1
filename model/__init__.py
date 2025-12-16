@@ -11,6 +11,8 @@ from . import post
 from . import copycat
 from . import health
 from . import user
+from . import pat
+from . import trial_submission
 
 from .auth import *
 from .profile import *
@@ -26,6 +28,7 @@ from .copycat import *
 from .health import *
 from .user import *
 from .pat import *
+from .trial_submission import *
 
 __all__ = [
     *auth.__all__,
@@ -42,4 +45,5 @@ __all__ = [
     *health.__all__,
     *user.__all__,
     *pat.__all__,
+    *trial_submission.__all__,
 ]
