@@ -26,7 +26,7 @@ submission_api = Blueprint('submission_api', __name__)
 
 
 @submission_api.route('/', methods=['POST'])
-@login_required
+@login_required(pat_scope=['write:submissions'])
 @Request.json('language_type: int', 'problem_id: int')
 def create_submission(user, language_type, problem_id):
     # the user reach the rate limit for submitting
@@ -126,7 +126,7 @@ def create_submission(user, language_type, problem_id):
 
 
 @submission_api.route('/', methods=['GET'])
-@login_required
+@login_required(pat_scope=['read:submissions'])
 @Request.args('offset', 'count', 'problem_id', 'username', 'status',
               'language_type', 'course')
 def get_submission_list(
@@ -260,7 +260,7 @@ def get_submission_list(
 
 
 @submission_api.route('/<submission>', methods=['GET'])
-@login_required
+@login_required(pat_scope=['read:submissions'])
 @Request.doc('submission', Submission)
 def get_submission(user, submission: Submission):
 
@@ -305,7 +305,7 @@ def get_submission(user, submission: Submission):
 
 
 @submission_api.get('/<submission>/output/<int:task_no>/<int:case_no>')
-@login_required
+@login_required(pat_scope=['read:submissions'])
 @Request.doc('submission', Submission)
 def get_submission_output(
     user,
@@ -421,7 +421,7 @@ def upload_submission_compiled_binary(submission: Submission, token: str):
 
 
 @submission_api.route('/<submission>/pdf/<item>', methods=['GET'])
-@login_required
+@login_required(pat_scope=['read:submissions'])
 @Request.doc('submission', Submission)
 def get_submission_pdf(user, submission: Submission, item):
     # check the permission
@@ -500,7 +500,7 @@ def on_submission_complete(submission: Submission, tasks, token):
 
 
 @submission_api.route('/<submission>', methods=['PUT'])
-@login_required
+@login_required(pat_scope=['write:submissions'])
 @Request.doc('submission', Submission)
 @Request.files('code')
 def update_submission(user, submission: Submission, code):
@@ -551,7 +551,7 @@ def update_submission(user, submission: Submission, code):
 
 
 @submission_api.route('/<submission>/grade', methods=['PUT'])
-@login_required
+@login_required(pat_scope=['grade:submissions'])
 @Request.json('score: int')
 @Request.doc('submission', Submission)
 def grade_submission(user: User, submission: Submission, score: int):

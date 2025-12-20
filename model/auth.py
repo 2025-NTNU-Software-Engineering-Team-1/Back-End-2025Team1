@@ -9,7 +9,7 @@ from mongo import *
 from mongo import engine
 from mongo.utils import hash_id
 from .utils import *
-from .utils.pat import hash_pat_token
+from mongo.pat import PersonalAccessToken
 
 import string
 
@@ -34,36 +34,65 @@ VERIFY_HTML = '''\
 '''
 
 
-def login_required(func):
-    '''Check if the user is login
+def login_required(func=None, *, pat_scope=None):
+    '''Check if the user is login or provide valid PAT (if pat_scope is set)
 
     Returns:
         - A wrapped function
         - 403 Not Logged In
         - 403 Invalid Token
+        - 403 Authorization Expired
         - 403 Inactive User
+        - 401 Token Invalid or Not Found (if PAT used)
+        - 403 Insufficient Scopes Required (if PAT used)
+
+    Usage:
+        @login_required
+        def func(user, ...): ...
+
+        @login_required(pat_scope=['read:user'])
+        def func(user, ...): ...
     '''
 
-    @wraps(func)
-    @Request.cookies(vars_dict={'token': 'piann'})
-    def wrapper(token, *args, **kwargs):
-        if token is None:
-            return HTTPError('Not Logged In', 403)
-        json = jwt_decode(token)
-        if json is None or not json.get('secret'):
-            return HTTPError('Invalid Token', 403)
-        user = User(json['data']['username'])
-        if json['data'].get('userId') != user.user_id:
-            return HTTPError('Authorization Expired', 403)
-        if not user.active:
-            return HTTPError('Inactive User', 403)
-        kwargs['user'] = user
-        return func(*args, **kwargs)
+    def internal_wrapper(f):
 
-    return wrapper
+        @wraps(f)
+        @Request.cookies(vars_dict={'token': 'piann'})
+        def wrapper(token, *args, **kwargs):
+            user = None
+
+            # 1. Try PAT Auth if allowed
+            if pat_scope:
+                result = validate_pat_request(pat_scope)
+                if isinstance(result, tuple):
+                    return result  # Error occurred
+                if result:
+                    user = result  # Success
+
+            # 2. Session Auth (Fallback or Default)
+            if user is None:
+                if token is None:
+                    return HTTPError('Not Logged In', 403)
+                json = jwt_decode(token)
+                if json is None or not json.get('secret'):
+                    return HTTPError('Invalid Token', 403)
+                user = User(json['data']['username'])
+                if json['data'].get('userId') != user.user_id:
+                    return HTTPError('Authorization Expired', 403)
+                if not user.active:
+                    return HTTPError('Inactive User', 403)
+
+            kwargs['user'] = user
+            return f(*args, **kwargs)
+
+        return wrapper
+
+    if func:
+        return internal_wrapper(func)
+    return internal_wrapper
 
 
-def identity_verify(*roles):
+def identity_verify(*roles, pat_scope=None):
     '''Verify a logged in user's identity
 
     You can find an example in `model/test.py`
@@ -72,7 +101,7 @@ def identity_verify(*roles):
     def verify(func):
 
         @wraps(func)
-        @login_required
+        @login_required(pat_scope=pat_scope)
         def wrapper(user, *args, **kwargs):
             if user.role not in roles:
                 return HTTPError('Insufficient Permissions', 403)
@@ -92,69 +121,86 @@ def get_verify_link(user: User) -> str:
     )
 
 
-def pat_required(*required_scopes: str) -> Callable[[Callable], Callable]:
+def pat_required(pat_scope: list[str]) -> Callable:
     '''
-    PAT authentication decorator. Requires Authorization: Bearer <token> in header.
-    Performs validation, expiration, revocation (401), and scope checks (403).
+    PAT authentication decorator. Requires Authorization: Bearer <token>.
     '''
 
-    def verify(func: Callable) -> Callable:
+    def verify(func):
 
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-
-            auth_header = request.headers.get('Authorization')
-            if not auth_header or not auth_header.lower().startswith(
-                    'bearer '):
+            result = validate_pat_request(pat_scope)
+            if result is None:
                 return HTTPError(
                     'Authentication Required: Bearer token is missing', 401)
+            if isinstance(result, tuple):
+                return result
 
-            pat_token = auth_header.split(' ', 1)[1]
-
-            token_hash = hash_pat_token(pat_token)
-
-            try:
-                pat_record = engine.PersonalAccessToken.objects.get(
-                    hash=token_hash)
-            except engine.DoesNotExist:
-                return HTTPError('Token Invalid or Not Found', 401)
-
-            if pat_record.is_revoked:
-                return HTTPError('Token has been manually revoked', 401)
-
-            if pat_record.due_time is not None:
-                now_aware = datetime.now(timezone.utc)
-                due_time_aware = pat_record.due_time
-                if due_time_aware.tzinfo is None or due_time_aware.tzinfo.utcoffset(
-                        due_time_aware) is None:
-                    due_time_aware = due_time_aware.replace(
-                        tzinfo=timezone.utc)
-                if now_aware > due_time_aware:
-                    return HTTPError('Token Expired', 401)
-
-            token_scopes: Set[str] = set(pat_record.scope)
-            required_set: Set[str] = set(required_scopes)
-
-            if not required_set.issubset(token_scopes):
-                missing_scopes = ','.join(required_set - token_scopes)
-                return HTTPError(
-                    f'Insufficient Scopes Required: {missing_scopes}', 403)
-
-            try:
-                user: User = User.get_by_username(pat_record.owner)
-            except engine.DoesNotExist:
-                return HTTPError('Token owner not found', 403)
-
+            user = result
             kwargs['user'] = user
-
-            pat_record.modify(last_used_time=datetime.now(timezone.utc),
-                              last_used_scope=list(required_set))
-
             return func(*args, **kwargs)
 
         return wrapper
 
     return verify
+
+
+def validate_pat_request(required_scopes: list[str]) -> Any:
+    """
+    Validates PAT from Authorization header.
+    Returns:
+        - User object: Valid PAT
+        - tuple (HTTPError): Error occurred (return immediately)
+        - None: No Authorization header
+    """
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.lower().startswith('bearer '):
+        return None  # No PAT provided
+
+    pat_token = auth_header.split(' ', 1)[1]
+    token_hash = PersonalAccessToken.hash_token(pat_token)
+
+    try:
+        pat_record = PersonalAccessToken.get_by_hash(token_hash)
+    except engine.DoesNotExist:
+        return HTTPError('Token Invalid or Not Found', 401)
+
+    # Status Check
+    if pat_record.is_revoked:
+        return HTTPError('Token has been manually revoked', 401)
+
+    if pat_record.due_time is not None:
+        now_aware = datetime.now(timezone.utc)
+        due_time_aware = pat_record.due_time
+        if due_time_aware.tzinfo is None:
+            due_time_aware = due_time_aware.replace(tzinfo=timezone.utc)
+        if now_aware > due_time_aware:
+            return HTTPError('Token Expired', 401)
+
+    # Scope Verification
+    token_scopes: Set[str] = set(pat_record.scope)
+    required_set: Set[str] = set(required_scopes)
+
+    if not required_set.issubset(token_scopes):
+        missing_scopes = ','.join(required_set - token_scopes)
+        return HTTPError(f'Missing required scopes: {missing_scopes}', 403)
+
+    # Inject User
+    try:
+        user: User = User.get_by_username(pat_record.owner)
+    except engine.DoesNotExist:
+        return HTTPError('Token owner not found', 403)
+
+    # Update Usage
+    try:
+        pat_record.modify(last_used_time=datetime.now(timezone.utc),
+                          last_used_scope=list(required_set))
+    except Exception:
+        # Ignore update failures to prevent blocking the request
+        pass
+
+    return user
 
 
 @auth_api.route('/session', methods=['GET', 'POST'])

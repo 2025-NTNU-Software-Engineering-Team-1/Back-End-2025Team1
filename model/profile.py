@@ -3,11 +3,11 @@ from datetime import datetime, timezone
 from mongoengine import ValidationError
 
 from mongo import *
-from mongo.engine import PersonalAccessToken
+from mongo import engine
+# from mongo.engine import PersonalAccessToken  <-- Removing this
 from mongo.user import ROLE_SCOPE_MAP
 from .auth import *
 from .utils import *
-from .utils.pat import hash_pat_token, validate_scope_for_role
 
 __all__ = ['profile_api']
 
@@ -70,22 +70,21 @@ def edit_config(user, font_size, theme, indent_type, tab_size, language):
     return HTTPResponse('Uploaded.', cookies=cookies)
 
 
-from model.utils.pat import (add_pat_to_database, _clean_token)
-
-import secrets
-from uuid import uuid4
+# ======================== pat ========================
+from mongo.pat import PAT
 
 
 @profile_api.route("/api_token", methods=["GET"])
 @login_required
 def get_tokens(user):
-    tokens = []
-
+    # Admin can view all tokens, regular users only their own
     if user.role == Role.ADMIN:
-        pat_objects = PersonalAccessToken.objects()
+        pat_objects = PAT.objects()
     else:
-        pat_objects = PersonalAccessToken.objects(owner=user.username)
-    tokens = [_clean_token(pat) for pat in pat_objects]
+        pat_objects = PAT.objects(owner=user.username)
+
+    # Use to_dict() for clean output
+    tokens = [PAT(pat).to_dict() for pat in pat_objects]
     return HTTPResponse("OK", data={"Tokens": tokens})
 
 
@@ -102,39 +101,35 @@ def get_scope(user):
 @login_required
 @Request.json("Name", "Scope")
 def create_token(user, Name, Scope):
-    pat_id = uuid4().hex[:16]
-    secret = secrets.token_urlsafe(32)
-    presented_token = f"noj_pat_{secret}"
-    hash_val = hash_pat_token(presented_token)
-
-    data = request.get_json()
+    # Request.json cannot handle Due_Time, so manually process it
+    data = request.get_json() or {}
     Due_Time = data.get("Due_Time", None)
 
     due_time_obj = None
-    if Due_Time and Due_Time is not None:
+    if Due_Time:
         try:
             due_time_obj = datetime.fromisoformat(
                 Due_Time.replace("Z", "+00:00"))
         except (ValueError, AttributeError):
-            due_time_obj = None
-
-    if due_time_obj:
-        now = datetime.now(timezone.utc)
-        if due_time_obj.tzinfo is None:
-            due_time_obj = due_time_obj.replace(tzinfo=timezone.utc)
-        if due_time_obj <= now:
             return HTTPError(
-                "Due_Time must be in the future",
+                "Invalid Due_Time format",
                 400,
                 data={
                     "Type": "ERR",
-                    "Message": "Due_Time must be in the future"
+                    "Message": "Invalid Due_Time format"
                 },
             )
 
+    # Ensure Due_Time is in the future if provided -> Handled by PAT.generate
+    if due_time_obj:
+        if due_time_obj.tzinfo is None:
+            due_time_obj = due_time_obj.replace(tzinfo=timezone.utc)
+
+    # Ensure Scope is a list of unique values
     Scope_Set = list(set(Scope)) if Scope else []
 
-    if not validate_scope_for_role(Scope_Set, user.role, ROLE_SCOPE_MAP):
+    # Validate scope usage against user role
+    if not PAT.validate_scope_for_role(Scope_Set, user.role, ROLE_SCOPE_MAP):
         return HTTPError("Invalid Scope",
                          400,
                          data={
@@ -143,14 +138,11 @@ def create_token(user, Name, Scope):
                          })
 
     try:
-        pat = add_pat_to_database(
-            pat_id=pat_id,
-            name=Name,
-            owner=user.username,
-            hash_val=hash_val,
-            scope=Scope_Set,
-            due_time=due_time_obj,
-        )
+        # Use simple generation method
+        presented_token, _ = PAT.generate(name=Name,
+                                          owner=user.username,
+                                          scope=Scope_Set,
+                                          due_time=due_time_obj)
 
         return HTTPResponse(
             "Token Created",
@@ -160,6 +152,8 @@ def create_token(user, Name, Scope):
                 "Token": presented_token
             },
         )
+    except ValueError as e:
+        return HTTPError(str(e), 400, data={"Type": "ERR", "Message": str(e)})
     except Exception as e:
         return HTTPError(
             "Failed to create token",
@@ -183,9 +177,11 @@ def edit_token(user, pat_id, data):
                              "Message": "No data provided"
                          })
 
+    # Retrieve via mongo layer wrapper
     try:
-        pat = PersonalAccessToken.objects.get(pat_id=pat_id)
-    except PersonalAccessToken.DoesNotExist:
+        pat_doc = PAT.objects.get(pat_id=pat_id)
+        pat = PAT(pat_doc)
+    except engine.DoesNotExist:
         return HTTPError("Token not found",
                          404,
                          data={
@@ -193,7 +189,7 @@ def edit_token(user, pat_id, data):
                              "Message": "Token not found"
                          })
 
-    if pat.owner != user.username:
+    if pat.owner != user.username and user.role != Role.ADMIN:
         return HTTPError("Not token owner",
                          403,
                          data={
@@ -221,10 +217,21 @@ def edit_token(user, pat_id, data):
                 },
             )
     if "Scope" in data:
-        update_data["scope"] = list(data["Scope"])
+        new_scope = list(set(data["Scope"]))
+        # Validate scope usage against user role
+        if not PAT.validate_scope_for_role(new_scope, user.role,
+                                           ROLE_SCOPE_MAP):
+            return HTTPError("Invalid Scope",
+                             400,
+                             data={
+                                 "Type": "ERR",
+                                 "Message": "Invalid Scope"
+                             })
+        update_data["scope"] = new_scope
 
     try:
-        pat.update(**update_data)
+        if update_data:
+            pat.update(**update_data)
         return HTTPResponse("Token updated",
                             data={
                                 "Type": "OK",
@@ -244,9 +251,11 @@ def edit_token(user, pat_id, data):
 @profile_api.route("/api_token/deactivate/<pat_id>", methods=["PATCH"])
 @login_required
 def deactivate_token(user, pat_id):
+    # Retrieve via mongo layer wrapper
     try:
-        pat = PersonalAccessToken.objects.get(pat_id=pat_id)
-    except PersonalAccessToken.DoesNotExist:
+        pat_doc = PAT.objects.get(pat_id=pat_id)
+        pat = PAT(pat_doc)
+    except engine.DoesNotExist:
         return HTTPError("Token not found",
                          404,
                          data={
@@ -254,35 +263,32 @@ def deactivate_token(user, pat_id):
                              "Message": "Token not found"
                          })
 
-    if pat.owner != user.username:
-        return HTTPError("Not token owner",
-                         403,
-                         data={
-                             "Type": "ERR",
-                             "Message": "Not token owner"
-                         })
-
-    if pat.is_revoked:
-        return HTTPError(
-            "Token already revoked",
-            400,
-            data={
-                "Type": "ERR",
-                "Message": "Token already revoked"
-            },
-        )
-
     try:
-        pat.update(
-            is_revoked=True,
-            revoked_by=user.username,
-            revoked_time=datetime.now(timezone.utc),
-        )
+        # Use the revoke method from mongo/pat.py which handles permissions (Admin/Owner)
+        pat.revoke(user)
         return HTTPResponse("Token revoked",
                             data={
                                 "Type": "OK",
                                 "Message": "Token revoked"
                             })
+    except ValueError as e:
+        return HTTPError(
+            str(e),
+            400,
+            data={
+                "Type": "ERR",
+                "Message": str(e)
+            },
+        )
+    except PermissionError as e:
+        return HTTPError(
+            str(e),
+            403,
+            data={
+                "Type": "ERR",
+                "Message": str(e)
+            },
+        )
     except Exception as e:
         return HTTPError(
             "Failed to revoke token",

@@ -23,7 +23,7 @@ def api_ping():
 
 
 @pat_api.route('/userips/<course_name>', methods=['GET'])
-@pat_required('read:userips')
+@pat_required(['read:userips'])
 def get_course_user_ips(user, course_name: str):
     """
         Get all login and submission IP records of students in a course.

@@ -24,7 +24,7 @@ def teacher_permission_check(user, course: Course) -> bool:
 
 
 @course_api.get('/')
-@login_required
+@login_required(pat_scope=['read:courses'])
 def get_courses(user):
     data = [{
         'course': c.course_name,
@@ -77,7 +77,7 @@ def modify_courses(user, course, new_course, teacher):
 
 
 @course_api.route('/<course_name>', methods=['GET', 'PUT'])
-@login_required
+@login_required(pat_scope=['read:courses'])
 def get_course(user, course_name):
     course = Course(course_name)
 
