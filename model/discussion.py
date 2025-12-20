@@ -669,7 +669,8 @@ def _build_feed(user, mode: str, limit: int, page: int) -> Dict:
             key=lambda p: (-int(p.is_pinned or False), -(p.like_count or 0) -
                            (p.reply_count or 0), -p.created_time.timestamp()))
     else:
-        posts_list = list(queryset.order_by('-is_pinned', '-created_time', '-post_id'))
+        posts_list = list(
+            queryset.order_by('-is_pinned', '-created_time', '-post_id'))
 
     total = len(posts_list)
     start = (page - 1) * limit
@@ -792,7 +793,7 @@ def _search_posts(words: str,
         return []
     pattern = re.compile(re.escape(words), re.IGNORECASE)
     matches: List[Tuple[Tuple[float, int], Dict]] = []
-    
+
     queryset = engine.DiscussionPost.objects(is_deleted=False)
     if problem_filter is not None:
         queryset = queryset.filter(problem_id__in=list(problem_filter))
@@ -803,9 +804,10 @@ def _search_posts(words: str,
             continue
         sort_key = (post.created_time.timestamp(), post.post_id)
         matches.append((sort_key, _serialize_search_discussion_post(post)))
-    
+
     matches.sort(key=lambda item: item[0], reverse=True)
     return [data for _, data in matches]
+
 
 def _serialize_search_discussion_post(post) -> Dict:
     author_name = post.author.username if post.author else ''
