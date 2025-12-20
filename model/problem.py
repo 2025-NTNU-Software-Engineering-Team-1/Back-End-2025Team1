@@ -1105,6 +1105,7 @@ def problem_migrate_test_case(user: User, problem: Problem):
     problem.migrate_gridfs_to_minio()
     return HTTPResponse('Success.')
 
+
 #
 @problem_api.route('/static-analysis/options', methods=['GET'])
 def get_static_analysis_options():
