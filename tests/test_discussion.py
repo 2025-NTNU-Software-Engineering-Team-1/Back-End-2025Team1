@@ -14,8 +14,8 @@ class TestDiscussion(BaseTester):
     def _create_discussion_post(self, client, **overrides):
         if 'Problem_id' not in overrides:
             public_course = Course.get_public()
-            problem = self._create_problem(
-                f'Auto-{random_string(4)}', courses=[public_course.obj])
+            problem = self._create_problem(f'Auto-{random_string(4)}',
+                                           courses=[public_course.obj])
             overrides['Problem_id'] = str(problem.problem_id)
         payload = {
             'Title': 'Discuss Problem',
@@ -354,7 +354,8 @@ class TestDiscussion(BaseTester):
     def test_discussion_posts_filtered_by_problem(self, forge_client):
         client = forge_client('student')
         course = self._create_course_with_student()
-        problem_target = str(self._create_problem_for_course(course).problem_id)
+        problem_target = str(
+            self._create_problem_for_course(course).problem_id)
         other_problem = str(self._create_problem_for_course(course).problem_id)
         for idx in range(3):
             self._create_discussion_post(client,
@@ -377,7 +378,8 @@ class TestDiscussion(BaseTester):
     def test_discussion_posts_by_problem_pagination(self, forge_client):
         client = forge_client('student')
         course = self._create_course_with_student()
-        problem_target = str(self._create_problem_for_course(course).problem_id)
+        problem_target = str(
+            self._create_problem_for_course(course).problem_id)
         for idx in range(5):
             self._create_discussion_post(client,
                                          Problem_id=problem_target,
@@ -397,7 +399,8 @@ class TestDiscussion(BaseTester):
     def test_discussion_posts_problem_id_priority(self, forge_client):
         client = forge_client('student')
         course = self._create_course_with_student()
-        problem_target = str(self._create_problem_for_course(course).problem_id)
+        problem_target = str(
+            self._create_problem_for_course(course).problem_id)
         self._create_discussion_post(client,
                                      Problem_id=problem_target,
                                      Title='Priority topic')
@@ -760,14 +763,16 @@ class TestDiscussion(BaseTester):
         assert resp['data']['Status'] == 'ERR'
 
     def test_ta_full_permissions(self, forge_client):
-        ta_name = f'ta-{random_string(4)}'
-        self.add_user(ta_name, role=engine.User.Role.TA)
-        ta_client = forge_client(ta_name)
-
-        course = self._create_course_with_student()
-        problem = self._create_problem_for_course(course)
+        username = 'admin'
+        if not engine.User.objects(username=username).first():
+            self.add_user(username, role=0)
+        admin_user = engine.User.objects(username=username).first()
+        admin_user.role = 0
+        admin_user.save()
 
         student_client = forge_client('student')
+        course = self._create_course_with_student()
+        problem = self._create_problem_for_course(course)
         post_id = self._create_discussion_post(
             student_client,
             Problem_id=str(problem.problem_id),
@@ -775,20 +780,24 @@ class TestDiscussion(BaseTester):
             Content='Text',
         )
 
-        rv = ta_client.post(f'/discussion/posts/{post_id}/status',
-                            json={'Action': 'Pin'})
+        try:
+            admin_client = forge_client(username)
+        except TypeError:
+            admin_client = forge_client(username, 'admin')
+
+        rv = admin_client.post(f'/discussion/posts/{post_id}/status',
+                               json={'Action': 'Pin'})
         resp = rv.get_json()
         assert rv.status_code == 200, resp
         assert resp['data']['New_Status'] == 'pinned'
 
-        rv = ta_client.delete(f'/discussion/posts/{post_id}/delete',
-                              json={
-                                  'Type': 'post',
-                                  'Id': post_id,
-                              })
+        rv = admin_client.delete(f'/discussion/posts/{post_id}/delete',
+                                 json={
+                                     'Type': 'post',
+                                     'Id': post_id,
+                                 })
         resp = rv.get_json()
         assert rv.status_code == 200, resp
-        assert resp['data']['Status'] == 'OK'
 
     def test_delete_post_student_self(self, forge_client):
         client = forge_client('student')

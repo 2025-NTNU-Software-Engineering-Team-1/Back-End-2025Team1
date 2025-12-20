@@ -29,11 +29,14 @@ _MIN_LIMIT = 1
 _MAX_LIMIT = 50
 _MAX_PAGE = 1000
 
+# 允許執行管理操作（如刪除他人文章）的角色
 _STAFF_ROLES = {
     engine.User.Role.TEACHER,
     engine.User.Role.TA,
     engine.User.Role.ADMIN,
 }
+
+# 允許修改文章狀態（如置頂、關閉）的角色
 _STATUS_ROLES = {
     engine.User.Role.TEACHER,
     engine.User.Role.TA,
@@ -61,6 +64,8 @@ _STATUS_ACTIONS = {
     'solve': ('is_solved', True, 'solved'),
     'unsolve': ('is_solved', False, 'unsolved'),
 }
+
+_PERMITTED_ROLES_INT = {0, 1, 3}
 
 
 @discussion_api.route('/posts', methods=['GET'])
@@ -465,7 +470,14 @@ def like_discussion_target(user, post_id: int):
 @discussion_api.route('/posts/<int:post_id>/status', methods=['POST'])
 @login_required
 def update_discussion_post_status(user, post_id: int):
-    if user.role not in _STATUS_ROLES:
+    role_value = user.role
+    if hasattr(role_value, 'value'):
+        role_value = role_value.value
+    try:
+        role_value = int(role_value)
+    except (TypeError, ValueError):
+        role_value = engine.User.Role.STUDENT
+    if role_value not in _PERMITTED_ROLES_INT:
         return _error_response('Insufficient permission.',
                                403,
                                extra={'New_Status': None})
@@ -559,6 +571,7 @@ def delete_discussion_entity(user, post_id: int):
             return _error_response('Id must match postId for Type=post.',
                                    400,
                                    extra={'Message': 'Mismatch id.'})
+        # 檢查刪除權限：包含作者本人或職員(老師/TA/管理員)
         if not _can_delete_entity(user, post.author):
             return _error_response('Permission denied.',
                                    403,
@@ -650,16 +663,13 @@ def _build_feed(user, mode: str, limit: int, page: int) -> Dict:
     if allowed_problem_ids is not None:
         queryset = queryset.filter(problem_id__in=list(allowed_problem_ids))
 
-    # 根據模式排序
     if mode == 'Hot':
-        # 熱門：先置頂，再按讚數+回覆數排序，最後按時間
         posts_list = list(queryset)
         posts_list.sort(
             key=lambda p: (-int(p.is_pinned or False), -(p.like_count or 0) -
                            (p.reply_count or 0), -p.created_time.timestamp()))
-    else:  # New
-        # 最新：先置頂，再按時間排序
-        posts_list = list(queryset.order_by('-is_pinned', '-created_time'))
+    else:
+        posts_list = list(queryset.order_by('-is_pinned', '-created_time', '-post_id'))
 
     total = len(posts_list)
     start = (page - 1) * limit
@@ -736,8 +746,16 @@ def _get_viewable_problem_ids(user) -> Optional[set]:
 
 
 def _can_view_problem_id(user, problem_id: str) -> bool:
-    if user.role == engine.User.Role.ADMIN:
+    role_value = user.role
+    if hasattr(role_value, 'value'):
+        role_value = role_value.value
+    try:
+        role_value = int(role_value)
+    except (TypeError, ValueError):
+        role_value = engine.User.Role.STUDENT
+    if role_value in _PERMITTED_ROLES_INT:
         return True
+
     problem = _load_problem(problem_id)
     if not problem:
         return True
@@ -773,7 +791,8 @@ def _search_posts(words: str,
     if problem_filter is not None and not problem_filter:
         return []
     pattern = re.compile(re.escape(words), re.IGNORECASE)
-    matches: List[Tuple[float, Dict]] = []
+    matches: List[Tuple[Tuple[float, int], Dict]] = []
+    
     queryset = engine.DiscussionPost.objects(is_deleted=False)
     if problem_filter is not None:
         queryset = queryset.filter(problem_id__in=list(problem_filter))
@@ -782,12 +801,11 @@ def _search_posts(words: str,
         content = post.content or ''
         if not (pattern.search(title) or pattern.search(content)):
             continue
-        matches.append(
-            (post.created_time.timestamp(),
-             _serialize_search_discussion_post(post)))
+        sort_key = (post.created_time.timestamp(), post.post_id)
+        matches.append((sort_key, _serialize_search_discussion_post(post)))
+    
     matches.sort(key=lambda item: item[0], reverse=True)
     return [data for _, data in matches]
-
 
 def _serialize_search_discussion_post(post) -> Dict:
     author_name = post.author.username if post.author else ''
