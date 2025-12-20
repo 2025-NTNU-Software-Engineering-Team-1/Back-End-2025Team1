@@ -1,5 +1,7 @@
 import json
 import enum
+import copy
+import ast
 from hashlib import md5
 from datetime import datetime, timedelta
 from typing import (
@@ -11,7 +13,9 @@ from typing import (
 )
 from dataclasses import dataclass
 from io import BytesIO
-from ulid import ULID
+from zipfile import BadZipFile
+from pathlib import Path
+from mongo.utils import generate_ulid
 from .. import engine
 from ..base import MongoBase
 from ..course import *
@@ -147,6 +151,7 @@ class Problem(MongoBase, engine=engine.Problem):
         '''
         Get highest score for user of this problem.
         '''
+
         cache = RedisCache()
         key = self.high_score_key(user=user)
         if (val := cache.get(key)) is not None:
@@ -197,6 +202,150 @@ class Problem(MongoBase, engine=engine.Problem):
             user_cap |= self.Permission.MANAGE
 
         return user_cap
+
+    def has_course_modify_permission(self, user: User) -> bool:
+        """
+        return True if the user can modify at least one course the
+        problem belongs to. Typically used to allow course teachers
+        to perform privileged problem actions.
+        """
+        return any(
+            course.permission(user, Course.Permission.MODIFY)
+            for course in map(Course, self.courses))
+
+    def update_assets(
+        self,
+        user: Optional[User] = None,
+        files_data: Optional[Dict[str, Any]] = None,
+        meta: Optional[Dict[str, Any]] = None,
+    ):
+        '''
+        Update problem assets and "merge" settings
+        '''
+        files_data = files_data or {}
+        meta = meta or {}
+        try:
+            if files_data.get('case'):
+                self.update_test_case(files_data['case'])
+
+            minio_client = MinioClient()
+            resource_files = {
+                'custom_checker.py': ('checker', 'custom_checker.py'),
+                'makefile.zip': ('makefile', 'makefile.zip'),
+                'Teacher_file': ('teacher_file', 'Teacher_file'),
+                'score.py': ('scoring_script', 'score.py'),
+                'score.json': ('scoring_config', 'score.json'),
+                'local_service.zip': ('local_service', 'local_service.zip'),
+                'resource_data.zip': ('resource_data', 'resource_data.zip'),
+                'resourcedata.zip': ('resource_data', 'resource_data.zip'),
+                'resource_data_teacher.zip':
+                ('resource_data_teacher', 'resource_data_teacher.zip'),
+                'dockerfiles.zip': ('network_dockerfile', 'Dockerfiles.zip'),
+            }
+
+            meta = meta or {}
+            pipeline_payload = meta.get('pipeline') or {}
+            meta_config = meta.get('config') or {}
+            current_config = copy.deepcopy(self.obj.config
+                                           or Problem.config.default())
+            current_config.update(meta_config)
+            execution_mode = (pipeline_payload.get('executionMode') or
+                              current_config.get('executionMode', 'general'))
+
+            new_asset_paths = {}
+            inferred_teacher_lang = None
+            for key, (asset_type, filename) in resource_files.items():
+                file_obj = files_data.get(key)
+                if file_obj:
+                    # Preserve original filename for Teacher_file to keep extension
+                    stored_name = filename
+                    if key == 'Teacher_file' and file_obj.filename:
+                        stored_name = Path(file_obj.filename).name
+                    if key == 'custom_checker.py':
+                        try:
+                            content = file_obj.read()
+                            compile(content, stored_name, 'exec')
+                            file_obj = BytesIO(content)
+                        except SyntaxError as exc:
+                            raise ValueError(
+                                f'invalid custom checker syntax: {exc}')
+                        except Exception as exc:
+                            raise ValueError(
+                                f'failed to read custom checker: {exc}')
+                    path = self._save_asset_file(minio_client, file_obj,
+                                                 asset_type, stored_name)
+                    new_asset_paths[asset_type] = path
+                    if key == 'Teacher_file':
+                        ext = (Path(file_obj.filename or '').suffix
+                               or '').lower().lstrip('.')
+                        ext_map = {'c': 'c', 'cpp': 'cpp', 'py': 'py'}
+                        if ext in ext_map:
+                            inferred_teacher_lang = ext_map[ext]
+                        elif execution_mode == 'interactive':
+                            raise ValueError(
+                                "interactive mode requires Teacher_file filename ending with .c/.cpp/.py to infer teacherLang"
+                            )
+
+            if new_asset_paths:
+                current_asset_paths = current_config.get('assetPaths', {})
+                current_asset_paths.update(new_asset_paths)
+                if inferred_teacher_lang and current_asset_paths.get(
+                        'teacherLang') is None:
+                    current_asset_paths['teacherLang'] = inferred_teacher_lang
+                current_config['assetPaths'] = current_asset_paths
+            kwargs_for_edit = {}
+            if meta_config or new_asset_paths:
+                kwargs_for_edit['config'] = current_config
+            if pipeline_payload:
+                kwargs_for_edit['pipeline'] = pipeline_payload
+
+            asset_paths = current_config.get('assetPaths', {})
+            if execution_mode == 'functionOnly' and 'makefile' not in asset_paths:
+                raise ValueError('functionOnly mode requires makefile.zip')
+            if execution_mode == 'interactive' and 'teacher_file' not in asset_paths:
+                raise ValueError('interactive mode requires Teacher_file')
+
+            if kwargs_for_edit and user:
+                self.edit_problem(user=user,
+                                  problem_id=self.problem_id,
+                                  **kwargs_for_edit)
+
+        except BadZipFile as e:
+            raise BadZipFile(f'Invalid zip file: {str(e)}')
+        except Exception as e:
+            raise ValueError(f'Failed to update assets: {str(e)}')
+
+    def _save_asset_file(
+        self,
+        minio_client: MinioClient,
+        file_obj: BinaryIO,
+        asset_type: str,
+        filename: str,
+    ) -> str:
+
+        if filename.endswith('.zip'):
+            try:
+                from zipfile import ZipFile
+                file_obj.seek(0)
+                ZipFile(file_obj).testzip()
+            except Exception as e:
+                raise BadZipFile(f'Invalid zip file {filename}: {str(e)}')
+
+        path = f'problem/{self.problem_id}/{asset_type}/{filename}'
+
+        file_obj.seek(0)
+        file_data = file_obj.read()
+        file_size = len(file_data)
+        file_obj.seek(0)
+
+        minio_client.client.put_object(
+            minio_client.bucket,
+            path,
+            file_obj,
+            file_size,
+            part_size=5 * 1024 * 1024,
+        )
+        return path
 
     def permission(self, user: User, req: Permission) -> bool:
         """
@@ -257,6 +406,10 @@ class Problem(MongoBase, engine=engine.Problem):
         allowed_language: Optional[int] = None,
         quota: Optional[int] = None,
         default_code: Optional[str] = None,
+        config: Optional[dict] = None,
+        pipeline: Optional[dict] = None,
+        Test_Mode: Optional[dict] = None,
+        **kwargs,
     ):
         if len(courses) == 0:
             raise ValueError('No course provided')
@@ -265,17 +418,75 @@ class Problem(MongoBase, engine=engine.Problem):
             if not course:
                 raise engine.DoesNotExist
             course_objs.append(course.id)
+        config = config or {}
+        pipeline = pipeline or {}
+        test_mode = Test_Mode or {}
+        if 'scoringScript' in pipeline and 'scoringScrip' not in pipeline:
+            pipeline['scoringScrip'] = pipeline['scoringScript']
+        static_analysis_cfg = (config.get('staticAnalysis')
+                               or config.get('staticAnalys')
+                               or pipeline.get('staticAnalysis'))
+        if static_analysis_cfg is not None:
+            static_analysis_cfg = copy.deepcopy(static_analysis_cfg)
+        else:
+            static_analysis_cfg = {'custom': False}
+        if config.get('networkAccessRestriction'):
+            static_analysis_cfg.setdefault(
+                'networkAccessRestriction',
+                config['networkAccessRestriction'],
+            )
+        full_config = {
+            'compilation': config.get('compilation', False),
+            'testMode': test_mode.get('Enabled', False),
+            'aiVTuber': config.get('aiVTuber', False),
+            'acceptedFormat': config.get('acceptedFormat', 'code'),
+            'staticAnalys': static_analysis_cfg,
+            'staticAnalysis': static_analysis_cfg,
+            'artifactCollection': config.get('artifactCollection', []),
+            'allowRead': pipeline.get('allowRead', False),
+            'allowWrite': pipeline.get('allowWrite', False),
+            'executionMode': pipeline.get('executionMode', 'general'),
+            'customChecker': pipeline.get('customChecker', False),
+            'teacherFirst': pipeline.get('teacherFirst', False),
+            'scoringScript': pipeline.get('scoringScrip', {'custom': False}),
+            'testModeQuotaPerStudent': test_mode.get('Quota_Per_Student', 0),
+        }
+        for key in (
+                'aiVTuberMaxToken',
+                'aiVTuberMode',
+                'maxStudentZipSizeMB',
+                'networkAccessRestriction',
+        ):
+            if key in config and config[key] is not None:
+                full_config[key] = config[key]
+        known_config_keys = set(full_config.keys())
+        for key, value in config.items():
+            if value is None or key in known_config_keys:
+                continue
+            full_config[key] = value
+
+        description_dict = description or {}
         problem_args = drop_none({
             'courses': course_objs,
             'problem_status': status,
             'problem_type': type,
             'problem_name': problem_name,
-            'description': description,
             'owner': user.username,
             'tags': tags,
             'quota': quota,
             'default_code': default_code,
+            'config': full_config,
         })
+        # Create ProblemDescription for the embedded document field
+        if description_dict:
+            problem_args['description'] = engine.ProblemDescription(
+                description=description_dict.get('description', ''),
+                input=description_dict.get('input', ''),
+                output=description_dict.get('output', ''),
+                hint=description_dict.get('hint', ''),
+                sample_input=description_dict.get('sampleInput', []),
+                sample_output=description_dict.get('sampleOutput', []),
+            )
         problem = cls.engine(**problem_args).save()
         programming_problem_args = drop_none({
             'test_case':
@@ -294,52 +505,135 @@ class Problem(MongoBase, engine=engine.Problem):
         cls,
         user: User,
         problem_id: int,
-        courses: List[str],
-        status: int,
-        problem_name: str,
-        description: Dict[str, Any],
-        tags: List[str],
-        type,
-        test_case_info: Optional[Dict[str, Any]] = None,
-        allowed_language: int = 7,
-        can_view_stdout: bool = False,
-        quota: int = -1,
-        default_code: str = '',
+        **kwargs,
     ):
-        if type != 2:
-            score = sum(t['taskScore'] for t in test_case_info['tasks'])
-            if score != 100:
-                raise ValueError("Cases' scores should be 100 in total")
-        problem = Problem(problem_id).obj
-        course_objs = []
-        for name in courses:
-            if not (course := Course(name)):
-                raise engine.DoesNotExist
-            course_objs.append(course.obj)
-        problem.update(
-            courses=course_objs,
-            problem_status=status,
-            problem_type=type,
-            problem_name=problem_name,
-            description=description,
-            owner=user.username,
-            tags=tags,
-            quota=quota,
-            default_code=default_code,
-        )
-        if type != 2:
-            # preprocess test case
-            test_case = problem.test_case
-            if test_case_info:
-                test_case = engine.ProblemTestCase.from_json(
-                    json.dumps(test_case_info))
-                test_case.case_zip = problem.test_case.case_zip
-                test_case.case_zip_minio_path = problem.test_case.case_zip_minio_path
-            problem.update(
-                allowed_language=allowed_language,
-                can_view_stdout=can_view_stdout,
-                test_case=test_case,
+        """
+        Edit existing problem (partial update)
+        """
+        from mongo import Course
+
+        def _sync_config_aliases(cfg: dict):
+            if 'staticAnalysis' in cfg and 'staticAnalys' not in cfg:
+                cfg['staticAnalys'] = cfg['staticAnalysis']
+            if 'staticAnalys' in cfg and 'staticAnalysis' not in cfg:
+                cfg['staticAnalysis'] = cfg['staticAnalys']
+            if 'scoringScrip' in cfg and 'scoringScript' not in cfg:
+                cfg['scoringScript'] = cfg['scoringScrip']
+
+        # Convert parameter names to match database field names
+        if 'status' in kwargs:
+            kwargs['problem_status'] = kwargs.pop('status')
+        if 'type' in kwargs:
+            kwargs['problem_type'] = kwargs.pop('type')
+
+        problem = cls(problem_id)
+        if not problem.obj:
+            raise engine.DoesNotExist(f'Problem {problem_id} not found')
+
+        if not problem.permission(user, cls.Permission.MANAGE):
+            raise PermissionError(
+                'Not enough permission to manage this problem')
+
+        if 'courses' in kwargs and kwargs.get('courses') is not None:
+            course_objs = []
+            for name in kwargs['courses']:
+                if not (course := Course(name)):
+                    raise engine.DoesNotExist(f'Course {name} not found')
+                course_objs.append(course.obj)
+            kwargs['courses'] = course_objs
+
+        if 'description' in kwargs and kwargs.get('description') is not None:
+            desc = kwargs.pop('description')
+            # Handle both dict and ProblemDescription object
+            if isinstance(desc, engine.ProblemDescription):
+                # Already a ProblemDescription, just use it
+                kwargs['description'] = desc
+            elif isinstance(desc, dict):
+                # Convert dict to ProblemDescription
+                kwargs['description'] = engine.ProblemDescription(
+                    description=desc.get('description', ''),
+                    input=desc.get('input', ''),
+                    output=desc.get('output', ''),
+                    hint=desc.get('hint', ''),
+                    sample_input=desc.get('sampleInput', []),
+                    sample_output=desc.get('sampleOutput', []),
+                )
+
+        if 'config' in kwargs or 'pipeline' in kwargs or 'Test_Mode' in kwargs:
+            full_config = problem.obj.config or {}
+
+            if 'config' in kwargs and kwargs.get('config') is not None:
+                full_config.update(kwargs.pop('config'))
+                _sync_config_aliases(full_config)
+
+            if 'pipeline' in kwargs and kwargs.get('pipeline') is not None:
+                pipeline = kwargs.pop('pipeline')
+                if 'allowRead' in pipeline:
+                    full_config['allowRead'] = pipeline['allowRead']
+                if 'allowWrite' in pipeline:
+                    full_config['allowWrite'] = pipeline['allowWrite']
+                if 'executionMode' in pipeline:
+                    full_config['executionMode'] = pipeline['executionMode']
+                if 'customChecker' in pipeline:
+                    full_config['customChecker'] = pipeline['customChecker']
+                if 'teacherFirst' in pipeline:
+                    full_config['teacherFirst'] = pipeline['teacherFirst']
+                if 'scoringScript' in pipeline:
+                    full_config['scoringScript'] = pipeline['scoringScript']
+                    full_config['scoringScrip'] = pipeline['scoringScript']
+                if 'scoringScrip' in pipeline:
+                    full_config['scoringScript'] = pipeline['scoringScrip']
+                if 'staticAnalysis' in pipeline:
+                    full_config['staticAnalysis'] = pipeline['staticAnalysis']
+                    full_config['staticAnalys'] = pipeline['staticAnalysis']
+
+            if 'Test_Mode' in kwargs and kwargs.get('Test_Mode') is not None:
+                test_mode = kwargs.pop('Test_Mode')
+                if 'Enabled' in test_mode:
+                    full_config['testMode'] = test_mode['Enabled']
+                if 'Quota_Per_Student' in test_mode:
+                    full_config['testModeQuotaPerStudent'] = test_mode[
+                        'Quota_Per_Student']
+
+            kwargs['config'] = full_config
+            _sync_config_aliases(kwargs['config'])
+
+        if 'test_case_info' in kwargs and kwargs.get(
+                'test_case_info') is not None:
+            test_case_info = kwargs.pop('test_case_info')
+
+            problem_type = kwargs.get('type', problem.obj.problem_type)
+            if problem_type != 2:
+                score = sum(t['taskScore']
+                            for t in test_case_info.get('tasks', []))
+                if score != 100:
+                    raise ValueError("Cases' scores should be 100 in total")
+
+            tasks = []
+            for task in test_case_info.get('tasks', []):
+                tasks.append(
+                    engine.ProblemCase(
+                        task_score=task.get('taskScore', 0),
+                        case_count=task.get('caseCount', 1),
+                        memory_limit=task.get('memoryLimit', 256),
+                        time_limit=task.get('timeLimit', 1000),
+                    ))
+
+            test_case = engine.ProblemTestCase(
+                language=test_case_info.get('language', 0),
+                fill_in_template=test_case_info.get('fillInTemplate', ''),
+                tasks=tasks,
             )
+
+            if problem.obj.test_case:
+                test_case.case_zip = problem.obj.test_case.case_zip
+                test_case.case_zip_minio_path = problem.obj.test_case.case_zip_minio_path
+
+            kwargs['test_case'] = test_case
+
+        problem.obj.update(**drop_none(kwargs))
+        problem.obj.reload()
+        return problem
 
     def update_test_case(self, test_case: BinaryIO):
         '''
@@ -374,7 +668,7 @@ class Problem(MongoBase, engine=engine.Problem):
         self.reload('test_case')
 
     def _generate_test_case_obj_path(self):
-        return f'problem-test-case/{ULID()}.zip'
+        return f'problem-test-case/{generate_ulid()}.zip'
 
     def _validate_test_case(self, test_case: BinaryIO):
         '''

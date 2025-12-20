@@ -107,11 +107,14 @@ def create_problem(
 ) -> Problem:
     if not isinstance(course, Course):
         course = course_lib.create_course(name=course)
-    # Determine owner
     if owner is None:
         owner = course.teacher
     elif isinstance(owner, str):
-        owner = User(owner)
+        owner_username = owner
+        owner = User(owner_username)
+        if not owner:
+            from . import user as user_lib
+            owner = user_lib.create_user(username=owner_username)
     if name is None:
         name = secrets.token_hex(8)
     if description is None:

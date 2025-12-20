@@ -1,7 +1,6 @@
 import io
 from typing import Optional
 import requests as rq
-import random
 import secrets
 import json
 from flask import (
@@ -13,9 +12,11 @@ from flask import (
 from datetime import datetime, timedelta
 from mongo import *
 from mongo import engine
+from mongo import sandbox
 from mongo.utils import (
     RedisCache,
     drop_none,
+    MinioClient,
 )
 from .utils import *
 from .auth import *
@@ -25,7 +26,7 @@ submission_api = Blueprint('submission_api', __name__)
 
 
 @submission_api.route('/', methods=['POST'])
-@login_required
+@login_required(pat_scope=['write:submissions'])
 @Request.json('language_type: int', 'problem_id: int')
 def create_submission(user, language_type, problem_id):
     # the user reach the rate limit for submitting
@@ -125,9 +126,9 @@ def create_submission(user, language_type, problem_id):
 
 
 @submission_api.route('/', methods=['GET'])
-@login_required
+@login_required(pat_scope=['read:submissions'])
 @Request.args('offset', 'count', 'problem_id', 'username', 'status',
-              'language_type', 'course', 'before', 'after', 'ip_addr')
+              'language_type', 'course')
 def get_submission_list(
     user,
     offset,
@@ -136,10 +137,7 @@ def get_submission_list(
     username,
     status,
     course,
-    before,
-    after,
     language_type,
-    ip_addr,
 ):
     '''
     get the list of submission data
@@ -161,13 +159,34 @@ def get_submission_list(
         except ValueError:
             raise ValueError(f'can not convert {name} to string')
 
-    def parse_timestamp(val: Optional[int], name: str):
+    def parse_status(val: Optional[str]) -> Optional[int]:
+        '''
+        Parse status parameter, accepts both status code string and status name
+        '''
         if val is None:
             return None
+        # Status code mapping
+        status_map = {
+            'AC': 0,
+            'WA': 1,
+            'CE': 2,
+            'TLE': 3,
+            'MLE': 4,
+            'RE': 5,
+            'JE': 6,
+            'OLE': 7,
+        }
+        # If it's a status name string (AC, WA, etc.)
+        if val.upper() in status_map:
+            return status_map[val.upper()]
+        # If it's a numeric string
         try:
-            return datetime.fromtimestamp(val)
+            status_code = int(val)
+            if 0 <= status_code <= 7:
+                return status_code
+            return None
         except ValueError:
-            raise ValueError(f'can not convert {name} to timestamp')
+            return None
 
     cache_key = (
         'SUBMISSION_LIST_API',
@@ -179,8 +198,6 @@ def get_submission_list(
         course,
         offset,
         count,
-        before,
-        after,
     )
 
     cache_key = '_'.join(map(str, cache_key))
@@ -195,10 +212,7 @@ def get_submission_list(
         offset = parse_int(offset, 'offset')
         count = parse_int(count, 'count')
         problem_id = parse_int(problem_id, 'problemId')
-        status = parse_int(status, 'status')
-        before = parse_timestamp(before, 'before')
-        after = parse_timestamp(after, 'after')
-        ip_addr = parse_str(ip_addr, 'ip_addr')
+        status = parse_status(status)
 
         if language_type is not None:
             try:
@@ -221,9 +235,6 @@ def get_submission_list(
                 'status': status,
                 'language_type': language_type,
                 'course': course,
-                'before': before,
-                'after': after,
-                'ip_addr': ip_addr
             })
             submissions, submission_count = Submission.filter(
                 **params,
@@ -238,15 +249,7 @@ def get_submission_list(
                 }), 15)
         except ValueError as e:
             return HTTPError(str(e), 400)
-    # unicorn gifs
-    unicorns = [
-        'https://media.giphy.com/media/xTiTnLmaxrlBHxsMMg/giphy.gif',
-        'https://media.giphy.com/media/26AHG5KGFxSkUWw1i/giphy.gif',
-        'https://media.giphy.com/media/g6i1lEax9Pa24/giphy.gif',
-        'https://media.giphy.com/media/tTyTbFF9uEbPW/giphy.gif',
-    ]
     ret = {
-        'unicorn': random.choice(unicorns),
         'submissions': submissions,
         'submissionCount': submission_count,
     }
@@ -257,9 +260,10 @@ def get_submission_list(
 
 
 @submission_api.route('/<submission>', methods=['GET'])
-@login_required
+@login_required(pat_scope=['read:submissions'])
 @Request.doc('submission', Submission)
 def get_submission(user, submission: Submission):
+
     user_feedback_perm = submission.permission(user,
                                                Submission.Permission.FEEDBACK)
     # check permission
@@ -276,24 +280,32 @@ def get_submission(user, submission: Submission):
     has_code = not submission.handwritten and user_feedback_perm
     has_output = submission.problem.can_view_stdout
     ret = submission.to_dict()
+
     if has_code:
         if submission.is_zip_mode:
             ret['code'] = None
             ret['codeDownloadUrl'] = submission.get_code_download_url()
         else:
             try:
-                ret['code'] = submission.get_main_code()
-            except UnicodeDecodeError:
-                ret['code'] = False
+                code = submission.get_main_code()
+                ret['code'] = code if code is not None else ''
+            except (UnicodeDecodeError, SubmissionCodeNotFound):
+                ret['code'] = ''
     if has_output:
-        ret['tasks'] = submission.get_detailed_result()
+        try:
+            ret['tasks'] = submission.get_detailed_result()
+        except Exception as e:
+            current_app.logger.error(
+                f"failed to load submission outputs [{submission.id}]: {e}")
+            ret['tasks'] = []
+            ret['tasksError'] = 'Failed to load outputs'
     else:
         ret['tasks'] = submission.get_result()
     return HTTPResponse(data=ret)
 
 
 @submission_api.get('/<submission>/output/<int:task_no>/<int:case_no>')
-@login_required
+@login_required(pat_scope=['read:submissions'])
 @Request.doc('submission', Submission)
 def get_submission_output(
     user,
@@ -312,8 +324,104 @@ def get_submission_output(
     return HTTPResponse('ok', data=output)
 
 
-@submission_api.route('/<submission>/pdf/<item>', methods=['GET'])
+@submission_api.get('/<submission>/artifact/zip/<int:task_index>')
 @login_required
+@Request.doc('submission', Submission)
+def download_submission_task_artifact(
+    user,
+    submission: Submission,
+    task_index: int,
+):
+    if not submission.permission(user, Submission.Permission.VIEW_OUTPUT):
+        return HTTPError('permission denied', 403)
+    if task_index < 0 or task_index >= len(submission.tasks):
+        return HTTPError('task not exist', 404)
+    if not submission.is_artifact_enabled(task_index):
+        return HTTPError('artifact not available for this task', 404)
+    try:
+        artifact = submission.build_task_artifact_zip(task_index)
+    except FileNotFoundError as e:
+        return HTTPError(str(e), 404)
+    return send_file(
+        artifact,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=
+        f'submission-{submission.id}-task-{task_index:02d}-artifact.zip',
+    )
+
+
+@submission_api.get('/<submission>/artifact/compiledBinary')
+@login_required
+@Request.doc('submission', Submission)
+def download_submission_compiled_binary(user, submission: Submission):
+    problem = Problem(submission.problem_id)
+    has_permission = (submission.permission(user,
+                                            Submission.Permission.VIEW_OUTPUT)
+                      or user.username == submission.username)
+    if not has_permission:
+        return HTTPError('permission denied', 403)
+    artifact_collection = (problem.config or {}).get('artifactCollection', [])
+    if not ((problem.config or {}).get('compilation') or
+            ('compiledBinary' in artifact_collection)):
+        return HTTPError('compiled binary not available', 404)
+    if not submission.has_compiled_binary():
+        return HTTPError('compiled binary not found', 404)
+    try:
+        binary_stream = submission.get_compiled_binary()
+    except FileNotFoundError as e:
+        return HTTPError(str(e), 404)
+    binary_stream.seek(0)
+    return send_file(
+        binary_stream,
+        mimetype='application/octet-stream',
+        as_attachment=True,
+        download_name=f'submission-{submission.id}-compiled.bin',
+    )
+
+
+@submission_api.put('/<submission>/artifact/upload/case')
+@Request.args('task', 'case', 'token')
+@Request.doc('submission', Submission)
+def upload_submission_case_artifact(submission: Submission, task, case,
+                                    token: str):
+    try:
+        task_no = int(task)
+        case_no = int(case)
+    except (TypeError, ValueError):
+        return HTTPError('invalid task/case', 400)
+    if sandbox.find_by_token(token) is None:
+        return HTTPError('Invalid sandbox token', 401)
+    data = request.get_data()
+    if not data:
+        return HTTPError('no data', 400)
+    try:
+        submission.set_case_artifact(task_no, case_no, data)
+    except FileNotFoundError as e:
+        return HTTPError(str(e), 404)
+    except Exception as e:
+        return HTTPError(f'failed to upload artifact: {e}', 500)
+    return HTTPResponse('artifact uploaded', data={'ok': True})
+
+
+@submission_api.put('/<submission>/artifact/upload/binary')
+@Request.args('token')
+@Request.doc('submission', Submission)
+def upload_submission_compiled_binary(submission: Submission, token: str):
+    if sandbox.find_by_token(token) is None:
+        return HTTPError('Invalid sandbox token', 401)
+    data = request.get_data()
+    if not data:
+        return HTTPError('no data', 400)
+    try:
+        submission.set_compiled_binary(data)
+    except Exception as e:
+        return HTTPError(f'failed to upload compiled binary: {e}', 500)
+    return HTTPResponse('binary uploaded', data={'ok': True})
+
+
+@submission_api.route('/<submission>/pdf/<item>', methods=['GET'])
+@login_required(pat_scope=['read:submissions'])
 @Request.doc('submission', Submission)
 def get_submission_pdf(user, submission: Submission, item):
     # check the permission
@@ -340,6 +448,32 @@ def get_submission_pdf(user, submission: Submission, item):
     )
 
 
+@submission_api.route('/<submission>/static-analysis', methods=['GET'])
+@login_required
+@Request.doc('submission', Submission)
+def get_static_analysis(user, submission: Submission):
+    if not submission.permission(user, Submission.Permission.FEEDBACK):
+        return HTTPError('forbidden.', 403)
+    report = submission.sa_report or ""
+    report_url = None
+    if submission.sa_report_path:
+        try:
+            report_url = MinioClient().presign_get(submission.sa_report_path)
+        except Exception:
+            current_app.logger.exception("Failed to presign SA report")
+    return HTTPResponse('', data={"report": report, "reportUrl": report_url})
+
+
+@submission_api.route('/<submission>/late-seconds', methods=['GET'])
+@Request.args('token: str')
+@Request.doc('submission', Submission)
+def get_late_seconds(submission: Submission, token: str):
+    if sandbox.find_by_token(token) is None:
+        return HTTPError('Invalid sandbox token', 401)
+    late_seconds = submission.calculate_late_seconds()
+    return HTTPResponse('', data={"lateSeconds": late_seconds})
+
+
 @submission_api.route('/<submission>/complete', methods=['PUT'])
 @Request.json('tasks: list', 'token: str')
 @Request.doc('submission', Submission)
@@ -347,7 +481,15 @@ def on_submission_complete(submission: Submission, tasks, token):
     if not Submission.verify_token(submission.id, token):
         return HTTPError('i don\'t know you', 403)
     try:
-        submission.process_result(tasks)
+        static_analysis = request.json.get('staticAnalysis')
+        checker_payload = request.json.get('checker')
+        scoring_payload = request.json.get('scoring')
+        status_override = request.json.get('statusOverride')
+        submission.process_result(tasks,
+                                  static_analysis=static_analysis,
+                                  checker=checker_payload,
+                                  scoring=scoring_payload,
+                                  status_override=status_override)
     except (ValidationError, KeyError) as e:
         return HTTPError(
             'invalid data!\n'
@@ -358,7 +500,7 @@ def on_submission_complete(submission: Submission, tasks, token):
 
 
 @submission_api.route('/<submission>', methods=['PUT'])
-@login_required
+@login_required(pat_scope=['write:submissions'])
 @Request.doc('submission', Submission)
 @Request.files('code')
 def update_submission(user, submission: Submission, code):
@@ -401,14 +543,15 @@ def update_submission(user, submission: Submission, code):
         return HTTPError(str(e), 403)
     if success:
         return HTTPResponse(
-            f'{submission} {"is finished." if submission.handwritten else "send to judgement."}'
-        )
+            f'{submission} {"is finished." if submission.handwritten else "send to judgement."}',
+            data={'ok': True},
+            status_code=200)
     else:
         return HTTPError('Some error occurred, please contact the admin', 500)
 
 
 @submission_api.route('/<submission>/grade', methods=['PUT'])
-@login_required
+@login_required(pat_scope=['grade:submissions'])
 @Request.json('score: int')
 @Request.doc('submission', Submission)
 def grade_submission(user: User, submission: Submission, score: int):
@@ -459,13 +602,14 @@ def rejudge(user, submission: Submission):
     except ValueError as e:
         return HTTPError(str(e), 400)
     except JudgeQueueFullError as e:
-        return HTTPResponse(str(e), 202)
+        return HTTPResponse(str(e), 202, data={'ok': False})
     except ValidationError as e:
         return HTTPError(str(e), 422, data=e.to_dict())
-    if success:
-        return HTTPResponse(f'{submission} is sent to judgement.')
-    else:
+
+    # Check explicit False (not None or other falsy values)
+    if success is False:
         return HTTPError('Some error occurred, please contact the admin', 500)
+    return HTTPResponse('', data={'ok': True})
 
 
 @submission_api.route('/config', methods=['GET', 'PUT'])

@@ -1,9 +1,11 @@
 from typing import Optional
-from flask import Blueprint, request
+import math
+from flask import Blueprint, request, current_app
 
 from mongo import *
 from .auth import *
 from .utils import *
+from .utils.ai import DEFAULT_AI_MODEL
 from mongo.utils import *
 from mongo.course import *
 from mongo import engine
@@ -14,8 +16,15 @@ __all__ = ['course_api']
 course_api = Blueprint('course_api', __name__)
 
 
+def teacher_permission_check(user, course: Course) -> bool:
+    is_course_teacher = (course.obj.teacher.pk == user.pk)
+    is_ta = any(ta.pk == user.pk for ta in course.obj.tas)
+    is_staff = (user.role == Role.ADMIN)
+    return is_course_teacher or is_staff or is_ta
+
+
 @course_api.get('/')
-@login_required
+@login_required(pat_scope=['read:courses'])
 def get_courses(user):
     data = [{
         'course': c.course_name,
@@ -68,7 +77,7 @@ def modify_courses(user, course, new_course, teacher):
 
 
 @course_api.route('/<course_name>', methods=['GET', 'PUT'])
-@login_required
+@login_required(pat_scope=['read:courses'])
 def get_course(user, course_name):
     course = Course(course_name)
 
@@ -236,3 +245,230 @@ def get_course_scoreboard(
         'Success.',
         data=ret,
     )
+
+
+@course_api.route('/<course_name>/ai/settings', methods=['GET'])
+@login_required
+def get_course_ai_settings(user, course_name):
+    """
+    Get Course AI Settings
+    """
+    course = Course(course_name)
+    if not course:
+        return HTTPError('Course not found', 404)
+
+    if not course.permission(user, Course.Permission.VIEW):
+        return HTTPError('You are not in this course.', 403)
+
+    return HTTPResponse('Success', data=course.get_ai_settings())
+
+
+# =========================================
+# AI API Sections
+# =========================================
+
+
+@course_api.route('/<course_name>/aisetting/usage', methods=['GET'])
+@identity_verify(Role.TEACHER, Role.ADMIN, Role.TA)
+def get_course_ai_usage(user, course_name):
+    """
+    [Teacher Only] 取得 AI Key 使用量統計頁面資料
+    """
+    course = Course(course_name)
+    if not course:
+        return HTTPError('Course not found', 404)
+
+    if not teacher_permission_check(user, course):
+        return HTTPError('Permission denied', 403)
+
+    try:
+        keys_data = AiApiKey.get_keys_usage_by_course(course_name)
+        return HTTPResponse('Get usage success', data={'keys': keys_data})
+
+    except Exception as e:
+        current_app.logger.error(f"Error getting AI key usage: {str(e)}")
+        return HTTPError(str(e), 500)
+
+
+@course_api.route('/<course_name>/ai/key', methods=['GET', 'POST'])
+@identity_verify(Role.TEACHER, Role.ADMIN, Role.TA)
+def course_ai_key_entry(user, course_name):
+    """
+    GET:    Get AI API Keys for a course.
+    POST:   New AI API Key
+    """
+    course = Course(course_name)
+
+    if not course:
+        return HTTPError('Course not found', 404)
+
+    if not teacher_permission_check(user, course):
+        return HTTPError('Permission denied', 403)
+
+    # ===== GET: Retrieve Keys =====
+    def get_keys():
+        try:
+            keys = AiApiKey.get_list_by_course(course_name)
+            return HTTPResponse('Success', data={'keys': keys})
+        except Exception as e:
+            return HTTPError(str(e), 500)
+
+    # ===== POST: Add New Key =====
+    @Request.json('key_name', 'value', 'is_active')
+    def add_key(key_name, value, is_active):
+        if not key_name or not value:
+            return HTTPError('Missing key_name or value', 400)
+
+        if is_active is None:
+            is_active = True
+
+        try:
+            new_key = AiApiKey.add_key(course_id=course.id,
+                                       key_name=key_name,
+                                       key_value=value,
+                                       created_by=user,
+                                       is_active=is_active)
+
+            return HTTPResponse('Key added.', data={'id': str(new_key.id)})
+        except ValueError as ve:
+            current_app.logger.error(f"ValueError adding AI key: {str(ve)}")
+            return HTTPError(str(ve), 400)
+        except NotUniqueError:
+            return HTTPError('Key name already exists', 400)
+        except Exception as e:
+            current_app.logger.error(f"Error adding AI key: {str(e)}")
+            return HTTPError(str(e), 500)
+
+    # ===== Method Dispatch =====
+    if request.method == 'GET':
+        return get_keys()
+    elif request.method == 'POST':
+        return add_key()
+
+
+@course_api.route('/<course_name>/ai/key/<key_id>',
+                  methods=['DELETE', 'PATCH'])
+@identity_verify(Role.TEACHER, Role.ADMIN, Role.TA)
+def manage_course_ai_key(user, course_name, key_id):
+    """
+    Delete or Update an AI API Key for a course.
+    """
+    # Common Checks
+    course = Course(course_name)
+    if not course:
+        return HTTPError('Course not found', 404)
+
+    if user.role != Role.ADMIN:
+        is_teacher = (course.obj.teacher.pk == user.pk)
+        is_ta = any(ta.pk == user.pk for ta in course.obj.tas)
+
+        if not (is_teacher or is_ta):
+            return HTTPError('Permission denied', 403)
+
+    key = AiApiKey.get_key_by_id(key_id)
+    if not key:
+        return HTTPError('Key not found', 404)
+
+    if key.course_name != course.obj:
+        return HTTPError('Key does not belong to this course', 403)
+
+    # DELETE
+    def delete_key():
+        try:
+            success = AiApiKey.delete_key(key_id)
+            if success:
+                return HTTPResponse('Key deleted.')
+            else:
+                return HTTPError('Delete failed', 500)
+        except Exception as e:
+            current_app.logger.error(f"Error deleting key: {str(e)}")
+            return HTTPError(str(e), 500)
+
+    # PATCH
+    @Request.json('key_name', 'is_active')
+    def update_key(key_name, is_active):
+        update_fields = {}
+
+        # Only update fields that are provided
+        if key_name is not None:
+            update_fields['key_name'] = key_name
+        if is_active is not None:
+            update_fields['is_active'] = is_active
+
+        if not update_fields:
+            return HTTPError('No valid fields to update', 400)
+
+        try:
+            success = AiApiKey.update_key(key_id, **update_fields)
+            if success:
+                return HTTPResponse('Key updated.')
+            else:
+                return HTTPError('Update failed', 500)
+        except Exception as e:
+            current_app.logger.error(f"Error updating key: {str(e)}")
+            if 'duplicate key error' in str(e) or 'NotUniqueError' in str(
+                    type(e)):
+                return HTTPError('Key name already exists', 400)
+            return HTTPError(str(e), 500)
+
+    if request.method == 'DELETE':
+        return delete_key()
+    elif request.method == 'PATCH':
+        return update_key()
+
+
+@course_api.route('/<course_name>/ai/key/suggestion', methods=['GET'])
+@identity_verify(Role.TEACHER, Role.ADMIN, Role.TA)
+@Request.args('model')
+def get_key_suggestion(user, course_name, model):
+    """
+    Teacher Only
+    Get suggested number of AI API Keys based on student count and model limits.
+    """
+    # Scenario:
+    # A course has 120 students, using "gemini-2.5-flash-lite" model with 15 RPM limit.
+    # Calculation:
+    # - Effective RPM (with safety buffer): 15 * 0.5 = 7.5 RPM
+    # - Suggested Keys = ceil(120 / 7.5) = 16 keys
+    course = Course(course_name)
+    if not course:
+        return HTTPError('Course not found', 404)
+
+    if not teacher_permission_check(user, course):
+        return HTTPError('Permission denied', 403)
+
+    # 1. Model Name
+    model_name = model if model else DEFAULT_AI_MODEL
+
+    # 2. Student Count
+    student_count = len(
+        course.student_nicknames) if course.student_nicknames else 0
+    # If no students, suggest 1 key by default
+    if student_count == 0:
+        return HTTPResponse('Success',
+                            data={
+                                "student_count": 0,
+                                "suggested_key_count": 1,
+                                "reason": "No students in course yet."
+                            })
+
+    # 3. Get Model RPM Limit
+    rpm_limit = AiModel.get_rpm_limit(model_name, default=5)
+
+    # 4. Calculate Suggested Key Count
+    safety_factor = 0.5  # 50% of RPM to be safe
+    effective_rpm = max(1, rpm_limit * safety_factor)
+
+    suggested_count = math.ceil(student_count / effective_rpm)
+    suggested_count = max(1, suggested_count)
+
+    return HTTPResponse(
+        'Success',
+        data={
+            "student_count":
+            student_count,
+            "suggested_key_count":
+            suggested_count,
+            "reason":
+            f"Based on {student_count} students and {rpm_limit} RPM limit (with safety buffer of {safety_factor})."
+        })

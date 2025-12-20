@@ -1,14 +1,16 @@
 import io
-from flask import Blueprint, request, current_app
+from flask import Blueprint, request, current_app, send_file
 from datetime import datetime, timezone
 
 from .utils import *
 from .auth import *
 from mongo.submission import TrialSubmission
-from mongo.user import User
+from mongo.user import User, Role
 from mongo.utils import MinioClient
+from mongo import engine
 from werkzeug.datastructures import FileStorage
 from zipfile import is_zipfile
+import zipfile
 
 __all__ = ["trial_submission_api"]
 trial_submission_api = Blueprint("trial_submission_api", __name__)
@@ -201,3 +203,136 @@ def upload_trial_files(user, trial_id: str):
                             "Code_Path": code_path,
                             "Custom_Testcases_Path": custom_path,
                         })
+
+
+@trial_submission_api.route("/<trial_id>", methods=["GET"])
+@login_required
+def get_trial_record(user, trial_id: str):
+    """
+    Get detailed record of a Trial Submission including stdout/stderr.
+    """
+    try:
+        ts = TrialSubmission(trial_id)
+    except engine.DoesNotExist:
+        return HTTPError("Trial submission not found.", 404)
+
+    # 權限檢查 (參考 upload_trial_files 的邏輯)
+    req_user = User(user.username)
+    ts_owner_username = getattr(ts.obj, 'user', None)
+    try:
+        if ts_owner_username and hasattr(ts_owner_username, 'username'):
+            ts_owner_username = ts_owner_username.username
+    except Exception:
+        pass
+
+    is_owner = (req_user.username == ts_owner_username)
+    is_staff = req_user.role in (Role.ADMIN, Role.TEACHER, Role.TA)
+
+    if not (is_owner or is_staff):
+        return HTTPError("Forbidden.", 403)
+
+    # 回傳格式化後的資料
+    try:
+        data = ts.get_trial_api_info()
+        return HTTPResponse("Success", data=data)
+    except Exception as e:
+        current_app.logger.error(f"Error retrieval trial info: {e}")
+        return HTTPError("Internal Server Error", 500)
+
+
+@trial_submission_api.route("/<trial_id>/download/case", methods=["GET"])
+@login_required
+def download_trial_case(user, trial_id: str):
+    """
+    Download the output zip for a specific task/case.
+    Query Param: task_index (int)
+    """
+    try:
+        task_index = int(request.args.get('task_index'))
+    except (TypeError, ValueError):
+        return HTTPError("Invalid task_index.", 400)
+
+    try:
+        ts = TrialSubmission(trial_id)
+    except engine.DoesNotExist:
+        return HTTPError("Trial submission not found.", 404)
+
+    # 權限檢查
+    req_user = User(user.username)
+    ts_owner_username = getattr(ts.obj, 'user', None)
+    if hasattr(ts_owner_username, 'username'):
+        ts_owner_username = ts_owner_username.username
+
+    is_owner = (req_user.username == ts_owner_username)
+    is_staff = req_user.role in (Role.ADMIN, Role.TEACHER, Role.TA)
+
+    if not (is_owner or is_staff):
+        return HTTPError("Forbidden.", 403)
+
+    # 取得 Raw Output (Zip file bytes)
+    # 假設每個 Task 只有一個 Case (idx=0)
+    try:
+        if task_index < 0 or task_index >= len(ts.tasks):
+            return HTTPError("Task index out of range.", 404)
+
+        case_result = ts.tasks[task_index].cases[0]
+        # _get_output_raw 是 BaseSubmission 的方法，回傳 BytesIO
+        output_io = ts._get_output_raw(case_result)
+        output_io.seek(0)
+    except (IndexError, AttributeError):
+        return HTTPError("Output not found (pending or error).", 404)
+    except Exception as e:
+        current_app.logger.error(f"Error downloading case: {e}")
+        return HTTPError("Internal Error", 500)
+
+    filename = f"trial-{trial_id}-task{task_index}.zip"
+
+    return send_file(output_io,
+                     mimetype='application/zip',
+                     as_attachment=True,
+                     download_name=filename)
+
+
+@trial_submission_api.route("/<trial_id>/download", methods=["GET"])
+@login_required
+def download_trial_all(user, trial_id: str):
+    """
+    Download all case outputs zipped together.
+    """
+    try:
+        ts = TrialSubmission(trial_id)
+    except engine.DoesNotExist:
+        return HTTPError("Trial submission not found.", 404)
+
+    # 權限檢查
+    req_user = User(user.username)
+    ts_owner_username = getattr(ts.obj, 'user', None)
+    if hasattr(ts_owner_username, 'username'):
+        ts_owner_username = ts_owner_username.username
+
+    is_owner = (req_user.username == ts_owner_username)
+    is_staff = req_user.role in (Role.ADMIN, Role.TEACHER, Role.TA)
+
+    if not (is_owner or is_staff):
+        return HTTPError("Forbidden.", 403)
+
+    # Generator
+    def file_iterator():
+        for i, task in enumerate(ts.tasks):
+            if not task.cases:
+                continue
+
+            try:
+                case_result = task.cases[0]
+                # 讀取 Raw Zip Bytes
+                case_io = ts._get_output_raw(case_result)
+                case_data = case_io.read()
+
+                # Yield (檔名, 資料)
+                yield (f"task_{i}.zip", case_data)
+
+            except Exception:
+                # 錯誤時寫入一個錯誤訊息檔
+                yield (f"task_{i}_error.txt", b"Output not found")
+
+    return stream_zip_response(file_iterator, f"trial-{trial_id}.zip")

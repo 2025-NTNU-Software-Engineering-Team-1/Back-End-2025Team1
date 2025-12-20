@@ -10,6 +10,8 @@ from zipfile import ZipFile, BadZipFile
 __all__ = [*mongoengine.__all__]
 
 TAIPEI_TIMEZONE = timezone(timedelta(hours=8))
+DEFAULT_AI_MODEL = 'gemini-2.5-flash-lite'
+RPD_RESET_INTERVAL = timedelta(hours=24)
 
 MONGO_HOST = os.environ.get('MONGO_HOST', 'mongomock://localhost')
 
@@ -181,7 +183,7 @@ class Pipeline(EmbeddedDocument):
     interaction_config   ：教師/學生 Binary 名稱、執行順序、stdin/stdout 配置、Checker 需求。
     custom_scoring       ：是否啟用、自訂 Score.py 路徑、I/O 介面描述。
     artifact_manifest    ：可提供下載的產物種類。
-    test_case_policy     ：命名規則（legacy/ssttnn）、允許的輸入/輸出模式（stdin/fopen、stdout/fwrite）。
+    test_case_policy     ：命名規則（legacy/ssttnn）、允許的輸入/輸出模式（stdin/allowRead、stdout/allowWrite）。
     """
 
 
@@ -249,6 +251,9 @@ class Homework(Document):
 
 
 class Course(Document):
+    meta = {
+        'strict': False
+    }  # For development convenience. Please remove when merging is done.
     course_name = StringField(
         max_length=64,
         required=True,
@@ -263,6 +268,13 @@ class Course(Document):
     announcements = ListField(ReferenceField('Announcement'))
     posts = ListField(ReferenceField('Post'), default=list)
     student_scores = DictField(db_field='studentScores')
+
+    # for AI_vt
+    is_ai_vt_enabled = BooleanField(db_field='isAIEnabled', default=True)
+    ai_model = ReferenceField('AiModel',
+                              db_field='aiModel',
+                              null=True,
+                              default=DEFAULT_AI_MODEL)
 
 
 class Number(Document):
@@ -376,6 +388,11 @@ class Problem(Document):
         ProblemDescription,
         default=ProblemDescription,
     )
+    # New fields for API compatibility (can coexist with description)
+    config = DictField(
+        default=dict,
+        null=True,
+    )
     owner = StringField(max_length=16, required=True)
     # pdf =
     tags = ListField(StringField(max_length=16))
@@ -416,6 +433,7 @@ class Problem(Document):
         max_length=10**4,
         default='',
     )
+    meta = {'strict': False}
 
     # === Test Mode Fields ===
     test_mode_enabled = BooleanField(db_field='testModeEnabled', default=False)
@@ -508,8 +526,32 @@ class BaseSubmissionDocument(Document):
         max_length=256,
         db_field='codeMinioPath',
     )
+    checker_summary = StringField(default=None, null=True)
+    checker_artifacts_path = StringField(
+        null=True,
+        max_length=256,
+    )
+    compiled_binary = FileField(default=None, null=True)
+    compiled_binary_minio_path = StringField(
+        null=True,
+        max_length=256,
+        db_field='compiledBinaryMinioPath',
+    )
+    scorer_artifacts_path = StringField(
+        null=True,
+        max_length=256,
+        db_field='scorerArtifactsPath',
+    )
+    scoring_message = StringField(default=None, null=True)
+    scoring_breakdown = DictField(default=None, null=True)
     last_send = DateTimeField(db_field='lastSend', default=datetime.now)
     ip_addr = StringField(default=None, null=True)
+    sa_status = IntField(null=True, db_field='saStatus')
+    sa_message = StringField(max_length=1024, null=True, db_field='saMessage')
+    sa_report = StringField(null=True, db_field='saReport')
+    sa_report_path = StringField(max_length=256,
+                                 null=True,
+                                 db_field='saReportPath')
 
 
 class Submission(BaseSubmissionDocument):
@@ -742,3 +784,84 @@ class PersonalAccessToken(Document):
     description = StringField(
         required=False,
         max_length=256)  # Record the purpose of the token (Optional)
+
+
+class AiModel(Document):
+    # AI model that can be used.
+    name = StringField(max_length=64, required=True, unique=True)
+    rpm_limit = IntField(db_field='RPM_limit', required=True)
+    tpm_limit = IntField(db_field='TPM_limit', required=True)
+    rpd_limit = IntField(db_field='RPD_limit', required=True)
+    description = StringField(max_length=256, default='')
+    is_active = BooleanField(default=True)
+
+    meta = {
+        'collection': 'ai_model',
+    }
+
+
+class AiApiKey(Document):
+    # API key for accessing AI models.
+    key_value = StringField(db_field='keyValue', required=True)
+    key_name = StringField(db_field='keyName', required=True)
+    course_name = ReferenceField('Course',
+                                 db_field='course_name',
+                                 required=True)
+    input_token = IntField(db_field='inputToken', default=0)
+    output_token = IntField(db_field='outputToken', default=0)
+    is_active = BooleanField(db_field='isActive', default=True)
+    request_count = IntField(db_field='requestCount', default=0)
+    rpd = IntField(db_field='RPD', default=0)  # 紀錄當日累積請求量
+    last_reset_date = DateTimeField(default=datetime.now,
+                                    db_field='lastResetDate')
+    created_by = ReferenceField('User', db_field='createdBy', required=True)
+    meta = {'collection': 'ai_api_key'}
+    created_at = DateTimeField(default=datetime.now, db_field='createdAt')
+    updated_at = DateTimeField(default=datetime.now, db_field='updatedAt')
+    created_by = ReferenceField('User', db_field='createdBy', required=True)
+    is_active = BooleanField(db_field='isActive', default=True)
+    meta = {
+        'collection': 'ai_api_key',
+        'indexes': [{
+            'fields': ['course_name', 'key_name'],
+            'unique': True
+        }]
+    }
+
+
+class AiApiLog(Document):
+    # Log of AI API requests.
+    course_name = ReferenceField('Course',
+                                 db_field='course_name',
+                                 required=True)
+    username = StringField(required=True)
+    # history: list: [{"role": "user/model", "parts": [...]}, ...]
+    history = ListField(DictField(), default=list)
+    total_tokens = IntField(db_field='totalTokens', default=0)
+
+    meta = {
+        'collection': 'ai_api_log',
+        'indexes': [('course_name', 'username')]
+    }
+
+
+class AiTokenUsage(Document):
+    """
+    Focus on tracking token usage for AI API keys.
+    """
+    api_key = ReferenceField('AiApiKey', db_field='apiKey', required=True)
+    problem_id = ReferenceField('Problem',
+                                db_field='problemId',
+                                required=False)
+    course_name = ReferenceField('Course',
+                                 db_field='courseName',
+                                 required=True)
+
+    input_tokens = IntField(default=0)
+    output_tokens = IntField(default=0)
+    timestamp = DateTimeField(default=datetime.now)
+
+    meta = {
+        'collection': 'ai_token_usage',
+        'indexes': ['api_key', ('course_name', 'problem_id')]
+    }

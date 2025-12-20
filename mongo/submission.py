@@ -3,6 +3,7 @@ import io
 import os
 import pathlib
 import secrets
+from mongo.utils import generate_ulid
 import logging
 from typing import (
     Any,
@@ -20,7 +21,7 @@ from bson.son import SON
 from flask import current_app
 from tempfile import NamedTemporaryFile
 from datetime import date, datetime, timedelta
-from zipfile import ZipFile, is_zipfile
+from zipfile import ZipFile, is_zipfile, BadZipFile
 from ulid import ULID
 import abc
 
@@ -38,11 +39,14 @@ __all__ = [
     'TrialSubmission',
     'JudgeQueueFullError',
     'TestCaseNotFound',
+    'SubmissionCodeNotFound',
 ]
 
 SUBMISSION_ALLOWED_SORT_BY = [
     'runTime', 'memoryUsage', 'timestamp', '-timestamp'
 ]
+OUTPUT_TRUNCATE_SIZE = 4096  # 4KB
+OUTPUT_TRUNCATE_MSG = "\n... (Content too long, please download output file) ..."
 
 # TODO: modular token function
 
@@ -166,6 +170,28 @@ class BaseSubmission(abc.ABC):
         tmp_dir.mkdir(exist_ok=True, parents=True)
         return tmp_dir
 
+    def calculate_late_seconds(self) -> int:
+        """Return late seconds relative to homework deadlines. -1 表示無作業資訊。"""
+        problem = self.problem
+        username = self.username
+        pid = str(self.problem_id)
+        candidates = []
+        for hw_ref in problem.homeworks:
+            hw = Homework(hw_ref.id) if hasattr(hw_ref,
+                                                "id") else Homework(hw_ref)
+            if not hw:
+                continue
+            student_status = hw.student_status.get(username)
+            if not student_status or pid not in student_status:
+                continue
+            end_time = hw.duration.end
+            if end_time is None:
+                continue
+            delta = (self.timestamp - end_time).total_seconds()
+            late = int(delta) if delta > 0 else 0
+            candidates.append(late)
+        return min(candidates) if candidates else -1
+
     @property
     def main_code_ext(self):
         lang2ext = {0: '.c', 1: '.cpp', 2: '.py', 3: '.pdf'}
@@ -178,6 +204,20 @@ class BaseSubmission(abc.ABC):
     @property
     def is_zip_mode(self) -> bool:
         return self.submission_mode == 1
+
+    @property
+    def execution_mode(self) -> str:
+        config = getattr(self.problem, 'config', {}) or {}
+        return config.get('executionMode', 'general')
+
+    @property
+    def is_function_only_mode(self) -> bool:
+        return self.execution_mode == 'functionOnly'
+
+    def _validate_execution_mode_constraints(self):
+        if self.is_function_only_mode and self.is_zip_mode:
+            raise ValueError(
+                'function-only problems only accept code submissions')
 
     def main_code_path(self) -> str:
         # handwritten submission didn't provide this function
@@ -418,7 +458,7 @@ class BaseSubmission(abc.ABC):
         return self.send()  # Calls subclass's send()
 
     def _generate_code_minio_path(self):
-        return f'submissions/{ULID()}.zip'
+        return f'submissions/{generate_ulid()}.zip'
 
     def _put_code(self, code_file) -> str:
         '''
@@ -493,7 +533,12 @@ class BaseSubmission(abc.ABC):
         '''
         raise NotImplementedError
 
-    def process_result(self, tasks: list):
+    def process_result(self,
+                       tasks: list,
+                       static_analysis: Optional[dict] = None,
+                       checker: Optional[dict] = None,
+                       scoring: Optional[dict] = None,
+                       status_override: Optional[str] = None):
         '''
         process results from sandbox
 
@@ -508,10 +553,111 @@ class BaseSubmission(abc.ABC):
                     'execTime': int,
                     'memoryUsage': int
                 }
+            static_analysis:
+                optional static analysis payload from sandbox
         '''
         self.logger.info(f'recieve {self} result')
         processed_tasks = []
         minio_client = MinioClient()
+
+        sa_updates = {}
+        checker_updates = {}
+        scoring_updates = {}
+        scoring_score_override = None
+        scoring_status_code = None
+        if static_analysis:
+            sa_status = static_analysis.get('status', '').lower()
+            if sa_status == 'skip':
+                sa_updates.update(
+                    sa_status=None,
+                    sa_message=static_analysis.get('message'),
+                    sa_report=static_analysis.get('report'),
+                )
+            else:
+                sa_updates.update(
+                    sa_status=0 if sa_status == 'pass' else 1,
+                    sa_message=static_analysis.get('message'),
+                    sa_report=static_analysis.get('report'),
+                )
+            report_path = static_analysis.get('reportPath')
+            report_text = static_analysis.get('report') or ''
+            if report_path:
+                sa_updates['sa_report_path'] = report_path
+            elif report_text:
+                # upload report text to minio for later download
+                minio_client = MinioClient()
+                object_name = f'static-analysis/{self.id}_{generate_ulid()}.txt'
+                minio_client.upload_file_object(
+                    io.BytesIO(report_text.encode('utf-8')),
+                    object_name=object_name,
+                    length=len(report_text.encode('utf-8')),
+                    content_type='text/plain',
+                )
+                sa_updates['sa_report_path'] = object_name
+        if checker:
+            messages = checker.get('messages') or []
+            summary_parts = []
+            for msg in messages:
+                case_no = msg.get('case')
+                status = msg.get('status')
+                text = msg.get('message') or ''
+                if not text:
+                    continue
+                prefix = f"{case_no}: " if case_no is not None else ''
+                status_part = f"[{status}]" if status else ''
+                summary_parts.append(f"{prefix}{status_part} {text}".strip())
+            if summary_parts:
+                checker_updates['checker_summary'] = "\n".join(summary_parts)
+            artifacts = checker.get('artifacts') or {}
+            artifact_path = (artifacts.get('checkResultPath')
+                             or artifacts.get('path')
+                             or artifacts.get('checkerPath'))
+            artifact_text = artifacts.get('checkResult')
+            if artifact_path:
+                checker_updates['checker_artifacts_path'] = artifact_path
+            elif artifact_text:
+                object_name = f'checker/{self.id}_{generate_ulid()}.txt'
+                data = artifact_text.encode('utf-8')
+                minio_client.upload_file_object(
+                    io.BytesIO(data),
+                    object_name=object_name,
+                    length=len(data),
+                    content_type='text/plain',
+                )
+                checker_updates['checker_artifacts_path'] = object_name
+        if scoring:
+            if scoring.get('score') is not None:
+                try:
+                    scoring_score_override = int(scoring.get('score'))
+                except (TypeError, ValueError):
+                    scoring_score_override = 0
+            scoring_status = scoring.get('status')
+            if scoring_status:
+                scoring_status_code = self.status2code.get(scoring_status)
+            message = scoring.get('message')
+            if message:
+                scoring_updates['scoring_message'] = message
+            breakdown = scoring.get('breakdown')
+            if isinstance(breakdown, dict):
+                scoring_updates['scoring_breakdown'] = breakdown
+            artifacts = scoring.get('artifacts') or {}
+            artifact_path = (artifacts.get('path')
+                             or artifacts.get('scorerPath')
+                             or artifacts.get('checkResultPath'))
+            artifact_text = (artifacts.get('text') or artifacts.get('stdout')
+                             or artifacts.get('stderr'))
+            if artifact_path:
+                scoring_updates['scorer_artifacts_path'] = artifact_path
+            elif artifact_text:
+                object_name = f'scorer/{self.id}_{generate_ulid()}.txt'
+                data = artifact_text.encode('utf-8')
+                minio_client.upload_file_object(
+                    io.BytesIO(data),
+                    object_name=object_name,
+                    length=len(data),
+                    content_type='text/plain',
+                )
+                scoring_updates['scorer_artifacts_path'] = object_name
 
         for i, task_cases in enumerate(tasks):
             # process cases
@@ -578,12 +724,29 @@ class BaseSubmission(abc.ABC):
         exec_time = max(t.exec_time for t in tasks) if tasks else -1
         memory_usage = max(t.memory_usage for t in tasks) if tasks else -1
 
+        final_score = sum(task.score for task in tasks)
+        if scoring_score_override is not None:
+            final_score = scoring_score_override
+
+        final_status = status
+        override_status = status_override or None
+        if override_status:
+            override_status = self.status2code.get(override_status,
+                                                   final_status)
+        if scoring_status_code is not None:
+            override_status = scoring_status_code
+        if override_status is not None:
+            final_status = override_status
+
         self.update(
-            score=sum(task.score for task in tasks),
-            status=status,
+            score=final_score,
+            status=final_status,
             tasks=tasks,
             exec_time=exec_time,
             memory_usage=memory_usage,
+            **sa_updates,
+            **checker_updates,
+            **scoring_updates,
         )
         self.reload()
         self.finish_judging()  # Call subclass's finish_judging
@@ -593,7 +756,7 @@ class BaseSubmission(abc.ABC):
         '''
         generate a output file path for minio
         '''
-        return f'submissions/task{task_no:02d}_case{case_no:02d}_{ULID()}.zip'
+        return f'submissions/task{task_no:02d}_case{case_no:02d}_{generate_ulid()}.zip'
 
     @staticmethod
     @abc.abstractmethod
@@ -695,8 +858,8 @@ class BaseSubmission(abc.ABC):
         tasks = [task.to_mongo() for task in self.tasks]
         for task in tasks:
             for case in task['cases']:
-                del case['output']
-                del case['output_minio_path']
+                case.pop('output', None)
+                case.pop('output_minio_path', None)
         return [task.to_dict() for task in tasks]
 
     def get_detailed_result(self) -> List[Dict[str, Any]]:
@@ -709,8 +872,8 @@ class BaseSubmission(abc.ABC):
                 output = self.get_single_output(i, j)
                 case['stdout'] = output['stdout']
                 case['stderr'] = output['stderr']
-                del case['output']  # non-serializable field
-                del case['output_minio_path']  # non-serializable field
+                case.pop('output', None)  # non-serializable field
+                case.pop('output_minio_path', None)  # non-serializable field
         return [task.to_dict() for task in tasks]
 
     def _get_code_raw(self):
@@ -923,6 +1086,7 @@ class Submission(MongoBase, BaseSubmission, engine=engine.Submission):
         # unexisted id
         if not self:
             raise engine.DoesNotExist(f'{self}')
+        self._validate_execution_mode_constraints()
         self.update(
             status=-1,
             last_send=datetime.now(),
@@ -975,7 +1139,6 @@ class Submission(MongoBase, BaseSubmission, engine=engine.Submission):
         Submission.assign_token(self.id, tar.token)
         post_data = {
             'token': tar.token,
-            'checker': 'print("not implement yet. qaq")',
             'problem_id': self.problem_id,
             'language': self.language,
             'submission_type': 'normal',  # Flag for sandbox
@@ -1159,6 +1322,104 @@ class Submission(MongoBase, BaseSubmission, engine=engine.Submission):
             return submissions, submission_count
         return submissions
 
+    def is_artifact_enabled(self, task_index: int) -> bool:
+        try:
+            config = self.problem.config
+            if not config or not isinstance(config, dict):
+                return False
+            artifact_collection = config.get('artifactCollection', [])
+            if any(isinstance(v, str) for v in artifact_collection):
+                return 'zip' in artifact_collection
+            return task_index in artifact_collection
+        except (AttributeError, KeyError):
+            return False
+
+    def build_task_artifact_zip(self, task_index: int) -> io.BytesIO:
+        if task_index < 0 or task_index >= len(self.tasks):
+            raise FileNotFoundError('task not exist')
+        task = self.tasks[task_index]
+        if not task.cases:
+            raise FileNotFoundError('case not exist')
+
+        minio_client = MinioClient()
+        artifact_buf = io.BytesIO()
+        wrote_any_file = False
+
+        with ZipFile(artifact_buf, 'w') as artifact_zip:
+            for case_index, case in enumerate(task.cases):
+                output_path = getattr(case, 'output_minio_path', None)
+                if not output_path:
+                    continue
+                data = minio_client.download_file(output_path)
+                try:
+                    with ZipFile(io.BytesIO(data)) as case_zip:
+                        for name in case_zip.namelist():
+                            arcname = (
+                                f'task_{task_index:02d}/case_{case_index:02d}/{name}'
+                            )
+                            artifact_zip.writestr(arcname, case_zip.read(name))
+                            wrote_any_file = True
+                except BadZipFile as exc:
+                    raise FileNotFoundError(
+                        f'invalid artifact archive: {exc}') from exc
+
+        if not wrote_any_file:
+            raise FileNotFoundError('artifact not available for this task')
+
+        artifact_buf.seek(0)
+        return artifact_buf
+
+    def set_compiled_binary(self, binary_data: bytes) -> None:
+        try:
+            minio_client = MinioClient()
+            object_name = f'compiled_binaries/{self.id}'
+            minio_client.upload_file_object(
+                io.BytesIO(binary_data),
+                object_name,
+                len(binary_data),
+            )
+            self.update(compiled_binary_minio_path=object_name)
+        except Exception as e:
+            self.logger.error(f'Failed to set compiled binary: {e}')
+            raise
+
+    def set_case_artifact(self, task_no: int, case_no: int,
+                          artifact_data: bytes) -> None:
+        if task_no < 0 or task_no >= len(self.tasks):
+            raise FileNotFoundError('task not exist')
+        task = self.tasks[task_no]
+        if case_no < 0 or case_no >= len(task.cases):
+            raise FileNotFoundError('case not exist')
+        minio_client = MinioClient()
+        object_name = self._generate_output_minio_path(task_no, case_no)
+        minio_client.upload_file_object(
+            io.BytesIO(artifact_data),
+            object_name,
+            len(artifact_data),
+            content_type='application/zip',
+        )
+        # ensure ALL tasks' cases have output field to satisfy validation
+        for t in self.tasks:
+            for c in t.cases:
+                if not hasattr(c, "output") or c.output is None:
+                    c.output = None
+        case = task.cases[case_no]
+        case.output_minio_path = object_name
+        self.save()
+
+    def has_compiled_binary(self) -> bool:
+        try:
+            return bool(self.compiled_binary_minio_path)
+        except AttributeError:
+            return False
+
+    def get_compiled_binary(self) -> io.BytesIO:
+        if not self.compiled_binary_minio_path:
+            raise FileNotFoundError('compiled binary not found')
+        minio_client = MinioClient()
+        data = minio_client.download_file(self.compiled_binary_minio_path)
+        return io.BytesIO(data)
+
     @classmethod
     def add(
         cls,
@@ -1270,7 +1531,6 @@ class TrialSubmission(MongoBase, BaseSubmission,
             # custom_input_path = self._put_custom_input(custom_input_file)
             self.logger.warning(
                 f"Custom input for {self} is not yet implemented.")
-            # For now, we'll just store the code.
 
         self.update(
             status=-1,
@@ -1347,8 +1607,6 @@ class TrialSubmission(MongoBase, BaseSubmission,
             f"TrialSubmission.send() is a placeholder and needs sandbox API integration."
         )
 
-        # TODO: Remove this placeholder and uncomment rq.post when sandbox is ready
-        # For now, simulate a sandbox error
         self.logger.error("Test submission sandbox endpoint not implemented.")
         return False
 
@@ -1584,3 +1842,57 @@ class TrialSubmission(MongoBase, BaseSubmission,
             current_app.logger.error(
                 f"Error getting trial submission history: {e}")
             raise e
+
+    def get_trial_api_info(self) -> Dict[str, Any]:
+        """
+            Format the trial submission data for API response.
+            Includes Truncated Stdout/Stderr text for each task.
+            """
+        # Convert status code
+        status_str = self.code2status.get(self.status, 'Judging')
+        if self.status < 0:
+            status_str = 'Judging' if self.status == -1 else 'Pending'
+
+        tasks_data = []
+        for i, task in enumerate(self.tasks):
+            # One task for one case only
+            if not task.cases:
+                continue
+
+            case = task.cases[0]
+
+            # Get Stdout/Stderr
+            try:
+                output_content = self.get_single_output(i, 0, text=True)
+                stdout_text = output_content.get('stdout', '')
+                stderr_text = output_content.get('stderr', '')
+            except (FileNotFoundError, AttributeError):
+                stdout_text = ''
+                stderr_text = ''
+
+            # === Apply Truncate Logic ===
+            # Truncate if exceeds OUTPUT_TRUNCATE_SIZE
+            if len(stdout_text) > OUTPUT_TRUNCATE_SIZE:
+                stdout_text = stdout_text[:OUTPUT_TRUNCATE_SIZE] + OUTPUT_TRUNCATE_MSG
+
+            if len(stderr_text) > OUTPUT_TRUNCATE_SIZE:
+                stderr_text = stderr_text[:OUTPUT_TRUNCATE_SIZE] + OUTPUT_TRUNCATE_MSG
+
+            task_status_str = self.code2status.get(case.status, 'Unknown')
+
+            tasks_data.append({
+                "status": task_status_str,
+                "exec_time": case.exec_time,
+                "memory_usage": case.memory_usage,
+                "score": task.score,
+                "stdout": stdout_text,
+                "stderr": stderr_text
+            })
+
+        return {
+            "trial_submission_id": str(self.id),
+            "timestamp": self.timestamp.timestamp(),
+            "status": status_str,
+            "score": self.score,
+            "tasks": tasks_data
+        }

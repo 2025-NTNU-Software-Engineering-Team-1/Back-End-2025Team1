@@ -15,6 +15,25 @@ from tests.test_problem import get_file
 from tests import utils
 from testcontainers.minio import MinioContainer
 import mongo.config
+import shutil
+import subprocess
+
+
+@pytest.fixture(scope="session", autouse=True)
+def check_docker():
+    """Check if Docker is running before starting tests."""
+    if shutil.which('docker') is None:
+        pytest.exit("Docker is not installed or not in PATH.", 1)
+
+    try:
+        subprocess.run(["docker", "info"],
+                       check=True,
+                       stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+    except subprocess.CalledProcessError:
+        pytest.exit("Docker is not running. Please start Docker.", 1)
+    except Exception as e:
+        pytest.exit(f"Could not check Docker status: {e}", 1)
 
 
 # use a tmp minio for entire test session
@@ -89,7 +108,10 @@ class ForgeClient(Protocol):
 def forge_client(client: FlaskClient):
 
     def seted_cookie(username: str) -> FlaskClient:
-        client.set_cookie('piann', User(username).secret, domain='test.test')
+        secret = User(username).secret
+        if isinstance(secret, bytes):
+            secret = secret.decode()
+        client.set_cookie('piann', secret, domain='test.test')
         return client
 
     return seted_cookie
@@ -112,13 +134,11 @@ def client_student(forge_client: ForgeClient):
 
 @pytest.fixture
 def test_token():
-    # Token for user: test
     return User('test').secret
 
 
 @pytest.fixture
 def test2_token():
-    # Token for user: test2
     return User('test2').secret
 
 

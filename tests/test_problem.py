@@ -1,10 +1,14 @@
 import io
+import json
+import hashlib
 import zipfile
 import pytest
 from zipfile import ZipFile
 from tests.base_tester import BaseTester, random_string
 from mongo import *
+from mongo.problem import Problem
 from tests import utils
+from mongo.utils import MinioClient
 
 
 def get_file(file):
@@ -20,6 +24,78 @@ def description_dict():
         'hint': '',
         'sampleInput': [],
         'sampleOutput': []
+    }
+
+
+def assert_basic_problem_config(config):
+    assert config['acceptedFormat'] == 'code'
+    assert config['aiVTuber'] is False
+    assert config['artifactCollection'] == []
+    assert config['compilation'] is False
+    assert config['customChecker'] is False
+    assert config['executionMode'] == 'general'
+    assert config['allowRead'] is False
+    assert config['allowWrite'] is False
+    assert config['scoringScript'] == {'custom': False}
+    assert config['teacherFirst'] is False
+    assert config['testMode'] is False
+    assert config['testModeQuotaPerStudent'] == 0
+    assert config.get('staticAnalys', {}).get('custom') is False
+
+
+def advanced_config_payload():
+    return {
+        'trialMode': True,
+        'aiVTuber': True,
+        'aiVTuberMaxToken': 3,
+        'aiVTuberMode': 'guided',
+        'acceptedFormat': 'code',
+        'maxStudentZipSizeMB': 50,
+        'networkAccessRestriction': {
+            'enabled': True,
+            'firewallExtranet': {
+                'enabled': True,
+                'whitelist': ['192.168.1.1'],
+                'blacklist': [],
+            },
+            'connectWithLocal': {
+                'enabled': True,
+                'whitelist': ['192.168.2.2'],
+                'blacklist': [],
+                'localServiceZip': None,
+            },
+        },
+        'artifactCollection': ['zip', 'compiledBinary'],
+    }
+
+
+def advanced_pipeline_payload():
+    return {
+        'allowRead': True,
+        'allowWrite': True,
+        'executionMode': 'general',
+        'customChecker': False,
+        'teacherFirst': False,
+        'staticAnalysis': {
+            'libraryRestrictions': {
+                'enabled': True,
+                'whitelist': {
+                    'syntax': ['recursive'],
+                    'imports': [],
+                    'headers': [],
+                    'functions': [],
+                },
+                'blacklist': {
+                    'syntax': [],
+                    'imports': [],
+                    'headers': [],
+                    'functions': [],
+                },
+            },
+        },
+        'scoringScript': {
+            'custom': False,
+        },
     }
 
 
@@ -99,6 +175,9 @@ class TestProblem(BaseTester):
 
     # add a offline problem
     def test_add_offline_problem(self, client_admin):
+        # Create course first
+        utils.course.create_course(teacher='admin', name='English')
+
         request_json = {
             'courses': ['English'],
             'status': 1,
@@ -134,6 +213,9 @@ class TestProblem(BaseTester):
 
     # add a online problem
     def test_add_online_problem(self, client_admin):
+        # Create course first
+        utils.course.create_course(teacher='admin', name='math')
+
         request_json = {
             'courses': ['math'],
             'status': 0,
@@ -167,6 +249,57 @@ class TestProblem(BaseTester):
         assert json['status'] == 'ok'
         assert json['message'] == 'Success.'
 
+    def test_add_problem_with_extended_config_schema(self, client_admin):
+        utils.course.create_course(teacher='admin', name='Public')
+        request_json = {
+            'problemName': 'schema-test',
+            'description': description_dict(),
+            'courses': ['Public'],
+            'tags': [],
+            'allowedLanguage': 7,
+            'quota': 5,
+            'type': 0,
+            'status': 0,
+            'testCaseInfo': {
+                'language':
+                0,
+                'fillInTemplate':
+                '',
+                'tasks': [{
+                    'caseCount': 1,
+                    'taskScore': 50,
+                    'memoryLimit': 1000,
+                    'timeLimit': 1000
+                }, {
+                    'caseCount': 1,
+                    'taskScore': 50,
+                    'memoryLimit': 1000,
+                    'timeLimit': 1000
+                }]
+            },
+            'canViewStdout': False,
+            'defaultCode': '',
+            'config': advanced_config_payload(),
+            'pipeline': advanced_pipeline_payload(),
+        }
+        rv = client_admin.post('/problem/manage', json=request_json)
+        assert rv.status_code == 200, rv.get_json()
+        pid = rv.get_json()['data']['problemId']
+        problem = Problem(pid)
+        config = problem.obj.config
+        assert config['aiVTuber'] is True
+        assert config['aiVTuberMaxToken'] == 3
+        assert config['artifactCollection'] == ['zip', 'compiledBinary']
+        assert config['allowRead'] is True
+        assert config['allowWrite'] is True
+        assert config['executionMode'] == 'general'
+        assert config['staticAnalysis']['networkAccessRestriction'][
+            'firewallExtranet']['whitelist'] == ['192.168.1.1']
+        assert config['staticAnalysis']['networkAccessRestriction'][
+            'connectWithLocal']['whitelist'] == ['192.168.2.2']
+        assert config['scoringScript'] == {'custom': False}
+        assert config['testMode'] is True
+
     def test_add_problem_with_empty_course_list(self, client_admin):
         request_json = {
             'courses': [],
@@ -195,51 +328,52 @@ class TestProblem(BaseTester):
 
     # admin get problem list (GET /problem)
     def test_admin_get_problem_list(self, client_admin):
+        utils.course.create_course(teacher='admin', name='AdminListCourse')
+        offline_prob = utils.problem.create_problem(
+            name='admin-list-offline',
+            course='AdminListCourse',
+            owner='admin',
+            status=1,
+            type=0,
+        )
+        online_prob = utils.problem.create_problem(
+            name='admin-list-online',
+            course='AdminListCourse',
+            owner='admin',
+            status=0,
+            type=0,
+        )
         rv = client_admin.get('/problem?offset=0&count=5')
         json = rv.get_json()
         assert rv.status_code == 200
         assert json['status'] == 'ok'
         assert json['message'] == 'Success.'
-        assert json['data'] == [{
-            'problemId': 3,
-            'type': 0,
-            'problemName': 'Offline problem',
-            'status': 1,
-            'tags': [],
-            'ACUser': 0,
-            'submitter': 0,
-            'quota': -1,
-            'submitCount': 0
-        }, {
-            'problemId': 4,
-            'type': 0,
-            'problemName': 'Online problem',
-            'status': 0,
-            'tags': [],
-            'ACUser': 0,
-            'submitter': 0,
-            'quota': -1,
-            'submitCount': 0
-        }]
+        data_map = {item['problemId']: item for item in json['data']}
+        offline = data_map.get(offline_prob.id)
+        online = data_map.get(online_prob.id)
+        assert offline is not None
+        assert online is not None
+        assert offline['status'] == 1
+        assert online['status'] == 0
+        assert offline['quota'] == -1
+        assert online['quota'] == -1
 
     # admin get problem list with a filter (GET /problem)
     def test_admin_get_problem_list_with_filter(self, client_admin):
+        utils.course.create_course(teacher='admin', name='English')
+        prob = utils.problem.create_problem(
+            name='admin-filter-offline',
+            course='English',
+            owner='admin',
+            status=1,
+            type=0,
+        )
         rv = client_admin.get('/problem?offset=0&count=5&course=English')
         json = rv.get_json()
         assert rv.status_code == 200
         assert json['status'] == 'ok'
         assert json['message'] == 'Success.'
-        assert json['data'] == [{
-            'problemId': 3,
-            'type': 0,
-            'problemName': 'Offline problem',
-            'status': 1,
-            'tags': [],
-            'ACUser': 0,
-            'submitter': 0,
-            'quota': -1,
-            'submitCount': 0
-        }]
+        assert any(item['problemId'] == prob.id for item in json['data'])
 
     def test_admin_get_problem_list_with_unexist_params(self, client_admin):
         # unexisted course
@@ -261,22 +395,26 @@ class TestProblem(BaseTester):
 
     # student get problem list (GET /problem)
     def test_student_get_problem_list(self, client_student):
+        utils.course.create_course(teacher='admin',
+                                   name='StudentListCourse',
+                                   students=['student'])
+        prob = utils.problem.create_problem(
+            name='student-list-online',
+            course='StudentListCourse',
+            owner='admin',
+            status=0,
+            type=0,
+        )
         rv = client_student.get('/problem?offset=0&count=5')
         json = rv.get_json()
         assert rv.status_code == 200
         assert json['status'] == 'ok'
         assert json['message'] == 'Success.'
-        assert json['data'] == [{
-            'problemId': 4,
-            'type': 0,
-            'problemName': 'Online problem',
-            'status': 0,
-            'tags': [],
-            'ACUser': 0,
-            'submitter': 0,
-            'quota': -1,
-            'submitCount': 0
-        }]
+        online = next(
+            (item for item in json['data'] if item['problemId'] == prob.id),
+            None)
+        assert online is not None
+        assert online['status'] == 0
 
     def test_view_problem_from_invalid_ip(self, client_student, monkeypatch):
         from model.problem import Problem
@@ -286,6 +424,7 @@ class TestProblem(BaseTester):
         assert rv.get_json()['message'] == 'Invalid IP address.'
 
     def test_view_template_problem(self, client_admin):
+        utils.course.create_course(teacher='admin', name='math')
         request_json = {
             'courses': ['math'],
             'status': 0,
@@ -308,50 +447,96 @@ class TestProblem(BaseTester):
         }
         rv = client_admin.post('/problem/manage', json=request_json)
         assert rv.status_code == 200
-        rv = client_admin.get('/problem/5')
+        pid = rv.get_json()['data']['problemId']
+        rv = client_admin.get(f'/problem/{pid}')
         assert rv.status_code == 200, rv.get_json()
         assert rv.get_json(
         )['data']['fillInTemplate'] == 'This is a fill in template.'
 
+
+def test_asset_checksum_ok(client_admin, problem_ids):
+    pid = problem_ids('teacher', 1, False)[0]
+    problem = Problem(pid)
+    mc = MinioClient()
+    data = b'hello-checker'
+    object_name = f'problem/{pid}/checker/custom_checker.py'
+    mc.upload_file_object(io.BytesIO(data),
+                          object_name=object_name,
+                          length=len(data))
+    problem.update(config={'assetPaths': {'checker': object_name}})
+    token = Submission.config().sandbox_instances[0].token
+    rv = client_admin.get(
+        f'/problem/{pid}/asset-checksum',
+        query_string={
+            'token': token,
+            'assetType': 'checker',
+        },
+    )
+    assert rv.status_code == 200
+    checksum = rv.get_json()['data']['checksum']
+    assert checksum == hashlib.md5(data).hexdigest()
+
+
+def test_asset_checksum_missing_asset_returns_none(client_admin, problem_ids):
+    pid = problem_ids('teacher', 1, False)[0]
+    token = Submission.config().sandbox_instances[0].token
+    rv = client_admin.get(
+        f'/problem/{pid}/asset-checksum',
+        query_string={
+            'token': token,
+            'assetType': 'checker',
+        },
+    )
+    assert rv.status_code == 200
+    assert rv.get_json()['data']['checksum'] is None
+
+
+def test_asset_checksum_invalid_type(client_admin, problem_ids):
+    pid = problem_ids('teacher', 1, False)[0]
+    token = Submission.config().sandbox_instances[0].token
+    rv = client_admin.get(
+        f'/problem/{pid}/asset-checksum',
+        query_string={
+            'token': token,
+            'assetType': 'unknown_type',
+        },
+    )
+    assert rv.status_code == 400
+
     # admin view offline problem (GET /problem/<problem_id>)
     def test_admin_view_offline_problem(self, client_admin):
-        rv = client_admin.get('/problem/3')
+        utils.course.create_course(teacher='admin', name='English')
+        test_case_info = utils.problem.create_test_case_info(
+            language=1,
+            task_len=1,
+            case_count_range=(1, 1),
+            memory_limit_range=(1000, 1000),
+            time_limit_range=(1000, 1000),
+        )
+        problem = utils.problem.create_problem(
+            name='Offline problem',
+            course='English',
+            owner='admin',
+            status=1,
+            type=0,
+            test_case_info=test_case_info,
+        )
+        rv = client_admin.get(f'/problem/{problem.id}')
         json = rv.get_json()
         assert rv.status_code == 200
         assert json['status'] == 'ok'
         assert json['message'] == 'Problem can view.'
-        assert json['data'] == {
-            'status':
-            1,
-            'type':
-            0,
-            'problemName':
-            'Offline problem',
-            'description':
-            description_dict(),
-            'owner':
-            'admin',
-            'tags': [],
-            'courses': ['English'],
-            'allowedLanguage':
-            7,
-            'testCase': [
-                {
-                    'caseCount': 1,
-                    'memoryLimit': 1000,
-                    'taskScore': 100,
-                    'timeLimit': 1000,
-                },
-            ],
-            'quota':
-            -1,
-            'submitCount':
-            0,
-            'defaultCode':
-            '',
-            'highScore':
-            0,
-        }
+        data = json['data']
+        assert data['problemName'] == 'Offline problem'
+        assert data['status'] == 1
+        assert data['courses'] == ['English']
+        assert data['allowedLanguage'] == 7
+        assert data['canViewStdout'] is False
+        assert data['testCase'][0]['taskScore'] == 100
+        assert data['quota'] == -1
+        assert data['submitter'] == 0
+        assert data['defaultCode'] == ''
+        assert_basic_problem_config(data['config'])
 
     # student view offline problem (GET /problem/<problem_id>)
     def test_student_view_offline_problem(self, client_student):
@@ -362,43 +547,38 @@ class TestProblem(BaseTester):
 
     # student view online problem (GET /problem/<problem_id>)
     def test_student_view_online_problem(self, client_student):
-        rv = client_student.get('/problem/4')
+        utils.course.create_course(teacher='admin',
+                                   name='math',
+                                   students=['student'])
+        test_case_info = utils.problem.create_test_case_info(
+            language=1,
+            task_len=1,
+            case_count_range=(1, 1),
+            memory_limit_range=(1000, 1000),
+            time_limit_range=(1000, 1000),
+        )
+        problem = utils.problem.create_problem(
+            name='Online problem',
+            course='math',
+            owner='admin',
+            status=0,
+            type=0,
+            test_case_info=test_case_info,
+        )
+        rv = client_student.get(f'/problem/{problem.id}')
         json = rv.get_json()
         assert rv.status_code == 200
         assert json['status'] == 'ok'
         assert json['message'] == 'Problem can view.'
-        assert json['data'] == {
-            'status':
-            0,
-            'type':
-            0,
-            'problemName':
-            'Online problem',
-            'description':
-            description_dict(),
-            'owner':
-            'admin',
-            'tags': [],
-            'courses': ['math'],
-            'allowedLanguage':
-            7,
-            'testCase': [
-                {
-                    'caseCount': 1,
-                    'memoryLimit': 1000,
-                    'taskScore': 100,
-                    'timeLimit': 1000,
-                },
-            ],
-            'quota':
-            -1,
-            'submitCount':
-            0,
-            'defaultCode':
-            '',
-            'highScore':
-            0,
-        }
+        data = json['data']
+        assert data['problemName'] == 'Online problem'
+        assert data['status'] == 0
+        assert data['courses'] == ['math']
+        assert data['allowedLanguage'] == 7
+        assert data['testCase'][0]['taskScore'] == 100
+        assert data['quota'] == -1
+        assert data['submitter'] == 0
+        assert_basic_problem_config(data['config'])
 
     # student view problem not exist (GET /problem/<problem_id>)
     def test_student_view_problem_not_exist(self, client_student):
@@ -494,6 +674,7 @@ class TestProblem(BaseTester):
         assert rv.status_code == 404
 
     def test_edit_problem_with_course_does_not_exist(self, client_admin):
+        prob = utils.problem.create_problem()
         request_json = {
             'courses': ['CourseDoesNotExist'],
             'status': 1,
@@ -514,11 +695,12 @@ class TestProblem(BaseTester):
                 }]
             }
         }
-        rv = client_admin.put('/problem/manage/3', json=request_json)
+        rv = client_admin.put(f'/problem/manage/{prob.id}', json=request_json)
         assert rv.status_code == 404, rv.get_json()
         assert rv.get_json()['message'] == 'Course not found.'
 
     def test_edit_problem_with_name_is_too_long(self, client_admin):
+        prob = utils.problem.create_problem()
         oo = 'o' * 64
         request_json = {
             'courses': [],
@@ -540,12 +722,13 @@ class TestProblem(BaseTester):
                 }]
             }
         }
-        rv = client_admin.put('/problem/manage/3', json=request_json)
+        rv = client_admin.put(f'/problem/manage/{prob.id}', json=request_json)
         assert rv.status_code == 400, rv.get_json()
         assert rv.get_json()['message'] == 'Invalid or missing arguments.'
 
     # admin change the name of a problem (PUT /problem/manage/<problem_id>)
     def test_admin_edit_problem(self, client_admin):
+        prob = utils.problem.create_problem()
         request_json = {
             'courses': [],
             'status': 1,
@@ -566,27 +749,72 @@ class TestProblem(BaseTester):
                 }]
             }
         }
-        rv = client_admin.put('/problem/manage/3', json=request_json)
+        rv = client_admin.put(f'/problem/manage/{prob.id}', json=request_json)
         json = rv.get_json()
         print(json)
         assert rv.status_code == 200
         assert json['status'] == 'ok'
 
+    def test_edit_problem_with_extended_config_schema(self, client_admin):
+        prob = utils.problem.create_problem()
+        request_json = {
+            'courses': [],
+            'status': 1,
+            'type': 0,
+            'problemName': 'Updated schema problem',
+            'description': description_dict(),
+            'tags': [],
+            'testCaseInfo': {
+                'language':
+                0,
+                'fillInTemplate':
+                '',
+                'tasks': [{
+                    'caseCount': 1,
+                    'taskScore': 50,
+                    'memoryLimit': 1000,
+                    'timeLimit': 1000
+                }, {
+                    'caseCount': 1,
+                    'taskScore': 50,
+                    'memoryLimit': 1000,
+                    'timeLimit': 1000
+                }]
+            },
+            'config': advanced_config_payload(),
+            'pipeline': advanced_pipeline_payload(),
+        }
+        rv = client_admin.put(f'/problem/manage/{prob.id}', json=request_json)
+        assert rv.status_code == 200, rv.get_json()
+        problem = Problem(prob.id)
+        config = problem.obj.config
+        assert config['aiVTuber'] is True
+        assert config['artifactCollection'] == ['zip', 'compiledBinary']
+        assert config['staticAnalysis']['networkAccessRestriction'][
+            'firewallExtranet']['whitelist'] == ['192.168.1.1']
+        assert config['scoringScript'] == {'custom': False}
+
     # admin get information of a problem (GET /problem/manage/<problem_id>)
     def test_admin_manage_problem(self, client_admin):
-        pid = 3
-        rv = client_admin.get(f'/problem/manage/{pid}')
-        json = rv.get_json()
-        assert rv.status_code == 200
-        assert json['status'] == 'ok'
-        assert json['data'] == {
+        # Create course first
+        utils.course.create_course(teacher='admin', name='English')
+
+        prob = utils.problem.create_problem(
+            name='Offline problem',
+            course='English',
+            owner='admin',
+            status=1,
+            type=0,
+        )
+        # First edit it
+        request_json = {
             'courses': [],
             'status': 1,
             'type': 0,
             'problemName': 'Offline problem (edit)',
             'description': description_dict(),
             'tags': [],
-            'testCase': {
+            'testCaseInfo': {
                 'language':
                 1,
                 'fillInTemplate':
@@ -599,14 +827,24 @@ class TestProblem(BaseTester):
                     'memoryLimit': 1000,
                     'timeLimit': 1000
                 }]
-            },
-            'ACUser': 0,
-            'submitter': 0,
-            'allowedLanguage': 7,
-            'canViewStdout': Problem(pid).can_view_stdout,
-            'quota': -1,
-            'submitCount': 0
+            }
         }
+        rv = client_admin.put(f'/problem/manage/{prob.id}', json=request_json)
+        assert rv.status_code == 200
+
+        # Then get it
+        rv = client_admin.get(f'/problem/manage/{prob.id}')
+        json = rv.get_json()
+        assert rv.status_code == 200
+        assert json['status'] == 'ok'
+        data = json['data']
+        assert data['problemName'] == 'Offline problem (edit)'
+        assert data['status'] == 1
+        assert data['testCase']['tasks'][0]['taskScore'] == 100
+        assert data['allowedLanguage'] == 7
+        assert data['canViewStdout'] == Problem(prob.id).can_view_stdout
+        assert data['quota'] == -1
+        assert_basic_problem_config(data['config'])
 
     def test_update_problem_test_case_with_non_zip_file(self, client_admin):
         rv = client_admin.put('/problem/manage/3',
@@ -649,6 +887,26 @@ class TestProblem(BaseTester):
         rv = client_student.get('/problem/3/testcase')
         assert rv.status_code == 403, rv.get_json()
         assert rv.get_json()['message'] == 'Not enough permission'
+
+    def test_teacher_can_download_problem_test_case(self, client_teacher,
+                                                    monkeypatch):
+        course = utils.course.create_course(teacher='teacher')
+        problem = utils.problem.create_problem(course=course, owner='admin')
+        monkeypatch.setattr(
+            Problem, 'get_test_case',
+            lambda *_: get_file('bogay/test_case.zip')['case'][0])
+        rv = client_teacher.get(f'/problem/{problem.id}/testcase')
+        assert rv.status_code == 200
+        with ZipFile(io.BytesIO(rv.data)) as zf:
+            ns = sorted(zf.namelist())
+            in_ns = ns[::2]
+            out_ns = ns[1::2]
+            ns = zip(in_ns, out_ns)
+            _io = [(
+                zf.read(in_n),
+                zf.read(out_n),
+            ) for in_n, out_n in ns]
+        assert _io == [(b'I AM A TEAPOT\n', b'I AM A TEAPOT\n')]
 
     def test_admin_update_problem_test_case(self, client_admin, monkeypatch):
         # FIXME: it should be impl in mock
@@ -756,16 +1014,283 @@ class TestProblem(BaseTester):
         monkeypatch.setattr(Submission, 'config', MockConfig)
         rv = client.get('/problem/3/meta?token=SandboxToken')
         assert rv.status_code == 200, rv.get_json()
-        assert rv.get_json()['data'] == {
-            'submissionMode':
-            0,
-            'tasks': [{
-                'caseCount': 1,
-                'memoryLimit': 1000,
-                'taskScore': 100,
-                'timeLimit': 1000
-            }]
+        payload = rv.get_json()['data']
+        assert payload['submissionMode'] == 0
+        assert payload['tasks'] == [{
+            'caseCount': 1,
+            'memoryLimit': 1000,
+            'taskScore': 100,
+            'timeLimit': 1000
+        }]
+        assert payload['executionMode'] == 'general'
+        assert payload['assetPaths'] == {}
+        assert payload['teacherFirst'] is False
+        assert payload['buildStrategy'] == 'compile'
+        assert payload.get('customChecker') is False
+
+    def test_get_meta_with_custom_checker(self, client_admin, monkeypatch):
+
+        class MockSandbox:
+            token = 'SandboxToken'
+
+        class MockConfig:
+            sandbox_instances = [MockSandbox()]
+
+        from mongo.sandbox import Submission
+        monkeypatch.setattr(Submission, 'config', MockConfig)
+        prob = utils.problem.create_problem()
+        buf = io.BytesIO()
+        with ZipFile(buf, 'w') as zf:
+            zf.writestr('Makefile', 'all:\n\t@touch a.out\n')
+        buf.seek(0)
+        data = {
+            'meta': json.dumps({
+                'pipeline': {
+                    'customChecker': True,
+                },
+            }),
+            'custom_checker.py':
+            (io.BytesIO(b'print("ok")'), 'custom_checker.py'),
         }
+        rv = client_admin.put(
+            f'/problem/{prob.problem_id}/assets',
+            data=data,
+            content_type='multipart/form-data',
+        )
+        assert rv.status_code == 200
+        rv = client_admin.get(f'/problem/{prob.problem_id}/meta',
+                              query_string={'token': 'SandboxToken'})
+        assert rv.status_code == 200, rv.get_json()
+        payload = rv.get_json()['data']
+        assert payload['customChecker'] is True
+        assert payload['checkerAsset']
+
+    def test_get_meta_build_strategy_variants(self, client_admin, client,
+                                              monkeypatch):
+
+        class MockSandbox:
+            token = 'SandboxToken'
+
+        class MockConfig:
+            sandbox_instances = [MockSandbox()]
+
+        from mongo.sandbox import Submission
+        monkeypatch.setattr(Submission, 'config', MockConfig)
+
+        # general zip -> makeNormal
+        prob = utils.problem.create_problem()
+        prob.update(test_case__submission_mode=1)
+        prob.reload('test_case')
+        rv = client.get(f'/problem/{prob.problem_id}/meta?token=SandboxToken')
+        assert rv.status_code == 200, rv.get_json()
+        assert rv.get_json()['data']['buildStrategy'] == 'makeNormal'
+
+        # functionOnly -> makeFunctionOnly
+        Problem.edit_problem(
+            user=User('admin'),
+            problem_id=prob.problem_id,
+            pipeline={'executionMode': 'functionOnly'},
+        )
+        prob.update(test_case__submission_mode=0)
+        prob.reload('test_case')
+        rv = client.get(f'/problem/{prob.problem_id}/meta?token=SandboxToken')
+        assert rv.status_code == 200
+        assert rv.get_json()['data']['buildStrategy'] == 'makeFunctionOnly'
+
+        # interactive zip -> makeInteractive
+        Problem.edit_problem(
+            user=User('admin'),
+            problem_id=prob.problem_id,
+            pipeline={'executionMode': 'interactive'},
+        )
+        prob.update(test_case__submission_mode=1)
+        prob.reload('test_case')
+        rv = client.get(f'/problem/{prob.problem_id}/meta?token=SandboxToken')
+        assert rv.status_code == 200
+        assert rv.get_json()['data']['buildStrategy'] == 'makeInteractive'
+
+    def test_get_static_analysis_rules_not_configured(self, client,
+                                                      monkeypatch):
+        prob = utils.problem.create_problem()
+        from model.problem import sandbox
+        monkeypatch.setattr(sandbox, 'find_by_token', lambda *_: True)
+        rv = client.get(f'/problem/{prob.problem_id}/rules?token=SandboxToken')
+        assert rv.status_code == 404, rv.get_json()
+
+    def test_get_static_analysis_rules(self, client_admin, client,
+                                       monkeypatch):
+        prob = utils.problem.create_problem()
+        Problem.edit_problem(
+            user=User('admin'),
+            problem_id=prob.problem_id,
+            pipeline={
+                'staticAnalysis': {
+                    'libraryRestrictions': {
+                        'enabled': True,
+                        'whitelist': {
+                            'syntax': ['while'],
+                            'imports': ['os'],
+                            'headers': ['stdio.h'],
+                            'functions': ['printf'],
+                        },
+                        'blacklist': {
+                            'syntax': [],
+                            'imports': [],
+                            'headers': [],
+                            'functions': [],
+                        },
+                    },
+                },
+            },
+        )
+        from model.problem import sandbox
+        monkeypatch.setattr(sandbox, 'find_by_token', lambda *_: True)
+        rv = client.get(f'/problem/{prob.problem_id}/rules?token=SandboxToken')
+        assert rv.status_code == 200, rv.get_json()
+        assert rv.get_json()['data'] == {
+            'model': 'white',
+            'syntax': ['while'],
+            'imports': ['os'],
+            'headers': ['stdio.h'],
+            'functions': ['printf'],
+        }
+
+    def test_upload_problem_assets_accepts_meta(self, client_admin):
+        prob = utils.problem.create_problem()
+        meta_payload = {
+            'config': {
+                'networkAccessRestriction': {
+                    'enabled': True,
+                    'firewallExtranet': {
+                        'enabled': True,
+                        'whitelist': ['1.1.1.1'],
+                        'blacklist': [],
+                    },
+                },
+            },
+            'pipeline': {
+                'executionMode': 'functionOnly',
+                'teacherFirst': True,
+            },
+        }
+        buf = io.BytesIO()
+        with ZipFile(buf, 'w') as zf:
+            zf.writestr('Makefile', 'all:\n\t@touch a.out\n')
+            zf.writestr('function.h', '// template')
+        buf.seek(0)
+        data = {
+            'meta': json.dumps(meta_payload),
+            'custom_checker.py':
+            (io.BytesIO(b'print("ok")'), 'custom_checker.py'),
+            'makefile.zip': (buf, 'makefile.zip'),
+        }
+        rv = client_admin.put(
+            f'/problem/{prob.problem_id}/assets',
+            data=data,
+            content_type='multipart/form-data',
+        )
+        assert rv.status_code == 200, rv.get_json()
+        updated = Problem(prob.problem_id)
+        assert updated.config['executionMode'] == 'functionOnly'
+        assert updated.config['teacherFirst'] is True
+        assert updated.config['networkAccessRestriction']['enabled'] is True
+        assert 'checker' in updated.config.get('assetPaths', {})
+
+    def test_upload_function_only_requires_makefile(self, client_admin):
+        prob = utils.problem.create_problem()
+        meta_payload = {
+            'pipeline': {
+                'executionMode': 'functionOnly',
+            },
+        }
+        data = {
+            'meta': json.dumps(meta_payload),
+        }
+        rv = client_admin.put(
+            f'/problem/{prob.problem_id}/assets',
+            data=data,
+            content_type='multipart/form-data',
+        )
+        assert rv.status_code == 400, rv.get_json()
+
+    def test_upload_function_only_with_makefile(self, client_admin):
+        prob = utils.problem.create_problem()
+        buf = io.BytesIO()
+        with ZipFile(buf, 'w') as zf:
+            zf.writestr('Makefile', 'all:\n\t@touch a.out\n')
+            zf.writestr('function.h', '// template')
+        buf.seek(0)
+        meta_payload = {
+            'pipeline': {
+                'executionMode': 'functionOnly',
+            },
+        }
+        data = {
+            'meta': json.dumps(meta_payload),
+            'makefile.zip': (buf, 'makefile.zip'),
+        }
+        rv = client_admin.put(
+            f'/problem/{prob.problem_id}/assets',
+            data=data,
+            content_type='multipart/form-data',
+        )
+        assert rv.status_code == 200, rv.get_json()
+        updated = Problem(prob.problem_id)
+        assert updated.config['executionMode'] == 'functionOnly'
+        assert 'makefile' in updated.config.get('assetPaths', {})
+
+    def test_get_problem_asset(self, client, client_admin, monkeypatch):
+        prob = utils.problem.create_problem()
+        buf = io.BytesIO()
+        with ZipFile(buf, 'w') as zf:
+            zf.writestr('Makefile', 'all:\n\t@touch a.out\n')
+            zf.writestr('function.h', '// template')
+        buf.seek(0)
+        data = {
+            'meta': json.dumps({'pipeline': {
+                'executionMode': 'functionOnly'
+            }}),
+            'makefile.zip': (buf, 'makefile.zip'),
+        }
+        rv = client_admin.put(
+            f'/problem/{prob.problem_id}/assets',
+            data=data,
+            content_type='multipart/form-data',
+        )
+        assert rv.status_code == 200
+
+        from model.problem import sandbox
+        monkeypatch.setattr(sandbox, 'find_by_token', lambda *_: True)
+        rv = client.get(
+            f'/problem/{prob.problem_id}/asset/makefile?token=SandboxToken')
+        assert rv.status_code == 200, rv.get_json()
+        assert rv.data[:2] == b'PK'
+
+    def test_view_problem_returns_pipeline_and_network(self, client_admin):
+        prob = utils.problem.create_problem()
+        network_config = {
+            'enabled': True,
+            'firewallExtranet': {
+                'enabled': True,
+                'whitelist': ['2.2.2.2'],
+                'blacklist': [],
+            },
+        }
+        Problem.edit_problem(
+            user=User('admin'),
+            problem_id=prob.problem_id,
+            config={'networkAccessRestriction': network_config},
+            pipeline={
+                'executionMode': 'interactive',
+                'teacherFirst': True
+            },
+        )
+        rv = client_admin.get(f'/problem/view/{prob.problem_id}')
+        assert rv.status_code == 200, rv.get_json()
+        data = rv.get_json()['data']
+        assert data['pipeline']['executionMode'] == 'interactive'
+        assert data['pipeline']['teacherFirst'] is True
+        assert data['config']['networkAccessRestriction']['enabled'] is True
 
     def test_admin_update_problem_test_case_with_invalid_data(
         self,
@@ -1195,7 +1720,7 @@ class TestTrialSubmissionAPI(BaseTester):
             f'/problem/{problem.problem_id}/trial/request',
             json={
                 'languageType': 2,  # Python
-                'Use_Default_Test_Cases': True
+                'use_default_test_cases': True
             })
         assert rv.status_code == 200
         data = rv.get_json()
@@ -1220,7 +1745,7 @@ class TestTrialSubmissionAPI(BaseTester):
             f'/problem/{problem.problem_id}/trial/request',
             json={
                 'languageType': 3,  # Not allowed for trial
-                'Use_Default_Test_Cases': True
+                'use_default_test_cases': True
             })
         assert rv.status_code == 400
         assert 'Invalid language type' in rv.get_json()['message']
@@ -1230,7 +1755,7 @@ class TestTrialSubmissionAPI(BaseTester):
         rv = client.post('/problem/999999/trial/request',
                          json={
                              'languageType': 2,
-                             'Use_Default_Test_Cases': True
+                             'use_default_test_cases': True
                          })
         assert rv.status_code == 404
         assert 'Problem not found' in rv.get_json()['message']
@@ -1242,7 +1767,7 @@ class TestTrialSubmissionAPI(BaseTester):
         rv = client.post(f'/problem/{problem.problem_id}/trial/request',
                          json={
                              'languageType': 2,
-                             'Use_Default_Test_Cases': True
+                             'use_default_test_cases': True
                          })
         assert rv.status_code == 403
 
@@ -1255,7 +1780,7 @@ class TestTrialSubmissionAPI(BaseTester):
             f'/problem/{problem.problem_id}/trial/request',
             json={
                 'languageType': 0,  # C
-                'Use_Default_Test_Cases': False
+                'use_default_test_cases': False
             })
         assert rv.status_code == 200
         from mongo.submission import TrialSubmission

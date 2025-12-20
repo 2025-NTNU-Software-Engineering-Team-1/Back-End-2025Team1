@@ -1,3 +1,5 @@
+import io
+from zipfile import ZipFile
 from typing import Optional
 import pytest
 import itertools
@@ -5,10 +7,11 @@ import pathlib
 import io
 import zipfile
 import inspect
-from datetime import datetime
+from datetime import datetime, timedelta
 from pprint import pprint
 from mongo import *
 from mongo import engine
+from mongo.utils import MinioClient
 from .base_tester import BaseTester
 from .utils import *
 from tests import utils
@@ -159,7 +162,7 @@ class TestUserGetSubmission(SubmissionTester):
             f'/submission?offset=0&count={self.init_submission_count}',
         )
         assert rv.status_code == 200, rv_json
-        assert 'unicorn' in rv_data
+        assert 'submissionCount' in rv_data
         assert len(rv_data['submissions']) == self.init_submission_count // 2
         excepted_field_names = {
             'submissionId',
@@ -171,6 +174,7 @@ class TestUserGetSubmission(SubmissionTester):
             'memoryUsage',
             'languageType',
             'timestamp',
+            'lastSend',
             'ipAddr',
         }
         for s in rv_data['submissions']:
@@ -695,6 +699,36 @@ class TestCreateSubmission(SubmissionTester):
         )
 
         assert rv.status_code == 403, rv_json
+
+    def test_function_only_zip_mode_conflict(
+        self,
+        forge_client,
+        get_source,
+        problem_ids,
+    ):
+        pid = problem_ids('teacher', 1, True)[0]
+        prob = Problem(pid)
+        prob.update(test_case__submission_mode=1)
+        prob.reload('test_case')
+        prob.update(config__executionMode='functionOnly')
+        client = forge_client('student')
+        rv, rv_json, rv_data = BaseTester.request(
+            client,
+            'post',
+            '/submission',
+            json=self.post_payload(problem_id=pid),
+        )
+        files = {
+            'code': (
+                get_source('base.c'),
+                'code',
+            )
+        }
+        rv = client.put(
+            f'/submission/{rv_data["submissionId"]}',
+            data=files,
+        )
+        assert rv.status_code == 400, rv.get_json()
 
     def test_reach_rate_limit(self, client_student):
         # set rate limit to 5 sec
@@ -1229,3 +1263,282 @@ def test_cannot_view_output_out_of_index(app, forge_client):
     rv = client.get(f'/submission/{submission.id}/output/100/100')
     assert rv.status_code == 400, rv.get_json()
     assert rv.get_json()['message'] == 'task not exist'
+
+
+def _create_submission_with_artifact(app, artifact_tasks):
+    with app.app_context():
+        owner = utils.user.create_user(role=1)
+        course = utils.course.create_course(teacher=owner)
+        student = utils.user.create_user(course=course)
+        test_case_info = utils.problem.create_test_case_info(
+            language=0,
+            task_len=1,
+            case_count_range=(2, 2),
+        )
+        description = {
+            'description': 'artifact problem',
+            'input': '',
+            'output': '',
+            'hint': '',
+            'sampleInput': [],
+            'sampleOutput': [],
+        }
+        problem_id = Problem.add(
+            user=owner,
+            courses=[course.course_name],
+            problem_name='artifact-problem',
+            status=0,
+            description=description,
+            tags=[],
+            type=0,
+            test_case_info=test_case_info,
+        )
+        problem = Problem(problem_id)
+        problem.config['artifactCollection'] = artifact_tasks
+        problem.save()
+        problem.reload('config')
+        submission = utils.submission.create_submission(
+            user=student,
+            problem=problem,
+            status=0,
+        )
+        artifact_data = io.BytesIO()
+        with ZipFile(artifact_data, 'w') as zf:
+            zf.writestr('stdout', b'stdout')
+            zf.writestr('stderr', b'stderr')
+        artifact_data.seek(0)
+        minio_client = MinioClient()
+        output_path = submission._generate_output_minio_path(0, 0)
+        data = artifact_data.getvalue()
+        minio_client.client.put_object(
+            minio_client.bucket,
+            output_path,
+            io.BytesIO(data),
+            len(data),
+            part_size=5 * 1024 * 1024,
+            content_type='application/zip',
+        )
+        case = engine.CaseResult(
+            status=0,
+            exec_time=10,
+            memory_usage=128,
+            output_minio_path=output_path,
+        )
+        task = engine.TaskResult(
+            status=0,
+            exec_time=10,
+            memory_usage=128,
+            score=100,
+            cases=[case],
+        )
+        submission.tasks = [task]
+        submission.status = 0
+        submission.score = 100
+        submission.exec_time = 10
+        submission.memory_usage = 128
+        submission.save()
+        submission.reload()
+        return submission, student, course, owner
+
+
+def _create_submission_with_compiled_binary(
+    app,
+    *,
+    enable_compilation=True,
+    with_binary=True,
+):
+    with app.app_context():
+        owner = utils.user.create_user(role=1)
+        course = utils.course.create_course(teacher=owner)
+        student = utils.user.create_user(course=course)
+        test_case_info = utils.problem.create_test_case_info(
+            language=0,
+            task_len=1,
+            case_count_range=(1, 1),
+        )
+        description = {
+            'description': 'compiled binary problem',
+            'input': '',
+            'output': '',
+            'hint': '',
+            'sampleInput': [],
+            'sampleOutput': [],
+        }
+        problem_id = Problem.add(
+            user=owner,
+            courses=[course.course_name],
+            problem_name='compiled-binary-problem',
+            status=0,
+            description=description,
+            tags=[],
+            type=0,
+            test_case_info=test_case_info,
+            config={'compilation': enable_compilation},
+        )
+        problem = Problem(problem_id)
+        submission = utils.submission.create_submission(
+            user=student,
+            problem=problem,
+            status=0,
+        )
+        if with_binary:
+            submission.set_compiled_binary(b'\x00compiled-binary')
+        submission.reload()
+        return submission, student, owner
+
+
+def test_download_task_artifact_zip_success(app, forge_client):
+    submission, _, _, owner = _create_submission_with_artifact(app, [0])
+    client = forge_client(owner.username)
+    rv = client.get(f'/submission/{submission.id}/artifact/zip/0')
+    assert rv.status_code == 200, rv.get_json()
+    with ZipFile(io.BytesIO(rv.data)) as zf:
+        names = sorted(zf.namelist())
+    assert 'task_00/case_00/stdout' in names
+    assert 'task_00/case_00/stderr' in names
+    assert all(name.startswith('task_00/') for name in names)
+
+
+def test_download_task_artifact_zip_disabled(app, forge_client):
+    submission, _, _, owner = _create_submission_with_artifact(app, [])
+    client = forge_client(owner.username)
+    rv = client.get(f'/submission/{submission.id}/artifact/zip/0')
+    assert rv.status_code == 404, rv.get_json()
+    assert rv.get_json()['message'] == 'artifact not available for this task'
+
+
+def test_download_task_artifact_zip_permission_denied(app, forge_client):
+    submission, student, _, _ = _create_submission_with_artifact(app, [0])
+    stranger = utils.user.create_user()
+    client = forge_client(stranger.username)
+    rv = client.get(f'/submission/{submission.id}/artifact/zip/0')
+    assert rv.status_code == 403, rv.get_json()
+
+
+def test_download_task_artifact_zip_invalid_task(app, forge_client):
+    submission, _, _, owner = _create_submission_with_artifact(app, [0])
+    client = forge_client(owner.username)
+    rv = client.get(f'/submission/{submission.id}/artifact/zip/5')
+    assert rv.status_code == 404, rv.get_json()
+    assert rv.get_json()['message'] == 'task not exist'
+
+
+def test_download_compiled_binary_success(app, forge_client):
+    submission, student, _ = _create_submission_with_compiled_binary(
+        app, enable_compilation=True, with_binary=True)
+    client = forge_client(student.username)
+    rv = client.get(f'/submission/{submission.id}/artifact/compiledBinary')
+    assert rv.status_code == 200, rv.get_json()
+    assert rv.data == b'\x00compiled-binary'
+
+
+def test_download_compiled_binary_not_enabled(app, forge_client):
+    submission, student, _ = _create_submission_with_compiled_binary(
+        app, enable_compilation=False, with_binary=True)
+    client = forge_client(student.username)
+    rv = client.get(f'/submission/{submission.id}/artifact/compiledBinary')
+    assert rv.status_code == 404, rv.get_json()
+    assert rv.get_json()['message'] == 'compiled binary not available'
+
+
+def test_download_compiled_binary_not_found(app, forge_client):
+    submission, student, _ = _create_submission_with_compiled_binary(
+        app, enable_compilation=True, with_binary=False)
+    client = forge_client(student.username)
+    rv = client.get(f'/submission/{submission.id}/artifact/compiledBinary')
+    assert rv.status_code == 404, rv.get_json()
+    assert rv.get_json()['message'] == 'compiled binary not found'
+
+
+def test_download_compiled_binary_permission_denied(app, forge_client):
+    submission, _, owner = _create_submission_with_compiled_binary(
+        app, enable_compilation=True, with_binary=True)
+    stranger = utils.user.create_user()
+    client = forge_client(stranger.username)
+    rv = client.get(f'/submission/{submission.id}/artifact/compiledBinary')
+    assert rv.status_code == 403, rv.get_json()
+
+
+def test_upload_case_artifact_api(app, forge_client):
+    with app.app_context():
+        submission, _, _, owner = _create_submission_with_artifact(app, [0])
+        token = Submission.config().sandbox_instances[0].token
+        client = app.test_client()
+        payload = b'PK\x03\x04'  # dummy zip header start
+        rv = client.put(
+            f'/submission/{submission.id}/artifact/upload/case',
+            query_string={
+                'task': 0,
+                'case': 0,
+                'token': token
+            },
+            data=payload,
+            content_type='application/zip',
+        )
+        assert rv.status_code == 200, rv.get_json()
+        submission.reload()
+        path = submission.tasks[0].cases[0].output_minio_path
+        assert path
+        data = MinioClient().download_file(path)
+        assert data.startswith(payload)
+
+
+def test_upload_compiled_binary_api(app):
+    with app.app_context():
+        submission, _, _ = _create_submission_with_compiled_binary(
+            app, enable_compilation=True, with_binary=False)
+        token = Submission.config().sandbox_instances[0].token
+        client = app.test_client()
+        binary = b'\x00\x01binary'
+        rv = client.put(
+            f'/submission/{submission.id}/artifact/upload/binary',
+            query_string={'token': token},
+            data=binary,
+            content_type='application/octet-stream',
+        )
+        assert rv.status_code == 200, rv.get_json()
+        submission.reload()
+        assert submission.has_compiled_binary()
+        assert submission.get_compiled_binary().read() == binary
+
+
+def test_get_late_seconds_with_homework(client_admin, problem_ids):
+    pid = problem_ids('teacher', 1, True)[0]
+    course = Course(engine.Course.objects(teacher='teacher').first())
+    end_time = datetime.now() - timedelta(hours=1)
+    utils.homework.add_homework(
+        user=course.teacher,
+        course=course.course_name,
+        hw_name='late-hw',
+        problem_ids=[pid],
+        markdown='',
+        scoreboard_status=0,
+        start=None,
+        end=end_time.timestamp(),
+        penalty='',
+    )
+    submission = Submission.add(problem_id=pid, username='student', lang=1)
+    submission.update(timestamp=end_time + timedelta(minutes=30))
+    resp = client_admin.get(
+        f'/submission/{submission.id}/late-seconds',
+        query_string={
+            'token': Submission.config().sandbox_instances[0].token,
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()['data']
+    assert data['lateSeconds'] >= 1800
+
+
+def test_get_late_seconds_without_homework(client_admin, problem_ids):
+    pid = problem_ids('teacher', 1, False)[0]
+    submission = Submission.add(problem_id=pid, username='student', lang=1)
+    resp = client_admin.get(
+        f'/submission/{submission.id}/late-seconds',
+        query_string={
+            'token': Submission.config().sandbox_instances[0].token,
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()['data']
+    assert data['lateSeconds'] == -1

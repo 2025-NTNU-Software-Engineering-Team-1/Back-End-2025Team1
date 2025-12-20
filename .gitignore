@@ -13,6 +13,9 @@ __pycache__
 .venv.bak/
 venv/
 env/
+.venv
+venv
+.venv.bak
 .env
 .env.local
 */.venv/
