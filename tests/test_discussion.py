@@ -6,7 +6,17 @@ from mongo import Course, engine
 
 class TestDiscussion(BaseTester):
 
+    def setup_method(self):
+        engine.DiscussionPost.drop_collection()
+        engine.DiscussionReply.drop_collection()
+        engine.DiscussionLike.drop_collection()
+
     def _create_discussion_post(self, client, **overrides):
+        if 'Problem_id' not in overrides:
+            public_course = Course.get_public()
+            problem = self._create_problem(
+                f'Auto-{random_string(4)}', courses=[public_course.obj])
+            overrides['Problem_id'] = str(problem.problem_id)
         payload = {
             'Title': 'Discuss Problem',
             'Content': 'Initial content',
@@ -26,17 +36,7 @@ class TestDiscussion(BaseTester):
         Course.add_course(course_name, 'teacher')
         course = Course(course_name)
         course.update_student_namelist({'student': 'student'})
-        return course_name
-
-    def _create_posts(self, client, course_name, count):
-        for idx in range(count):
-            rv = client.post('/post',
-                             json={
-                                 'course': course_name,
-                                 'title': f'Post {idx}',
-                                 'content': f'Body {idx}',
-                             })
-            assert rv.status_code == 200, rv.get_json()
+        return course
 
     def _create_problem(self, name: str, **overrides):
         payload = {
@@ -49,6 +49,11 @@ class TestDiscussion(BaseTester):
         }
         payload.update(overrides)
         return engine.Problem(**payload).save()
+
+    def _create_problem_for_course(self, course, name=None):
+        if name is None:
+            name = f'Problem-{random_string(4)}'
+        return self._create_problem(name, courses=[course.obj])
 
     def _reset_problem_collection(self):
         engine.Problem.drop_collection()
@@ -73,14 +78,29 @@ class TestDiscussion(BaseTester):
         return problem, course
 
     def test_discussion_posts_paginated_new(self, forge_client):
-        course_name = self._create_course_with_student()
+        course = self._create_course_with_student()
+        problem = self._create_problem_for_course(course)
         teacher_client = forge_client('teacher')
-        self._create_posts(teacher_client, course_name, 7)
+        for idx in range(7):
+            self._create_discussion_post(
+                teacher_client,
+                Problem_id=str(problem.problem_id),
+                Title=f'Post {idx}',
+                Content=f'Body {idx}',
+            )
 
         # create posts in another course that the student cannot view
         other_course = f'discussion-{random_string(4)}'
         Course.add_course(other_course, 'teacher')
-        self._create_posts(teacher_client, other_course, 2)
+        other_course_obj = Course(other_course)
+        other_problem = self._create_problem_for_course(other_course_obj)
+        for idx in range(2):
+            self._create_discussion_post(
+                teacher_client,
+                Problem_id=str(other_problem.problem_id),
+                Title=f'Other {idx}',
+                Content=f'Other body {idx}',
+            )
 
         student_client = forge_client('student')
         rv = student_client.get('/discussion/posts',
@@ -100,34 +120,28 @@ class TestDiscussion(BaseTester):
                 for p in data['Posts']] == ['Post 3', 'Post 2', 'Post 1']
 
     def test_discussion_posts_hot_sorting(self, forge_client):
-        course_name = self._create_course_with_student()
+        course = self._create_course_with_student()
+        problem = self._create_problem_for_course(course)
         teacher_client = forge_client('teacher')
         titles = ['Alpha', 'Beta', 'Gamma']
+        post_ids = {}
         for title in titles:
-            rv = teacher_client.post('/post',
-                                     json={
-                                         'course': course_name,
-                                         'title': title,
-                                         'content': f'{title} body',
-                                     })
-            assert rv.status_code == 200, rv.get_json()
-
-        rv = teacher_client.get(f'/post/{course_name}')
-        posts = rv.get_json()['data']
-        thread_ids = {post['title']: post['thread']['id'] for post in posts}
+            post_id = self._create_discussion_post(
+                teacher_client,
+                Problem_id=str(problem.problem_id),
+                Title=title,
+                Content=f'{title} body',
+            )
+            post_ids[title] = post_id
 
         for _ in range(2):
-            teacher_client.post('/post',
+            teacher_client.post(f'/discussion/posts/{post_ids["Beta"]}/reply',
                                 json={
-                                    'targetThreadId': thread_ids['Beta'],
-                                    'title': 'reply beta',
-                                    'content': 'reply beta',
+                                    'Content': 'reply beta',
                                 })
-        teacher_client.post('/post',
+        teacher_client.post(f'/discussion/posts/{post_ids["Gamma"]}/reply',
                             json={
-                                'targetThreadId': thread_ids['Gamma'],
-                                'title': 'reply gamma',
-                                'content': 'reply gamma',
+                                'Content': 'reply gamma',
                             })
 
         student_client = forge_client('student')
@@ -148,20 +162,21 @@ class TestDiscussion(BaseTester):
         assert reply_counts['Alpha'] == 0
 
     def test_discussion_search_by_words(self, forge_client):
-        course_name = self._create_course_with_student()
+        course = self._create_course_with_student()
+        problem = self._create_problem_for_course(course)
         teacher_client = forge_client('teacher')
-        teacher_client.post('/post',
-                            json={
-                                'course': course_name,
-                                'title': 'Alpha Title',
-                                'content': 'Some body',
-                            })
-        teacher_client.post('/post',
-                            json={
-                                'course': course_name,
-                                'title': 'Boring Title',
-                                'content': 'Magic keyword inside body',
-                            })
+        self._create_discussion_post(
+            teacher_client,
+            Problem_id=str(problem.problem_id),
+            Title='Alpha Title',
+            Content='Some body',
+        )
+        self._create_discussion_post(
+            teacher_client,
+            Problem_id=str(problem.problem_id),
+            Title='Boring Title',
+            Content='Magic keyword inside body',
+        )
         student_client = forge_client('student')
         rv = student_client.get('/discussion/search',
                                 query_string={
@@ -177,9 +192,16 @@ class TestDiscussion(BaseTester):
         assert data['Post'][0]['Title'] == 'Boring Title'
 
     def test_discussion_search_empty_result(self, forge_client):
-        course_name = self._create_course_with_student()
+        course = self._create_course_with_student()
+        problem = self._create_problem_for_course(course)
         teacher_client = forge_client('teacher')
-        self._create_posts(teacher_client, course_name, 2)
+        for idx in range(2):
+            self._create_discussion_post(
+                teacher_client,
+                Problem_id=str(problem.problem_id),
+                Title=f'Post {idx}',
+                Content=f'Body {idx}',
+            )
         student_client = forge_client('student')
         rv = student_client.get('/discussion/search',
                                 query_string={
@@ -194,15 +216,16 @@ class TestDiscussion(BaseTester):
         assert data['Post'] == []
 
     def test_discussion_search_pagination(self, forge_client):
-        course_name = self._create_course_with_student()
+        course = self._create_course_with_student()
+        problem = self._create_problem_for_course(course)
         teacher_client = forge_client('teacher')
         for idx in range(5):
-            teacher_client.post('/post',
-                                json={
-                                    'course': course_name,
-                                    'title': f'Magic {idx}',
-                                    'content': 'Magic words everywhere',
-                                })
+            self._create_discussion_post(
+                teacher_client,
+                Problem_id=str(problem.problem_id),
+                Title=f'Magic {idx}',
+                Content='Magic words everywhere',
+            )
         student_client = forge_client('student')
         rv = student_client.get('/discussion/search',
                                 query_string={
@@ -217,6 +240,41 @@ class TestDiscussion(BaseTester):
         # 確認是第 3、4 筆結果（依建立時間排序，新貼文在前）
         expected_titles = ['Magic 2', 'Magic 1']
         assert [post['Title'] for post in posts] == expected_titles
+
+    def test_discussion_search_visibility(self, forge_client):
+        course = self._create_course_with_student()
+        problem = self._create_problem_for_course(course)
+        other_course_name = f'discussion-{random_string(4)}'
+        Course.add_course(other_course_name, 'teacher')
+        other_course = Course(other_course_name)
+        other_problem = self._create_problem_for_course(other_course)
+
+        teacher_client = forge_client('teacher')
+        self._create_discussion_post(
+            teacher_client,
+            Problem_id=str(problem.problem_id),
+            Title='Visible keyword',
+            Content='keyword in visible course',
+        )
+        self._create_discussion_post(
+            teacher_client,
+            Problem_id=str(other_problem.problem_id),
+            Title='Hidden keyword',
+            Content='keyword in hidden course',
+        )
+
+        student_client = forge_client('student')
+        rv = student_client.get('/discussion/search',
+                                query_string={
+                                    'Words': 'keyword',
+                                    'Limit': 10,
+                                    'Page': 1,
+                                })
+        payload = rv.get_json()
+        assert rv.status_code == 200, payload
+        posts = payload['data']['Post']
+        assert len(posts) == 1
+        assert posts[0]['Title'] == 'Visible keyword'
 
     def test_discussion_search_missing_words(self, forge_client):
         student_client = forge_client('student')
@@ -295,8 +353,9 @@ class TestDiscussion(BaseTester):
 
     def test_discussion_posts_filtered_by_problem(self, forge_client):
         client = forge_client('student')
-        problem_target = 'PX-FILTER'
-        other_problem = 'PX-OTHER'
+        course = self._create_course_with_student()
+        problem_target = str(self._create_problem_for_course(course).problem_id)
+        other_problem = str(self._create_problem_for_course(course).problem_id)
         for idx in range(3):
             self._create_discussion_post(client,
                                          Problem_id=problem_target,
@@ -317,7 +376,8 @@ class TestDiscussion(BaseTester):
 
     def test_discussion_posts_by_problem_pagination(self, forge_client):
         client = forge_client('student')
-        problem_target = 'PX-PAG'
+        course = self._create_course_with_student()
+        problem_target = str(self._create_problem_for_course(course).problem_id)
         for idx in range(5):
             self._create_discussion_post(client,
                                          Problem_id=problem_target,
@@ -336,7 +396,8 @@ class TestDiscussion(BaseTester):
 
     def test_discussion_posts_problem_id_priority(self, forge_client):
         client = forge_client('student')
-        problem_target = 'PX-PRIORITY'
+        course = self._create_course_with_student()
+        problem_target = str(self._create_problem_for_course(course).problem_id)
         self._create_discussion_post(client,
                                      Problem_id=problem_target,
                                      Title='Priority topic')
@@ -645,6 +706,23 @@ class TestDiscussion(BaseTester):
         assert resp['data']['Status'] == 'ERR'
         assert resp['data']['Post'] == []
 
+    def test_get_discussion_post_permission_denied(self, forge_client):
+        course_name = f'discussion-{random_string(4)}'
+        Course.add_course(course_name, 'teacher')
+        course = Course(course_name)
+        problem = self._create_problem_for_course(course)
+        teacher_client = forge_client('teacher')
+        post_id = self._create_discussion_post(
+            teacher_client,
+            Problem_id=str(problem.problem_id),
+        )
+
+        student_client = forge_client('student')
+        rv = student_client.get(f'/discussion/posts/{post_id}')
+        resp = rv.get_json()
+        assert rv.status_code == 403, resp
+        assert resp['data']['Status'] == 'ERR'
+
     def test_manage_post_status_pin_cycle(self, forge_client):
         teacher_client = forge_client('teacher')
         post_id = self._create_discussion_post(teacher_client)
@@ -680,6 +758,37 @@ class TestDiscussion(BaseTester):
         resp = rv.get_json()
         assert rv.status_code == 403, resp
         assert resp['data']['Status'] == 'ERR'
+
+    def test_ta_full_permissions(self, forge_client):
+        ta_name = f'ta-{random_string(4)}'
+        self.add_user(ta_name, role=engine.User.Role.TA)
+        ta_client = forge_client(ta_name)
+
+        course = self._create_course_with_student()
+        problem = self._create_problem_for_course(course)
+
+        student_client = forge_client('student')
+        post_id = self._create_discussion_post(
+            student_client,
+            Problem_id=str(problem.problem_id),
+            Title='Student Post',
+            Content='Text',
+        )
+
+        rv = ta_client.post(f'/discussion/posts/{post_id}/status',
+                            json={'Action': 'Pin'})
+        resp = rv.get_json()
+        assert rv.status_code == 200, resp
+        assert resp['data']['New_Status'] == 'pinned'
+
+        rv = ta_client.delete(f'/discussion/posts/{post_id}/delete',
+                              json={
+                                  'Type': 'post',
+                                  'Id': post_id,
+                              })
+        resp = rv.get_json()
+        assert rv.status_code == 200, resp
+        assert resp['data']['Status'] == 'OK'
 
     def test_delete_post_student_self(self, forge_client):
         client = forge_client('student')

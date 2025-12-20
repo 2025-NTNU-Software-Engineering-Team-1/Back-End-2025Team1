@@ -34,6 +34,11 @@ _STAFF_ROLES = {
     engine.User.Role.TA,
     engine.User.Role.ADMIN,
 }
+_STATUS_ROLES = {
+    engine.User.Role.TEACHER,
+    engine.User.Role.TA,
+    engine.User.Role.ADMIN,
+}
 
 _ROLE_LABEL_BY_ENUM = {
     engine.User.Role.ADMIN: 'teacher',
@@ -70,7 +75,7 @@ def list_discussion_posts(user):
         return HTTPError(str(exc), 400)
 
     if problem_id:
-        feed = _build_problem_post_feed(problem_id, limit, page)
+        feed = _build_problem_post_feed(user, problem_id, limit, page)
     else:
         try:
             mode = _parse_mode(request.args)
@@ -196,8 +201,8 @@ def search_discussion_posts(user):
         return HTTPResponse('Success.', data={'Status': 'OK', 'Post': []})
 
     try:
-        allowed_course_ids = _get_viewable_course_ids(user)
-        matches = _search_posts(words, allowed_course_ids)
+        allowed_problem_ids = _get_viewable_problem_ids(user)
+        matches = _search_posts(words, allowed_problem_ids)
     except Exception:  # pragma: no cover - defensive logging path
         current_app.logger.exception('Failed to search discussion posts')
         return HTTPError('Failed to search posts.',
@@ -238,6 +243,11 @@ def create_discussion_post(user):
             f"Missing required fields: {', '.join(missing)}",
             400,
             extra={'Post_ID': None})
+
+    if not _can_view_problem_id(user, problem_id):
+        return _error_response('Insufficient permission.',
+                               403,
+                               extra={'Post_ID': None})
 
     contains_code = bool(payload.get('Contains_Code', False))
     if not _code_sharing_allowed(user, problem_id, contains_code):
@@ -296,6 +306,11 @@ def create_discussion_reply(user, post_id: int):
     if not post or post.is_deleted:
         return _error_response('Post not found.',
                                404,
+                               extra={'Reply_ID': None})
+
+    if not _can_view_post(user, post):
+        return _error_response('Insufficient permission.',
+                               403,
                                extra={'Reply_ID': None})
 
     if not _code_sharing_allowed(user, post.problem_id, contains_code):
@@ -396,6 +411,14 @@ def like_discussion_target(user, post_id: int):
                                    'Like_Status': False
                                })
 
+    if not _can_view_post(user, post):
+        return _error_response('Insufficient permission.',
+                               403,
+                               extra={
+                                   'Like_Count': 0,
+                                   'Like_Status': False
+                               })
+
     target_post = None
     target_reply = None
     if target_id == post_id:
@@ -442,7 +465,7 @@ def like_discussion_target(user, post_id: int):
 @discussion_api.route('/posts/<int:post_id>/status', methods=['POST'])
 @login_required
 def update_discussion_post_status(user, post_id: int):
-    if user.role not in _STAFF_ROLES:
+    if user.role not in _STATUS_ROLES:
         return _error_response('Insufficient permission.',
                                403,
                                extra={'New_Status': None})
@@ -469,6 +492,10 @@ def update_discussion_post_status(user, post_id: int):
     if not post:
         return _error_response('Post not found.',
                                404,
+                               extra={'New_Status': None})
+    if not _can_view_post(user, post):
+        return _error_response('Insufficient permission.',
+                               403,
                                extra={'New_Status': None})
 
     field, value, new_status = action
@@ -521,6 +548,11 @@ def delete_discussion_entity(user, post_id: int):
         return _error_response('Post not found.',
                                404,
                                extra={'Message': 'Post not found.'})
+
+    if not _can_view_post(user, post):
+        return _error_response('Insufficient permission.',
+                               403,
+                               extra={'Message': 'Permission denied.'})
 
     if type_raw == 'post':
         if target_id != post_id:
@@ -576,6 +608,10 @@ def get_discussion_post_detail(user, post_id: int):
     post = engine.DiscussionPost.objects(post_id=post_id).first()
     if not post or post.is_deleted:
         return _error_response('Post not found.', 404, extra={'Post': []})
+    if not _can_view_post(user, post):
+        return _error_response('Insufficient permission.',
+                               403,
+                               extra={'Post': []})
 
     replies = engine.DiscussionReply.objects(
         post=post, is_deleted=False).order_by('created_time')
@@ -599,32 +635,40 @@ def _clamp_int(raw_value: Optional[str], default: int, min_value: int,
 
 
 def _build_feed(user, mode: str, limit: int, page: int) -> Dict:
-    # 使用新的 DiscussionPost 系統而不是舊的 Post 系統
+    allowed_problem_ids = _get_viewable_problem_ids(user)
+    if allowed_problem_ids is not None and not allowed_problem_ids:
+        return {
+            'Status': 'OK',
+            'Mode': mode,
+            'Limit': limit,
+            'Page': page,
+            'Total': 0,
+            'Posts': [],
+        }
+
     queryset = engine.DiscussionPost.objects(is_deleted=False)
-    
+    if allowed_problem_ids is not None:
+        queryset = queryset.filter(problem_id__in=list(allowed_problem_ids))
+
     # 根據模式排序
     if mode == 'Hot':
         # 熱門：先置頂，再按讚數+回覆數排序，最後按時間
         posts_list = list(queryset)
         posts_list.sort(
-            key=lambda p: (
-                -int(p.is_pinned or False),
-                -(p.like_count or 0) - (p.reply_count or 0),
-                -p.created_time.timestamp()
-            )
-        )
+            key=lambda p: (-int(p.is_pinned or False), -(p.like_count or 0) -
+                           (p.reply_count or 0), -p.created_time.timestamp()))
     else:  # New
         # 最新：先置頂，再按時間排序
         posts_list = list(queryset.order_by('-is_pinned', '-created_time'))
-    
+
     total = len(posts_list)
     start = (page - 1) * limit
     end = start + limit
     window = posts_list[start:end] if start < total else []
-    
+
     # 序列化貼文
     serialized_posts = [_serialize_problem_post(post) for post in window]
-    
+
     return {
         'Status': 'OK',
         'Mode': mode,
@@ -635,7 +679,18 @@ def _build_feed(user, mode: str, limit: int, page: int) -> Dict:
     }
 
 
-def _build_problem_post_feed(problem_id: str, limit: int, page: int) -> Dict:
+def _build_problem_post_feed(user, problem_id: str, limit: int,
+                             page: int) -> Dict:
+    allowed_problem_ids = _get_viewable_problem_ids(user)
+    if allowed_problem_ids is not None and problem_id not in allowed_problem_ids:
+        return {
+            'Status': 'OK',
+            'Problem_Id': problem_id,
+            'Limit': limit,
+            'Page': page,
+            'Total': 0,
+            'Posts': [],
+        }
     queryset = engine.DiscussionPost.objects(problem_id=problem_id,
                                              is_deleted=False)
     total = queryset.count()
@@ -665,6 +720,37 @@ def _get_viewable_course_ids(user) -> Optional[set]:
     return course_ids
 
 
+def _get_viewable_problem_ids(user) -> Optional[set]:
+    course_ids = _get_viewable_course_ids(user)
+    if course_ids is None:
+        return None
+    if not course_ids:
+        return set()
+
+    course_refs = engine.Course.objects(id__in=list(course_ids))
+    queryset = engine.Problem.objects(
+        problem_status=engine.Problem.Visibility.SHOW,
+        courses__in=course_refs,
+    )
+    return {str(problem.problem_id) for problem in queryset}
+
+
+def _can_view_problem_id(user, problem_id: str) -> bool:
+    if user.role == engine.User.Role.ADMIN:
+        return True
+    problem = _load_problem(problem_id)
+    if not problem:
+        return True
+    allowed_problem_ids = _get_viewable_problem_ids(user)
+    if allowed_problem_ids is None:
+        return True
+    return str(problem_id) in allowed_problem_ids
+
+
+def _can_view_post(user, post) -> bool:
+    return _can_view_problem_id(user, post.problem_id)
+
+
 def _collect_posts(course_filter: Optional[Sequence[str]]) -> List[Dict]:
     if course_filter is not None and not course_filter:
         return []
@@ -683,43 +769,35 @@ def _collect_posts(course_filter: Optional[Sequence[str]]) -> List[Dict]:
 
 
 def _search_posts(words: str,
-                  course_filter: Optional[Sequence[str]]) -> List[Dict]:
-    if course_filter is not None and not course_filter:
+                  problem_filter: Optional[Sequence[str]]) -> List[Dict]:
+    if problem_filter is not None and not problem_filter:
         return []
     pattern = re.compile(re.escape(words), re.IGNORECASE)
     matches: List[Tuple[float, Dict]] = []
-    for post in engine.Post.objects:
-        thread = post.thread
-        if not thread or thread.status == 1:
-            continue
-        course = thread.course_id
-        if not course:
-            continue
-        if course_filter is not None and str(course.id) not in course_filter:
-            continue
-        title = post.post_name or ''
-        content = thread.markdown or ''
+    queryset = engine.DiscussionPost.objects(is_deleted=False)
+    if problem_filter is not None:
+        queryset = queryset.filter(problem_id__in=list(problem_filter))
+    for post in queryset:
+        title = post.title or ''
+        content = post.content or ''
         if not (pattern.search(title) or pattern.search(content)):
             continue
         matches.append(
-            (thread.created.timestamp(), _serialize_search_post(post, thread)))
+            (post.created_time.timestamp(),
+             _serialize_search_discussion_post(post)))
     matches.sort(key=lambda item: item[0], reverse=True)
     return [data for _, data in matches]
 
 
-def _serialize_search_post(post, thread) -> Dict:
-    reply_count = _count_replies(thread.reply or [])
-    created_time = thread.created.isoformat()
-    author_name = ''
-    if thread.author:
-        author_name = thread.author.username
+def _serialize_search_discussion_post(post) -> Dict:
+    author_name = post.author.username if post.author else ''
     return {
-        'Post_Id': str(post.id),
+        'Post_Id': post.post_id,
         'Author': author_name,
-        'Title': post.post_name,
-        'Created_Time': created_time,
-        'Like_Count': getattr(post, 'like_count', 0),
-        'Reply_Count': reply_count,
+        'Title': post.title,
+        'Created_Time': post.created_time.isoformat(),
+        'Like_Count': post.like_count or 0,
+        'Reply_Count': post.reply_count or 0,
     }
 
 
@@ -922,7 +1000,7 @@ def _is_staff(user) -> bool:
 
 
 def _can_delete_entity(user, author) -> bool:
-    if _is_staff(user):
+    if user.role in _STAFF_ROLES:
         return True
     return author == user.obj
 
