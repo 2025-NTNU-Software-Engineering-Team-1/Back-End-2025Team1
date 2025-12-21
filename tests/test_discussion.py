@@ -533,8 +533,8 @@ class TestDiscussion(BaseTester):
         assert resp['data']['Status'] == 'ERR'
         assert resp['data']['Post_ID'] is None
 
-    def test_create_discussion_post_code_detected_blocked(self, forge_client,
-                                                          monkeypatch):
+    def test_create_discussion_post_code_detected_blocked(
+            self, forge_client, monkeypatch):
         from model import discussion
 
         def fake_meta(problem_id, user):
@@ -624,8 +624,8 @@ class TestDiscussion(BaseTester):
         assert rv.status_code == 403, resp
         assert resp['data']['Status'] == 'ERR'
 
-    def test_reply_discussion_post_code_detected_blocked(self, forge_client,
-                                                         monkeypatch):
+    def test_reply_discussion_post_code_detected_blocked(
+            self, forge_client, monkeypatch):
         from model import discussion
 
         def fake_meta(problem_id, user):
@@ -808,6 +808,37 @@ class TestDiscussion(BaseTester):
         resp = rv.get_json()
         assert rv.status_code == 403, resp
         assert resp['data']['Status'] == 'ERR'
+
+    def test_ta_manage_post_status_and_delete(self, forge_client):
+        ta_name = f'ta-{random_string(4)}'
+        ta_user = self.add_user(ta_name, role=engine.User.Role.TA)
+        student_client = forge_client('student')
+        course = self._create_course_with_student()
+        course.add_user(ta_user.obj)
+        course.update(push__tas=ta_user.obj)
+        problem = self._create_problem_for_course(course)
+        post_id = self._create_discussion_post(
+            student_client,
+            Problem_id=str(problem.problem_id),
+            Title='Student Post',
+            Content='Text',
+        )
+
+        ta_client = forge_client(ta_name)
+        rv = ta_client.post(f'/discussion/posts/{post_id}/status',
+                            json={'Action': 'Pin'})
+        resp = rv.get_json()
+        assert rv.status_code == 200, resp
+        assert resp['data']['New_Status'] == 'pinned'
+
+        rv = ta_client.delete(f'/discussion/posts/{post_id}/delete',
+                              json={
+                                  'Type': 'post',
+                                  'Id': post_id,
+                              })
+        resp = rv.get_json()
+        assert rv.status_code == 200, resp
+        assert resp['data']['Status'] == 'OK'
 
     def test_ta_full_permissions(self, forge_client):
         username = 'admin'
