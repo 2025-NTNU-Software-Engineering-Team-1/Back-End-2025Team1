@@ -5,7 +5,7 @@ from typing import Any, Dict, Literal, Tuple, Union
 import mongomock
 from flask.testing import FlaskClient
 from mongo import *
-from mongoengine import connect
+from mongoengine import connect, disconnect
 
 
 def random_string(k=None):
@@ -32,6 +32,8 @@ class BaseTester:
 
     @classmethod
     def drop_db(cls):
+        # Disconnect any existing connections first
+        disconnect(alias='default')
         conn = connect(
             cls.DB,
             host=cls.MONGO_HOST,

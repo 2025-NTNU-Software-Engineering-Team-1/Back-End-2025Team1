@@ -25,6 +25,47 @@ def test_endpoint():
                         data={"status": "ok"})
 
 
+@trial_submission_api.route("/download-testcases", methods=["GET"])
+def download_custom_testcases():
+    """
+    Download custom test cases ZIP from MinIO.
+    This is called by the sandbox to fetch user-uploaded custom test cases.
+    
+    Query params:
+        token: Sandbox token for authentication
+        path: MinIO path to the custom testcases ZIP
+    """
+    from mongo.sandbox import find_by_token
+
+    # Verify sandbox token
+    token = request.args.get("token", "")
+    if not token or find_by_token(token) is None:
+        current_app.logger.warning("Invalid token for download-testcases")
+        return HTTPError("Invalid token", 401)
+
+    # Get MinIO path
+    minio_path = request.args.get("path")
+    if not minio_path:
+        return HTTPError("Missing path parameter", 400)
+
+    # Download from MinIO
+    try:
+        minio = MinioClient()
+        resp = minio.client.get_object(minio.bucket, minio_path)
+        content = resp.read()
+        resp.close()
+        resp.release_conn()
+
+        return send_file(io.BytesIO(content),
+                         mimetype='application/zip',
+                         as_attachment=True,
+                         download_name='custom_testcases.zip')
+    except Exception as e:
+        current_app.logger.error(
+            f"Failed to download testcases from {minio_path}: {e}")
+        return HTTPError(f"Failed to download testcases: {e}", 500)
+
+
 @trial_submission_api.put("/<trial_id>/files")
 @login_required
 def upload_trial_files(user, trial_id: str):
@@ -189,11 +230,13 @@ def upload_trial_files(user, trial_id: str):
             f"Database save failed for trial submission {trial_id}: {str(e)}")
         return HTTPError(f"Failed to update trial submission: {e}", 500)
 
-    # (Optional) enqueue judge (non-blocking) — placeholder
-    # try:
-    #     ts.send()
-    # except Exception:
-    #     pass  # Ignore queue failures for now
+    # Enqueue judge (non-blocking)
+    try:
+        ts.send()
+    except Exception as e:
+        current_app.logger.warning(
+            f"Failed to send trial submission to sandbox: {e}")
+        # Continue anyway - files are uploaded
 
     current_app.logger.info(
         f"Successfully uploaded files for trial_id: {trial_id}")
@@ -336,3 +379,66 @@ def download_trial_all(user, trial_id: str):
                 yield (f"task_{i}_error.txt", b"Output not found")
 
     return stream_zip_response(file_iterator, f"trial-{trial_id}.zip")
+
+
+# === Sandbox Result Callback API ===
+
+
+@trial_submission_api.route("/<trial_id>/result", methods=["PUT"])
+@Request.json('tasks: list', 'token: str')
+def on_trial_result(trial_id: str, tasks: list, token: str):
+    """
+    Receive judging results from sandbox for a Trial Submission.
+    This is called by the sandbox after it finishes judging.
+    
+    Expected JSON body:
+    {
+        "tasks": [...],  # List of task results
+        "token": "...",  # Sandbox token for verification
+        "staticAnalysis": {...}  # Optional SA results
+    }
+    """
+    # Validate trial submission exists
+    try:
+        ts = TrialSubmission(trial_id)
+    except engine.DoesNotExist:
+        current_app.logger.warning(
+            f"Trial result callback for non-existent trial_id: {trial_id}")
+        return HTTPError("Trial submission not found.", 404)
+    except Exception as e:
+        current_app.logger.error(
+            f"Error loading trial submission {trial_id}: {e}")
+        return HTTPError("Invalid trial submission ID.", 400)
+
+    # Verify sandbox token
+    if not TrialSubmission.verify_token(trial_id, token):
+        current_app.logger.warning(
+            f"Invalid token for trial result callback: {trial_id}")
+        return HTTPError("Invalid or expired token.", 403)
+
+    # Process the results
+    try:
+        static_analysis = request.json.get('staticAnalysis')
+
+        # TrialSubmission inherits process_result from BaseSubmission
+        ts.process_result(
+            tasks,
+            static_analysis=static_analysis,
+            # Trial submissions don't use checker/scoring in the same way
+            checker=None,
+            scoring=None,
+            status_override=None,
+        )
+
+        current_app.logger.info(
+            f"Successfully processed trial result for {trial_id}")
+        return HTTPResponse(f"Trial submission {trial_id} result received.")
+
+    except (ValueError, KeyError) as e:
+        current_app.logger.error(
+            f"Invalid data in trial result for {trial_id}: {e}")
+        return HTTPError(f"Invalid result data: {e}", 400)
+    except Exception as e:
+        current_app.logger.error(
+            f"Error processing trial result for {trial_id}: {e}")
+        return HTTPError(f"Failed to process result: {e}", 500)
