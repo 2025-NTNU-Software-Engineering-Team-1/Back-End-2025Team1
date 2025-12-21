@@ -10,6 +10,8 @@ from zipfile import ZipFile, BadZipFile
 __all__ = [*mongoengine.__all__]
 
 TAIPEI_TIMEZONE = timezone(timedelta(hours=8))
+DEFAULT_AI_MODEL = 'gemini-2.5-flash-lite'
+RPD_RESET_INTERVAL = timedelta(hours=24)
 
 MONGO_HOST = os.environ.get('MONGO_HOST', 'mongomock://localhost')
 
@@ -135,6 +137,56 @@ class Duration(EmbeddedDocument):
         return self.start <= other <= self.end
 
 
+class UploadPolicy(EmbeddedDocument):
+    """
+    UploadMode:
+        Code: One code file. Normal execution code submission.
+        Zip: A zip file containing multiple files. Suitable for complex projects. Need makefile.
+        Function: Single function submission. Used in function-based problems.
+        Interactive: Run with student's and teacher's binaries for interaction.
+    """
+
+    class UploadMode(IntEnum):
+        CODE = 0
+        ZIP = 1
+        FUNCTION = 2
+        INTERACTIVE = 3
+
+    mode = IntEnumField(enum=UploadMode, required=True)
+    required_files = ListField(StringField(max_length=256), default=list)
+
+    # ====== Teacher Artifacts Path (Optional)======
+    # MinIO path
+    compile_artifacts_path = StringField(max_length=256,
+                                         required=False,
+                                         default='')
+    static_analysis_artifacts_path = StringField(max_length=256,
+                                                 required=False,
+                                                 default='')
+    judger_artifacts_path = StringField(max_length=256,
+                                        required=False,
+                                        default='')
+    checker_artifacts_path = StringField(max_length=256,
+                                         required=False,
+                                         default='')
+    scorer_artifacts_path = StringField(max_length=256,
+                                        required=False,
+                                        default='')
+    # ==============================================
+
+
+class Pipeline(EmbeddedDocument):
+    """
+    upload_policy        ：mode（code/zip/function）、requiredFiles（Makefile、a.out）、teacherArtifacts 路徑。
+    network_policy       ：外網白/黑名單、Local service 允許列表。
+    static_analysis_policies：黑白名單、JE 自動終止策略。
+    interaction_config   ：教師/學生 Binary 名稱、執行順序、stdin/stdout 配置、Checker 需求。
+    custom_scoring       ：是否啟用、自訂 Score.py 路徑、I/O 介面描述。
+    artifact_manifest    ：可提供下載的產物種類。
+    test_case_policy     ：命名規則（legacy/ssttnn）、允許的輸入/輸出模式（stdin/allowRead、stdout/allowWrite）。
+    """
+
+
 class User(Document):
 
     class Role(IntEnum):
@@ -217,6 +269,13 @@ class Course(Document):
     posts = ListField(ReferenceField('Post'), default=list)
     student_scores = DictField(db_field='studentScores')
 
+    # for AI_vt
+    is_ai_vt_enabled = BooleanField(db_field='isAIEnabled', default=True)
+    ai_model = ReferenceField('AiModel',
+                              db_field='aiModel',
+                              null=True,
+                              default=DEFAULT_AI_MODEL)
+
 
 class Number(Document):
     name = StringField(
@@ -229,8 +288,8 @@ class Number(Document):
 class ProblemCase(EmbeddedDocument):
     task_score = IntField(required=True, db_field='taskScore')
     case_count = IntField(required=True, db_field='caseCount')
-    memory_limit = IntField(required=True, db_field='memoryLimit')
-    time_limit = IntField(required=True, db_field='timeLimit')
+    memory_limit = IntField(required=True, db_field='memoryLimit')  # in KB
+    time_limit = IntField(required=True, db_field='timeLimit')  # in ms
 
 
 class ProblemTestCase(EmbeddedDocument):
@@ -239,6 +298,11 @@ class ProblemTestCase(EmbeddedDocument):
     tasks = EmbeddedDocumentListField(
         ProblemCase,
         default=list,
+    )
+    submission_mode = IntField(
+        choices=[0, 1],
+        default=0,
+        db_field='submissionMode',
     )
     # zip file contains testcase input/output
     case_zip = ZipField(
@@ -291,6 +355,10 @@ def problem_desc_escape(sender, document):
 @problem_desc_escape.apply
 class Problem(Document):
 
+    meta = {
+        'strict': False,  # for development convenience, ignore unknown fields
+    }
+
     class Visibility:
         SHOW = 0
         HIDDEN = 1
@@ -319,6 +387,11 @@ class Problem(Document):
     description = EmbeddedDocumentField(
         ProblemDescription,
         default=ProblemDescription,
+    )
+    # New fields for API compatibility (can coexist with description)
+    config = DictField(
+        default=dict,
+        null=True,
     )
     owner = StringField(max_length=16, required=True)
     # pdf =
@@ -360,6 +433,43 @@ class Problem(Document):
         max_length=10**4,
         default='',
     )
+    meta = {'strict': False}
+
+    # === Test Mode Fields ===
+    test_mode_enabled = BooleanField(db_field='testModeEnabled', default=False)
+    test_submission_quota = IntField(
+        db_field='testSubmissionQuota',
+        default=-1  # -1 for unlimited
+    )
+
+    # Public test cases for Test Mode
+    public_cases_zip = ZipField(
+        db_field='publicCasesZip',
+        default=None,
+        null=True,
+    )
+    public_cases_zip_minio_path = StringField(
+        null=True,
+        max_length=256,
+        db_field='publicCasesZipMinioPath',
+    )
+
+    # AC Code for Test Mode
+    ac_code = ZipField(db_field='acCode', default=None, null=True)
+    ac_code_minio_path = StringField(
+        null=True,
+        max_length=256,
+        db_field='acCodeMinioPath',
+    )
+    ac_code_language = IntField(
+        db_field='acCodeLanguage',
+        null=True,
+    )
+
+    # Stats for Test Mode
+    # Dict[username, count]
+    test_submission_counts = DictField(db_field='testSubmissionCounts',
+                                       default={})
 
 
 class CaseResult(EmbeddedDocument):
@@ -386,20 +496,16 @@ class TaskResult(EmbeddedDocument):
     cases = EmbeddedDocumentListField(CaseResult, default=list)
 
 
-class Submission(Document):
+class BaseSubmissionDocument(Document):
     meta = {
+        'abstract': True,
         'indexes': [
-            (
-                'id',
-                'user',
-                'score',
-                'status',
-                'problem',
-                'language',
-                'timestamp',
-            ),
+            'problem',
+            'user',
+            ('problem', 'user', '-timestamp'),
         ]
     }
+
     problem = ReferenceField(Problem, required=True)
     user = ReferenceField(User, required=True)
     language = IntField(
@@ -420,9 +526,72 @@ class Submission(Document):
         max_length=256,
         db_field='codeMinioPath',
     )
+    checker_summary = StringField(default=None, null=True)
+    checker_artifacts_path = StringField(
+        null=True,
+        max_length=256,
+    )
+    compiled_binary = FileField(default=None, null=True)
+    compiled_binary_minio_path = StringField(
+        null=True,
+        max_length=256,
+        db_field='compiledBinaryMinioPath',
+    )
+    scorer_artifacts_path = StringField(
+        null=True,
+        max_length=256,
+        db_field='scorerArtifactsPath',
+    )
+    scoring_message = StringField(default=None, null=True)
+    scoring_breakdown = DictField(default=None, null=True)
     last_send = DateTimeField(db_field='lastSend', default=datetime.now)
-    comment = FileField(default=None, null=True)
     ip_addr = StringField(default=None, null=True)
+    sa_status = IntField(null=True, db_field='saStatus')
+    sa_message = StringField(max_length=1024, null=True, db_field='saMessage')
+    sa_report = StringField(null=True, db_field='saReport')
+    sa_report_path = StringField(max_length=256,
+                                 null=True,
+                                 db_field='saReportPath')
+
+
+class Submission(BaseSubmissionDocument):
+    meta = {'indexes': [('problem', 'user'), ('problem', '-score')]}
+    comment = FileField(default=None, null=True)
+
+
+class TrialSubmission(BaseSubmissionDocument):
+    """
+    Document for Test Mode Submissions.
+    These submissions are for testing against public/custom cases
+    and do not affect homework scores.
+    """
+    meta = {
+        'collection':
+        'test_submission',
+        'indexes': [
+            'problem',
+            'user',
+            ('problem', 'user', '-timestamp'),
+            {
+                'fields': ['timestamp'],
+                'expireAfterSeconds': 1209600  # 14 days Time-To-Live
+            },
+        ]
+    }
+
+    # True if using the problem's public test cases
+    use_default_case = BooleanField(db_field='useDefaultCase', default=True)
+
+    # Zip file of custom input cases (if use_default_case is False)
+    custom_input = ZipField(
+        null=True,
+        max_size=10**7  # 10MB limit for custom input
+    )
+    custom_input_minio_path = StringField(
+        null=True,
+        max_length=256,
+        db_field='customInputMinioPath',
+    )
 
 
 @escape_markdown.apply
@@ -560,3 +729,84 @@ class PersonalAccessToken(Document):
     description = StringField(
         required=False,
         max_length=256)  # Record the purpose of the token (Optional)
+
+
+class AiModel(Document):
+    # AI model that can be used.
+    name = StringField(max_length=64, required=True, unique=True)
+    rpm_limit = IntField(db_field='RPM_limit', required=True)
+    tpm_limit = IntField(db_field='TPM_limit', required=True)
+    rpd_limit = IntField(db_field='RPD_limit', required=True)
+    description = StringField(max_length=256, default='')
+    is_active = BooleanField(default=True)
+
+    meta = {
+        'collection': 'ai_model',
+    }
+
+
+class AiApiKey(Document):
+    # API key for accessing AI models.
+    key_value = StringField(db_field='keyValue', required=True)
+    key_name = StringField(db_field='keyName', required=True)
+    course_name = ReferenceField('Course',
+                                 db_field='course_name',
+                                 required=True)
+    input_token = IntField(db_field='inputToken', default=0)
+    output_token = IntField(db_field='outputToken', default=0)
+    is_active = BooleanField(db_field='isActive', default=True)
+    request_count = IntField(db_field='requestCount', default=0)
+    rpd = IntField(db_field='RPD', default=0)  # 紀錄當日累積請求量
+    last_reset_date = DateTimeField(default=datetime.now,
+                                    db_field='lastResetDate')
+    created_by = ReferenceField('User', db_field='createdBy', required=True)
+    meta = {'collection': 'ai_api_key'}
+    created_at = DateTimeField(default=datetime.now, db_field='createdAt')
+    updated_at = DateTimeField(default=datetime.now, db_field='updatedAt')
+    created_by = ReferenceField('User', db_field='createdBy', required=True)
+    is_active = BooleanField(db_field='isActive', default=True)
+    meta = {
+        'collection': 'ai_api_key',
+        'indexes': [{
+            'fields': ['course_name', 'key_name'],
+            'unique': True
+        }]
+    }
+
+
+class AiApiLog(Document):
+    # Log of AI API requests.
+    course_name = ReferenceField('Course',
+                                 db_field='course_name',
+                                 required=True)
+    username = StringField(required=True)
+    # history: list: [{"role": "user/model", "parts": [...]}, ...]
+    history = ListField(DictField(), default=list)
+    total_tokens = IntField(db_field='totalTokens', default=0)
+
+    meta = {
+        'collection': 'ai_api_log',
+        'indexes': [('course_name', 'username')]
+    }
+
+
+class AiTokenUsage(Document):
+    """
+    Focus on tracking token usage for AI API keys.
+    """
+    api_key = ReferenceField('AiApiKey', db_field='apiKey', required=True)
+    problem_id = ReferenceField('Problem',
+                                db_field='problemId',
+                                required=False)
+    course_name = ReferenceField('Course',
+                                 db_field='courseName',
+                                 required=True)
+
+    input_tokens = IntField(default=0)
+    output_tokens = IntField(default=0)
+    timestamp = DateTimeField(default=datetime.now)
+
+    meta = {
+        'collection': 'ai_token_usage',
+        'indexes': ['api_key', ('course_name', 'problem_id')]
+    }

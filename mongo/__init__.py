@@ -7,6 +7,7 @@ from . import problem
 from . import announcement
 from . import post
 from . import ip_filter
+from . import ai_vtuber
 from . import pat
 
 from .course import *
@@ -18,6 +19,7 @@ from .problem import *
 from .announcement import *
 from .post import *
 from .ip_filter import *
+from .ai_vtuber import *
 from .pat import *
 
 __all__ = [
@@ -30,5 +32,6 @@ __all__ = [
     *announcement.__all__,
     *post.__all__,
     *ip_filter.__all__,
+    *ai_vtuber.__all__,
     *pat.__all__,
 ]

@@ -2,7 +2,7 @@ import abc
 import hashlib
 import os
 from functools import wraps
-from typing import Dict, Optional, Any, TYPE_CHECKING
+from typing import Dict, Optional, Any, TYPE_CHECKING, BinaryIO
 from flask import current_app
 from minio import Minio
 import redis
@@ -20,6 +20,7 @@ __all__ = (
     'RedisCache',
     'doc_required',
     'drop_none',
+    'generate_ulid',
 )
 
 
@@ -141,7 +142,7 @@ def doc_required(
             # convert it to document
             # TODO: add type checking, whether the cls is a subclass of `MongoBase`
             #       or maybe it is not need
-            if type(cls) != type:
+            if not isinstance(cls, type):
                 raise TypeError('cls must be a type')
             # process `None`
             if src_param is None:
@@ -173,6 +174,26 @@ def drop_none(d: Dict):
     return {k: v for k, v in d.items() if v is not None}
 
 
+def generate_ulid() -> str:
+    """
+    Generate a ULID-like string; fall back to uuid4 hex if ulid package
+    is missing or incompatible.
+    """
+    try:
+        import ulid as _ulid  # type: ignore
+        if hasattr(_ulid, 'new'):
+            return str(_ulid.new())
+        if hasattr(_ulid, 'ULID'):
+            try:
+                return str(_ulid.ULID())
+            except Exception:
+                pass
+    except Exception:
+        pass
+    import uuid
+    return uuid.uuid4().hex
+
+
 class MinioClient:
 
     def __init__(self):
@@ -183,3 +204,40 @@ class MinioClient:
             secure=not config.FLASK_DEBUG,
         )
         self.bucket = config.MINIO_BUCKET
+
+    def upload_file_object(
+        self,
+        file_obj: BinaryIO,
+        object_name: str,
+        length: int,
+        *,
+        content_type: str = 'application/octet-stream',
+        part_size: int = 5 * 1024 * 1024,
+    ):
+        """
+        Upload file object to MinIO, handling file pointer/part size settings automatically.
+        """
+        try:
+            file_obj.seek(0)
+        except (AttributeError, OSError, ValueError):
+            pass
+
+        self.client.put_object(
+            self.bucket,
+            object_name,
+            file_obj,
+            length if length is not None else -1,
+            part_size=part_size,
+            content_type=content_type,
+        )
+
+    def download_file(self, object_name: str) -> bytes:
+        """
+        Download file from MinIO and return as bytes.
+        """
+        response = self.client.get_object(self.bucket, object_name)
+        try:
+            return response.read()
+        finally:
+            response.close()
+            response.release_conn()

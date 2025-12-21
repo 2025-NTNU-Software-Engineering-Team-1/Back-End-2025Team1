@@ -10,7 +10,7 @@ class TestAPIUserIPs(BaseTester):
 
     def test_export_ip_records_permission_denied(self, client):
         """
-        測試沒有 'read:userips' 權限的學生 token 是否會被拒絕。
+        Test if a student token without 'read:userips' permission is rejected.
         """
         student_user = utils.user.create_user(role=engine.User.Role.STUDENT)
         course = utils.course.create_course(students=[student_user])
@@ -38,7 +38,7 @@ class TestAPIUserIPs(BaseTester):
     def test_export_ip_records_success_with_pat_route(self, app,
                                                       client_teacher, client):
         """
-        測試透過 API 建立 PAT，並用其成功下載 CSV。
+        Test creating a PAT via API and successfully downloading CSV with it.
         """
         scope_to_request = ['read:userips']
         rv = client_teacher.post(
@@ -58,7 +58,7 @@ class TestAPIUserIPs(BaseTester):
         course = utils.course.create_course(teacher=teacher_user,
                                             students=[student_user])
 
-        # 偽造 LoginRecords（注意 user_id 用 username 字串）
+        # Forge LoginRecords (note user_id uses username string)
         engine.LoginRecords(
             user_id=student_user.username,
             ip_addr='192.168.1.1',
@@ -66,7 +66,7 @@ class TestAPIUserIPs(BaseTester):
             timestamp=datetime.now(),
         ).save()
 
-        # 建立 problem 並偽造 Submission（最小必填欄位）
+        # Create problem and forge Submission (minimum required fields)
         problem = utils.problem.create_problem(owner=teacher_user,
                                                course=course.course_name)
         with app.app_context():
@@ -93,7 +93,7 @@ class TestAPIUserIPs(BaseTester):
 
     def test_export_ip_records_course_not_found(self, client_teacher, client):
         """
-        測試課程不存在時的錯誤處理
+        Test error handling when course does not exist
         """
         rv = client_teacher.post(
             '/profile/api_token/create',
@@ -115,7 +115,7 @@ class TestAPIUserIPs(BaseTester):
 
     def test_export_ip_records_empty_course(self, client_teacher, client):
         """
-        測試空課程（沒有學生）的 IP 記錄導出
+        Test IP record export for an empty course (no students)
         """
         rv = client_teacher.post(
             '/profile/api_token/create',

@@ -6,10 +6,8 @@ from mongo.pat import PersonalAccessToken
 def test_mongodb_pat_integration():
     """Test basic PAT functionality with MongoDB"""
 
-    # Clean up any existing test data
     PersonalAccessToken.objects(pat_id__startswith='test_').delete()
 
-    # Test creating a PAT
     test_token = "noj_pat_test_secret"
     hash_val = PersonalAccessToken.hash_token(test_token)
     SCOPES = ['read:user', 'read:problems', 'write:submissions']
@@ -39,7 +37,6 @@ def test_mongodb_pat_integration():
     assert cleaned['Status'] == 'Active'
     assert cleaned['Scope'] == SCOPES
 
-    # Test updating PAT
     UPDATED_SCOPES = ['read:user']
     retrieved.update(name='Updated Token', scope=UPDATED_SCOPES)
     updated = PersonalAccessToken(
@@ -63,7 +60,6 @@ def test_mongodb_pat_integration():
     # Test status property directly
     assert revoked.status == 'deactivated'
 
-    # Test expired token status
     EXPIRED_SCOPES = ['read:courses']
     expired_pat = PersonalAccessToken.add(
         pat_id='test_002',
@@ -77,7 +73,6 @@ def test_mongodb_pat_integration():
     cleaned_expired = expired_pat.to_dict()
     assert cleaned_expired['Status'] == 'Due'
 
-    # Clean up
     PersonalAccessToken.objects(pat_id__startswith='test_').delete()
     print("✅ All MongoDB PAT tests passed!")
 

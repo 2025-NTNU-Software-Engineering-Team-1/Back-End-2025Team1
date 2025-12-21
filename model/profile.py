@@ -105,7 +105,6 @@ def create_token(user, Name, Scope):
     data = request.get_json() or {}
     Due_Time = data.get("Due_Time", None)
 
-    # Convert Due_Time string to datetime if provided
     due_time_obj = None
     if Due_Time:
         try:
@@ -198,7 +197,6 @@ def edit_token(user, pat_id, data):
                              "Message": "Not token owner"
                          })
 
-    # Update fields if provided
     update_data = {}
     if "Name" in data:
         update_data["name"] = data["Name"]
@@ -300,6 +298,3 @@ def deactivate_token(user, pat_id):
                 "Message": f"Database error: {str(e)}"
             },
         )
-
-
-# ======================== pat ends ========================

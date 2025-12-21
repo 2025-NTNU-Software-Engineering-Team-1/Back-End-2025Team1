@@ -1,13 +1,10 @@
-# Standard library
 from functools import wraps
 from random import SystemRandom
 from typing import Set, Callable, Any, Optional
 import csv
 import io
 from datetime import timezone, datetime
-# Related third party imports
 from flask import Blueprint, request, current_app, url_for
-# Local application
 from mongo import *
 from mongo import engine
 from mongo.utils import hash_id
@@ -132,7 +129,7 @@ def pat_required(pat_scope: list[str]) -> Callable:
     def verify(func):
 
         @wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
             result = validate_pat_request(pat_scope)
             if result is None:
                 return HTTPError(

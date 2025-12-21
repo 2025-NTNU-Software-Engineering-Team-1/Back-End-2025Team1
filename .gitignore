@@ -11,6 +11,7 @@ __pycache__
 # virtual env
 .venv
 venv
+.venv.bak
 .env
 
 # vs & vs code cache

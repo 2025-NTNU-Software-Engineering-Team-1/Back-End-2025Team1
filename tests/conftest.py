@@ -108,7 +108,10 @@ class ForgeClient(Protocol):
 def forge_client(client: FlaskClient):
 
     def seted_cookie(username: str) -> FlaskClient:
-        client.set_cookie('piann', User(username).secret, domain='test.test')
+        secret = User(username).secret
+        if isinstance(secret, bytes):
+            secret = secret.decode()
+        client.set_cookie('piann', secret, domain='test.test')
         return client
 
     return seted_cookie
@@ -131,13 +134,11 @@ def client_student(forge_client: ForgeClient):
 
 @pytest.fixture
 def test_token():
-    # Token for user: test
     return User('test').secret
 
 
 @pytest.fixture
 def test2_token():
-    # Token for user: test2
     return User('test2').secret
 
 

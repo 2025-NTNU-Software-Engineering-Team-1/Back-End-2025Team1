@@ -11,6 +11,9 @@ from . import post
 from . import copycat
 from . import health
 from . import user
+from . import pat
+from . import trial_submission
+from . import ai_vtuber
 
 from .auth import *
 from .profile import *
@@ -26,6 +29,8 @@ from .copycat import *
 from .health import *
 from .user import *
 from .pat import *
+from .trial_submission import *
+from .ai_vtuber import *
 
 __all__ = [
     *auth.__all__,
@@ -42,4 +47,6 @@ __all__ = [
     *health.__all__,
     *user.__all__,
     *pat.__all__,
+    *trial_submission.__all__,
+    *ai_vtuber.__all__,
 ]
