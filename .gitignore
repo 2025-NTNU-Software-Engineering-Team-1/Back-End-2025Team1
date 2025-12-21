@@ -36,3 +36,7 @@ htmlcov
 
 /minio/
 .venv.bak/
+
+.act/
+
+.act/

@@ -129,14 +129,12 @@ def _problem_list_error(message: str, status_code: int):
 def _detect_contains_code(content: str) -> bool:
     if not content:
         return False
-    py_block_re = re.compile(
-        r'(?m)^('
-        r'\s*for\s+\w[\w,\s]*\s+in\s+.+:\s*$'
-        r'|\s*(?:if|elif|while)\s+.+:\s*$'
-        r'|\s*(?:def|class)\s+\w+\s*(?:\(|:).*$'
-        r'|\s*(?:try|except|finally|with)\b.*:\s*$'
-        r')\n[ \t]{2,}\S+'
-    )
+    py_block_re = re.compile(r'(?m)^('
+                             r'\s*for\s+\w[\w,\s]*\s+in\s+.+:\s*$'
+                             r'|\s*(?:if|elif|while)\s+.+:\s*$'
+                             r'|\s*(?:def|class)\s+\w+\s*(?:\(|:).*$'
+                             r'|\s*(?:try|except|finally|with)\b.*:\s*$'
+                             r')\n[ \t]{2,}\S+')
     if py_block_re.search(content):
         return True
     if _CODE_BLOCK_MARKER_RE.search(content):
