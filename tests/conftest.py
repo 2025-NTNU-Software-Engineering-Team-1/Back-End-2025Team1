@@ -1,9 +1,26 @@
+"""
+Test configuration for Normal-OJ backend.
+
+IMPORTANT: This module forces the use of mongomock (in-memory database)
+for all tests, ensuring that tests NEVER touch the real MongoDB database.
+"""
+import os
+import sys
+
+# =============================================================================
+# CRITICAL: Force mongomock BEFORE any mongo module is imported
+# This MUST be at the very top of conftest.py
+# =============================================================================
+os.environ['MONGO_HOST'] = 'mongomock://localhost'
+
 from typing import Dict, List, Protocol
 from flask import Flask
 from flask.testing import FlaskClient
+import mongomock
+import mongomock.gridfs
+
 from mongo import *
 from mongo import engine
-import mongomock.gridfs
 
 import pytest
 import random
@@ -17,6 +34,23 @@ from testcontainers.minio import MinioContainer
 import mongo.config
 import shutil
 import subprocess
+
+
+def pytest_configure(config):
+    """
+    Pytest hook called early in pytest startup.
+    
+    Double-check that we're using mongomock to prevent any possibility
+    of tests destroying the real database.
+    """
+    mongo_host = os.environ.get('MONGO_HOST', '')
+    if 'mongomock' not in mongo_host:
+        pytest.exit(
+            "SAFETY CHECK FAILED: MONGO_HOST is not set to mongomock!\n"
+            f"Current MONGO_HOST: {mongo_host}\n"
+            "Tests must use mongomock to avoid destroying real data.\n"
+            "Please set MONGO_HOST=mongomock://localhost",
+            returncode=1)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -53,6 +87,12 @@ def setup_minio():
 
 @pytest.fixture(scope="module", autouse=True)
 def clean_db_after_module():
+    """
+    Clean up test data after each module.
+    
+    NOTE: Tests now use mongomock (in-memory database), so this cleanup
+    only affects the mock database, NOT the real MongoDB.
+    """
 
     def _get_all_models_recursive(cls):
         all_models = list(cls.__subclasses__())
@@ -62,7 +102,7 @@ def clean_db_after_module():
 
     yield
 
-    # Post cleanup
+    # Post cleanup - only affects mongomock, never the real database
     all_models = _get_all_models_recursive(mongo.engine.Document)
     for model in all_models:
         # Skip abstract models
