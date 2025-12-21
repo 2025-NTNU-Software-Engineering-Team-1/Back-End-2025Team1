@@ -533,6 +533,31 @@ class TestDiscussion(BaseTester):
         assert resp['data']['Status'] == 'ERR'
         assert resp['data']['Post_ID'] is None
 
+    def test_create_discussion_post_code_detected_blocked(self, forge_client,
+                                                          monkeypatch):
+        from model import discussion
+
+        def fake_meta(problem_id, user):
+            return {
+                'role': engine.User.Role.STUDENT,
+                'code_allowed': False,
+            }
+
+        monkeypatch.setattr(discussion, '_fetch_problem_meta', fake_meta)
+
+        client = forge_client('student')
+        rv = client.post('/discussion/post',
+                         json={
+                             'Title': 'Code leak',
+                             'Content': 'def solve():\n    return 1',
+                             'Problem_id': 'P-201',
+                             'Contains_Code': False,
+                         })
+        resp = rv.get_json()
+        assert rv.status_code == 403, resp
+        assert resp['data']['Status'] == 'ERR'
+        assert resp['data']['Post_ID'] is None
+
     def test_reply_discussion_post_success(self, forge_client):
         client = forge_client('student')
         post_id = self._create_discussion_post(client)
@@ -594,6 +619,28 @@ class TestDiscussion(BaseTester):
                          json={
                              'Content': 'print("ans")',
                              'Contains_Code': True,
+                         })
+        resp = rv.get_json()
+        assert rv.status_code == 403, resp
+        assert resp['data']['Status'] == 'ERR'
+
+    def test_reply_discussion_post_code_detected_blocked(self, forge_client,
+                                                         monkeypatch):
+        from model import discussion
+
+        def fake_meta(problem_id, user):
+            return {
+                'role': engine.User.Role.STUDENT,
+                'code_allowed': False,
+            }
+
+        monkeypatch.setattr(discussion, '_fetch_problem_meta', fake_meta)
+        client = forge_client('student')
+        post_id = self._create_discussion_post(client)
+        rv = client.post(f'/discussion/posts/{post_id}/reply',
+                         json={
+                             'Content': 'for i in range(3):\n    print(i)',
+                             'Contains_Code': False,
                          })
         resp = rv.get_json()
         assert rv.status_code == 403, resp

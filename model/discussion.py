@@ -67,6 +67,14 @@ _STATUS_ACTIONS = {
 
 _PERMITTED_ROLES_INT = {0, 1, 3}
 
+_CODE_BLOCK_MARKER_RE = re.compile(r'```|<code>|</code>', re.IGNORECASE)
+_CODE_STRONG_LINE_RE = re.compile(
+    r'^\s*(def|class|import|from|#include|public|private|protected|static|'
+    r'function|const|let|var)\b|[{};]')
+_CODE_WEAK_LINE_RE = re.compile(
+    r'\b(if|else|for|while|switch|case|return|break|continue|try|except|'
+    r'catch|finally)\b|==|!=|<=|>=|->|=>')
+
 
 @discussion_api.route('/posts', methods=['GET'])
 @login_required
@@ -116,6 +124,25 @@ def _problem_list_error(message: str, status_code: int):
                          'Message': message,
                          'Problems': [],
                      })
+
+
+def _detect_contains_code(content: str) -> bool:
+    if not content:
+        return False
+    if _CODE_BLOCK_MARKER_RE.search(content):
+        return True
+    code_like_lines = 0
+    for line in content.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if _CODE_STRONG_LINE_RE.search(line):
+            return True
+        if _CODE_WEAK_LINE_RE.search(line):
+            code_like_lines += 1
+            if code_like_lines >= 2:
+                return True
+    return False
 
 
 def _filter_problems_by_mode(mode: str, user):
@@ -255,6 +282,8 @@ def create_discussion_post(user):
                                extra={'Post_ID': None})
 
     contains_code = bool(payload.get('Contains_Code', False))
+    if not contains_code:
+        contains_code = _detect_contains_code(content)
     if not _code_sharing_allowed(user, problem_id, contains_code):
         return _error_response(
             'Posting code is not allowed before deadline.',
@@ -307,6 +336,8 @@ def create_discussion_reply(user, post_id: int):
                                extra={'Reply_ID': None})
 
     contains_code = bool(payload.get('Contains_Code', False))
+    if not contains_code:
+        contains_code = _detect_contains_code(content)
     post = engine.DiscussionPost.objects(post_id=post_id).first()
     if not post or post.is_deleted:
         return _error_response('Post not found.',
