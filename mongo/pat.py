@@ -10,8 +10,14 @@ from .user import Role
 __all__ = ['PersonalAccessToken', 'PAT']
 
 
+class _ObjectsProxy:
+
+    def __get__(self, instance, owner):
+        return owner.engine.objects
+
+
 class PersonalAccessToken(MongoBase, engine=engine.PersonalAccessToken):
-    objects = engine.PersonalAccessToken.objects
+    objects = _ObjectsProxy()
 
     @classmethod
     def generate(

@@ -236,7 +236,10 @@ class User(MongoBase, engine=engine.User):
             'secret': secret,
             'data': data
         }
-        return jwt.encode(payload, JWT_SECRET, algorithm='HS256')
+        token = jwt.encode(payload, JWT_SECRET, algorithm='HS256')
+        if isinstance(token, bytes):
+            return token.decode('utf-8')
+        return token
 
     def properties(self, *keys) -> Dict[str, Any]:
         '''
