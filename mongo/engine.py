@@ -626,6 +626,9 @@ class PostThread(Document):
     created = DateTimeField(required=True)
     updated = DateTimeField(required=True)
     status = IntField(default=0, choices=[0, 1])  # not delete / delete
+    pinned = BooleanField(default=False)
+    closed = BooleanField(default=False)
+    solved = BooleanField(default=False)
     reply = ListField(ReferenceField('PostThread', db_field='postThread'),
                       dafault=list)
 

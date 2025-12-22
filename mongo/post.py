@@ -20,6 +20,9 @@ class Post():
             'content': target_thread.markdown,
             'author': target_thread.author.info,
             'status': target_thread.status,
+            'pinned': getattr(target_thread, 'pinned', False),
+            'closed': getattr(target_thread, 'closed', False),
+            'solved': getattr(target_thread, 'solved', False),
             'created': target_thread.created.timestamp(),
             'updated': target_thread.updated.timestamp(),
             'reply': reply_thread
