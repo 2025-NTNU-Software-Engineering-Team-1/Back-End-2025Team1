@@ -3,7 +3,6 @@ from .auth import login_required
 from .utils import HTTPError, HTTPResponse, Request
 from mongo.post import Post
 
-# 必須加上這行，否則 model/__init__.py 會報錯
 __all__ = ['post_api']
 
 post_api = Blueprint('post_api', __name__)
