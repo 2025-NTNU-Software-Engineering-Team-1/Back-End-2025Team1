@@ -80,21 +80,15 @@ def _get_problem_deadline(problem_id):
                 p_deadline = None
     if p_deadline is None:
         try:
-            raw = engine.Problem._get_collection().find_one(
-                {
-                    '_id': problem_id
-                }) or engine.Problem._get_collection().find_one(
-                    {
-                        'problemId': problem_id
-                    })
+            raw = engine.Problem._get_collection().find_one({
+                '_id': problem_id
+            }) or engine.Problem._get_collection().find_one(
+                {'problemId': problem_id})
             if raw is None and isinstance(problem_id, int):
                 raw = engine.Problem._get_collection().find_one(
-                    {
-                        '_id': str(problem_id)
-                    }) or engine.Problem._get_collection().find_one(
-                        {
-                            'problemId': str(problem_id)
-                        })
+                    {'_id': str(problem_id)
+                     }) or engine.Problem._get_collection().find_one(
+                         {'problemId': str(problem_id)})
             if raw:
                 p_deadline = raw.get('deadline') or raw.get('Deadline')
                 if p_deadline is None:
@@ -117,8 +111,8 @@ def _check_deadline_guard(target_course, user, raw_data):
         return None
 
     capability = _course_capability(target_course, user)
-    is_staff = bool(capability &
-                    (Course.Permission.GRADE | Course.Permission.MODIFY))
+    is_staff = bool(capability
+                    & (Course.Permission.GRADE | Course.Permission.MODIFY))
     if is_staff:
         return None
 
@@ -161,8 +155,8 @@ def _check_code_deadline(user, target_course, problem_id, contains_code):
     if deadline is None:
         return None
 
-    now = datetime.now(deadline.tzinfo) if getattr(
-        deadline, 'tzinfo', None) else datetime.now()
+    now = datetime.now(deadline.tzinfo) if getattr(deadline, 'tzinfo',
+                                                   None) else datetime.now()
     if now < deadline:
         return HTTPError('Posting code is not allowed before deadline.', 403)
     return None
