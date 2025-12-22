@@ -121,11 +121,14 @@ def modify_post(user, course, title, content, target_thread_id, contains_code,
             'Request is fail,course and target_thread_id are both none.', 400)
 
     capability = target_course.own_permission(user)
-    if not (capability & Course.Permission.VIEW):
+    if capability == 0:
         return HTTPError('You are not in this course.', 403)
 
     contains_code = _normalize_bool(contains_code) or False
     if request.method == 'POST':
+        if problem_id is None:
+            data = request.get_json(silent=True) or {}
+            problem_id = data.get('problemId') or data.get('Problem_id')
         err = _check_code_deadline(user, target_course, problem_id,
                                    contains_code)
         if err is not None:
@@ -169,7 +172,7 @@ def update_post_status(user, post_id, action):
 
     target_course = Course(target_thread.course_id)
     capability = target_course.own_permission(user)
-    if not (capability & Course.Permission.VIEW):
+    if capability == 0:
         return HTTPError('You are not in this course.', 403)
 
     author = getattr(target_thread, 'author', None)
