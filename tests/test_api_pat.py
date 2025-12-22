@@ -1,10 +1,12 @@
 from mongo import engine, User
 from tests.base_tester import BaseTester
 from tests import utils
+import pytest
 import secrets
 from datetime import datetime
 
 
+@pytest.mark.usefixtures("setup_minio")
 class TestAPIUserIPs(BaseTester):
     """Test /pat/userips/<course_name> endpoint"""
 

@@ -16,6 +16,7 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_TEST_KEY', 'sk-test-key')
 # ==========================================
 # Base Class: Common Setup
 # ==========================================
+@pytest.mark.usefixtures("setup_minio")
 class BaseAiTest:
 
     @pytest.fixture(autouse=True)

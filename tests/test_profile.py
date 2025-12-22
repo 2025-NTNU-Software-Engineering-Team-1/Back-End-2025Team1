@@ -31,6 +31,13 @@ class TestProfile(BaseTester):
         assert json['message'] == 'Uploaded.'
 
     def test_view_without_username(self, client_student):
+        # Setup profile
+        client_student.post('/profile',
+                            json={
+                                'displayedName': 'aisu_0911',
+                                'bio': 'Hello World!'
+                            })
+
         rv = client_student.get('/profile')
         json = rv.get_json()
         assert rv.status_code == 200
@@ -40,6 +47,13 @@ class TestProfile(BaseTester):
         assert json['data']['bio'] == 'Hello World!'
 
     def test_view_with_username(self, client_student):
+        # Setup profile
+        client_student.post('/profile',
+                            json={
+                                'displayedName': 'aisu_0911',
+                                'bio': 'Hello World!'
+                            })
+
         rv = client_student.get('/profile/student')
         json = rv.get_json()
         assert rv.status_code == 200

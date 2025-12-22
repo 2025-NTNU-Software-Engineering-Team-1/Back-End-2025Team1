@@ -16,6 +16,8 @@ from .base_tester import BaseTester
 from .utils import *
 from tests import utils
 
+pytestmark = pytest.mark.usefixtures("setup_minio")
+
 A_NAMES = [
     'teacher',
     'admin',
@@ -54,6 +56,7 @@ def submission_testcase_setup(
     BaseTester.teardown_class()
 
 
+@pytest.mark.usefixtures("setup_minio")
 class SubmissionTester:
     # all submission count
     init_submission_count = 8

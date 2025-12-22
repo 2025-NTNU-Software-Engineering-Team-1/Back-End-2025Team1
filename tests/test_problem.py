@@ -99,6 +99,7 @@ def advanced_pipeline_payload():
     }
 
 
+@pytest.mark.usefixtures("setup_minio")
 class TestProblem(BaseTester):
     # add a problem which status value is invalid (POST /problem/manage)
     def test_add_with_invalid_value(self, client_admin):
@@ -146,6 +147,10 @@ class TestProblem(BaseTester):
 
     # add a problem which problem name is misssing (POST /problem/manage)
     def test_add_with_missing_argument(self, client_admin):
+        try:
+            utils.course.create_course(name='math', teacher=User('admin'))
+        except engine.NotUniqueError:
+            pass
         request_json_with_missing_argument = {
             'courses': ['math'],
             'status': 1,
@@ -418,8 +423,13 @@ class TestProblem(BaseTester):
 
     def test_view_problem_from_invalid_ip(self, client_student, monkeypatch):
         from model.problem import Problem
+        utils.course.create_course(teacher='admin',
+                                   name='math',
+                                   students=['student'])
+        prob = utils.problem.create_problem(course='math', owner='admin')
+
         monkeypatch.setattr(Problem, 'is_valid_ip', lambda *_: False)
-        rv = client_student.get('/problem/4')
+        rv = client_student.get(f'/problem/{prob.id}')
         assert rv.status_code == 403, rv.get_json()
         assert rv.get_json()['message'] == 'Invalid IP address.'
 

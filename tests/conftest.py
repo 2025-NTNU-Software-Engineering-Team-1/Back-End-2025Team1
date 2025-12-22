@@ -12,6 +12,12 @@ import sys
 # This MUST be at the very top of conftest.py
 # =============================================================================
 os.environ['MONGO_HOST'] = 'mongomock://localhost'
+os.environ.pop('REDIS_HOST', None)
+os.environ.pop('REDIS_PORT', None)
+os.environ.pop('SMTP_SERVER', None)
+os.environ.pop('SMTP_NOREPLY', None)
+if (worker_id := os.environ.get('PYTEST_XDIST_WORKER')):
+    os.environ['MINIO_BUCKET'] = f'normal-oj-test-{worker_id}'
 
 from typing import Dict, List, Protocol
 from flask import Flask
@@ -21,6 +27,10 @@ import mongomock.gridfs
 
 from mongo import *
 from mongo import engine
+from mongo import config as mongo_config
+
+if (worker_id := os.environ.get('PYTEST_XDIST_WORKER')):
+    mongo_config.MINIO_BUCKET = f'normal-oj-test-{worker_id}'
 
 import pytest
 import random
@@ -70,8 +80,7 @@ def check_docker():
         pytest.exit(f"Could not check Docker status: {e}", 1)
 
 
-# use a tmp minio for entire test session
-@pytest.fixture(autouse=True, scope='session')
+@pytest.fixture(scope='session')
 def setup_minio():
     with MinioContainer(
             image='quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z') as minio:

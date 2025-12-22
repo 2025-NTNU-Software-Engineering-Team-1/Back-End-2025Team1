@@ -18,9 +18,7 @@ PyJWT = "^2.5"
 requests = "^2.32"
 mosspy = "^1.0"
 redis = "^4.4"
-# <4.9.0 to fix mongomock GridFS integration
-# see: https://github.com/mongomock/mongomock/issues/903
-pymongo = "^4.5.0,<4.9.0"
+pymongo = "^4.5.0"
 minio = "^7.2.15"
 python-ulid = "^3.0.0"
 pydantic = "~1.9"
@@ -31,6 +29,7 @@ package-mode = false
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.1"
+pytest-xdist = "^3.6.1"
 mongomock = "^4.2.0.post1"
 pre-commit = "^4.2.0"
 yapf = "^0.43"

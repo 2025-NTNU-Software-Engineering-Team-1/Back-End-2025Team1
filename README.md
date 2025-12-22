@@ -25,6 +25,12 @@ To ensure everything is set up correctly, run the tests:
 ```bash
 poetry run pytest
 ```
+
+You can also run tests in parallel to speed up the process (e.g., using 4 workers):
+```bash
+poetry run pytest -n 4
+```
+
 All tests should pass (or skip). Create an issue if you found any tests failed.
 
 ### 5. Code Formatting

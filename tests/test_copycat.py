@@ -2,6 +2,7 @@ import pathlib
 from model import *
 from mongo import engine, Problem, User
 from tests.base_tester import BaseTester
+from tests import utils
 
 S_NAMES = {
     'student': 'Chika.Fujiwara',  # base.c base.py
@@ -169,7 +170,12 @@ class TestCopyCat(BaseTester):
         assert rv.get_json()['message'] == 'Forbidden.'
 
     def test_detect_with_problem_does_not_exist(self, client_teacher):
+        try:
+            utils.course.create_course(name='math', teacher=User('teacher'))
+        except engine.NotUniqueError:
+            pass
         course = engine.Course.objects(teacher="teacher").first()
+
         rv = client_teacher.post('/copycat',
                                  json={
                                      'course': course.course_name,
@@ -211,7 +217,13 @@ class TestCopyCat(BaseTester):
         monkeypatch.setattr(copycat, 'get_report_task', mock_get_report_task)
         monkeypatch.setitem(app.config, 'TESTING', False)
         pid = problem_ids("teacher", 1, True)[0]
+
+        try:
+            utils.course.create_course(name='math', teacher=User('teacher'))
+        except engine.NotUniqueError:
+            pass
         course = engine.Course.objects(teacher="teacher").first()
+
         student_dict = {
             'student': 'student',
         }

@@ -14,6 +14,20 @@ from tests import utils
 from tests.conftest import ForgeClient
 
 
+@pytest.fixture
+def test_token():
+    try:
+        utils.user.create_user(username='test', email='test@test.test')
+    except engine.NotUniqueError:
+        pass
+    return User('test').secret
+
+
+@pytest.fixture(autouse=True)
+def clean_db():
+    utils.drop_db()
+
+
 class TestSignup:
     '''Test Signup
     '''
@@ -88,6 +102,10 @@ class TestSignup:
 
     def test_used_username(self, client):
         # Signup with used username
+        try:
+            utils.user.create_user(username='test')
+        except engine.NotUniqueError:
+            pass
         rv = client.post('/auth/signup',
                          json={
                              'username': 'test',
@@ -101,6 +119,10 @@ class TestSignup:
 
     def test_used_email(self, client):
         # Signup with used email
+        try:
+            utils.user.create_user(username='test', email='test@test.test')
+        except engine.NotUniqueError:
+            pass
         rv = client.post('/auth/signup',
                          json={
                              'username': 'test3',
@@ -281,14 +303,21 @@ class TestActive:
         assert rv.status_code == 400, rv.get_json()
         assert rv.get_json()['message'] == 'User Not Exists'
 
-    def test_update_public_course_not_exists(self, client, test_token,
-                                             monkeypatch):
+    def test_update_public_course_not_exists(self, client, monkeypatch):
+        # Create inactive user
+        try:
+            u = User.signup(username='inactive',
+                            password='pwd',
+                            email='inactive@test.test')
+        except engine.ValidationError as e:
+            pytest.fail(f"User.signup failed: {e}")
+        token = u.secret
 
         def raise_public_course_not_exists(*args, **kwargs):
             raise engine.DoesNotExist('Public Course Not Exists')
 
         monkeypatch.setattr(User, 'activate', raise_public_course_not_exists)
-        client.set_cookie('piann', test_token, domain='test.test')
+        client.set_cookie('piann', token, domain='test.test')
         rv = client.post(f'/auth/active',
                          json={
                              'profile': {},
@@ -297,9 +326,25 @@ class TestActive:
         assert rv.status_code == 404, rv.get_json()
         assert rv.get_json()['message'] == 'Public Course Not Exists'
 
-    def test_update(self, client, test_token):
+    def test_update(self, client):
+        # Create Public course
+        try:
+            utils.user.create_user(username='first_admin', role=0)
+        except engine.NotUniqueError:
+            pass
+        try:
+            Course.add_course('Public', 'first_admin')
+        except engine.NotUniqueError:
+            pass
+
+        # Create inactive user
+        u = User.signup(username='inactive',
+                        password='pwd',
+                        email='inactive@test.test')
+        token = u.secret
+
         # Update
-        client.set_cookie('piann', test_token, domain='test.test')
+        client.set_cookie('piann', token, domain='test.test')
         rv = client.post(
             f'/auth/active',
             json={
@@ -360,6 +405,10 @@ class TestPasswordRecovery:
         assert rv.get_json()['message'] == 'User Not Exists'
 
     def test_recovery(self, client):
+        try:
+            utils.user.create_user(username='test', email='test@test.test')
+        except engine.NotUniqueError:
+            pass
         rv = client.post('/auth/password-recovery',
                          json={
                              'email': 'test@test.test',
@@ -373,6 +422,10 @@ class TestPasswordRecovery:
 class TestCheckUser:
 
     def test_name_exists(self, client):
+        try:
+            utils.user.create_user(username='test')
+        except engine.NotUniqueError:
+            pass
         rv = client.post('/auth/check/username', json={'username': 'test'})
         assert rv.status_code == 200, rv.get_json()
         assert rv.get_json()['message'] == 'User Exists'
@@ -386,6 +439,10 @@ class TestCheckUser:
         assert rv.get_json()['data']['valid'] == 1
 
     def test_email_exists(self, client):
+        try:
+            utils.user.create_user(username='test', email='test@test.test')
+        except engine.NotUniqueError:
+            pass
         rv = client.post('/auth/check/email', json={'email': 'test@test.test'})
         assert rv.status_code == 200, rv.get_json()
         assert rv.get_json()['message'] == 'Email Has Been Used'
@@ -415,6 +472,10 @@ class TestResendEmail:
         assert rv.get_json()['message'] == 'User Not Exists'
 
     def test_user_has_been_actived(self, forge_client):
+        try:
+            utils.user.create_user(username='first_admin', role=0)
+        except engine.NotUniqueError:
+            pass
         client = forge_client('first_admin')
         name = secrets.token_hex()[:12]
         password = secrets.token_hex()
@@ -432,6 +493,12 @@ class TestResendEmail:
         assert rv.get_json()['message'] == 'User Has Been Actived'
 
     def test_normal_resend(self, client):
+        try:
+            User.signup(username='test2',
+                        password='test2',
+                        email='test2@test.test')
+        except engine.NotUniqueError:
+            pass
         rv = client.post('/auth/resend-email',
                          json={'email': 'test2@test.test'})
         assert rv.status_code == 200, rv.get_json()
@@ -464,10 +531,16 @@ class TestLogin:
 
     def test_not_active(self, client):
         # Login an inactive user
+        try:
+            User.signup(username='test2',
+                        password='test2_password',
+                        email='test2@test.test')
+        except engine.NotUniqueError:
+            pass
         rv = client.post('/auth/session',
                          json={
                              'username': 'test2',
-                             'password': 'test2'
+                             'password': 'test2_password'
                          })
         json = rv.get_json()
         assert rv.status_code == 403
@@ -476,10 +549,16 @@ class TestLogin:
 
     def test_with_username(self, client):
         # Login with username
+        try:
+            utils.user.create_user(username='test',
+                                   email='test@test.test',
+                                   password='test_password')
+        except engine.NotUniqueError:
+            pass
         rv = client.post('/auth/session',
                          json={
                              'username': 'test',
-                             'password': 'test'
+                             'password': 'test_password'
                          })
         json = rv.get_json()
         assert rv.status_code == 200
@@ -488,10 +567,16 @@ class TestLogin:
 
     def test_with_email(self, client):
         # Login with email
+        try:
+            utils.user.create_user(username='test',
+                                   email='test@test.test',
+                                   password='test_password')
+        except engine.NotUniqueError:
+            pass
         rv = client.post('/auth/session',
                          json={
                              'username': 'test@test.test',
-                             'password': 'test'
+                             'password': 'test_password'
                          })
         json = rv.get_json()
         assert rv.status_code == 200
@@ -516,6 +601,10 @@ class TestLogout:
 def test_get_self_data(client):
     rv = client.get('/auth/me')
     assert rv.status_code == 403
+    try:
+        utils.user.create_user(username='test', email='test@test.test')
+    except engine.NotUniqueError:
+        pass
     test_user = User('test')
     client.set_cookie('piann', test_user.secret, domain='test.test')
     rv = client.get(
