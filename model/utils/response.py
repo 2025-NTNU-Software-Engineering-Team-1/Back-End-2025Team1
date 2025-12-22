@@ -1,4 +1,4 @@
-from flask import jsonify, redirect
+from flask import jsonify, redirect, current_app
 
 __all__ = ['HTTPResponse', 'HTTPRedirect', 'HTTPError']
 
@@ -16,7 +16,21 @@ class HTTPBaseResponese(tuple):
                 resp.delete_cookie(c)
             else:
                 d = c.split('_httponly')
-                resp.set_cookie(d[0], cookies[c], httponly=bool(d[1:]))
+
+                # Default security settings
+                secure_flag = False
+                try:
+                    if current_app.config.get(
+                            'PREFERRED_URL_SCHEME') == 'https':
+                        secure_flag = True
+                except RuntimeError:
+                    pass  # Request context might not be active
+
+                resp.set_cookie(d[0],
+                                cookies[c],
+                                httponly=bool(d[1:]),
+                                samesite='Lax',
+                                secure=secure_flag)
         return super().__new__(tuple, (resp, status_code))
 
 

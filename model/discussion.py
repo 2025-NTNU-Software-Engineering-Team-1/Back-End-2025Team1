@@ -85,13 +85,14 @@ def list_discussion_problems(user):
         current_app.logger.exception('Failed to fetch discussion problems')
         return _err('Failed to fetch problems.', 500)
 
-    return HTTPResponse('Success.', data={
-        'Status': 'OK',
-        'Mode': mode,
-        'Limit': limit,
-        'Page': page,
-        **data,
-    })
+    return HTTPResponse('Success.',
+                        data={
+                            'Status': 'OK',
+                            'Mode': mode,
+                            'Limit': limit,
+                            'Page': page,
+                            **data,
+                        })
 
 
 @discussion_api.route('/problems/<problem_id>/meta', methods=['GET'])
@@ -139,7 +140,10 @@ def create_discussion_post(user):
         return _err('Missing required fields.', 400)
 
     data, err = Discussion.create_post(
-        user, title, content, problem_id,
+        user,
+        title,
+        content,
+        problem_id,
         payload.get('Category', ''),
         payload.get('Language', ''),
         payload.get('Contains_Code', False),
@@ -162,7 +166,9 @@ def create_discussion_reply(user, post_id):
         return _err('Content is required.', 400)
 
     data, err = Discussion.add_reply(
-        user, post_id, content,
+        user,
+        post_id,
+        content,
         payload.get('Reply_To', post_id),
         payload.get('Contains_Code', False),
     )

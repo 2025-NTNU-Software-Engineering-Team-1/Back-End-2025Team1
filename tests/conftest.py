@@ -123,6 +123,21 @@ def app(tmp_path):
     app.config['SERVER_NAME'] = 'test.test'
     mongomock.gridfs.enable_gridfs_integration()
 
+    # Define custom client to auto-inject Origin for CSRF protection
+    from flask.testing import FlaskClient
+
+    class SecureClient(FlaskClient):
+
+        def open(self, *args, **kwargs):
+            env = kwargs.get('environ_base', {})
+            # Inject Origin header if not present
+            if 'HTTP_ORIGIN' not in env:
+                env['HTTP_ORIGIN'] = 'https://test.test'
+            kwargs['environ_base'] = env
+            return super().open(*args, **kwargs)
+
+    app.test_client_class = SecureClient
+
     # modify submission config for testing
     # use tmp dir to save user source code
     submission_tmp_dir = (tmp_path / Submission.config().TMP_DIR).absolute()

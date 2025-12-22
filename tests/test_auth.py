@@ -949,6 +949,190 @@ class TestJWTSecurity:
         assert rv.get_json()['data']['username'] == username
 
 
+class TestMassAssignmentSecurity:
+    '''Test protection against Mass Assignment attacks
+    '''
+
+    def test_login_mass_assignment_attempt(self, client):
+        '''Verify that extra fields in login payload are ignored and do not escalate privileges
+        '''
+        # 1. Create a regular student user
+        username = secrets.token_hex(8)
+        password = secrets.token_hex(8)
+        email = f"{username}@test.test"
+
+        # Create user and ensure they are active. Default role is usually not ADMIN.
+        u = User.signup(username, password, email).activate()
+        original_role = u.role
+
+        # 2. Attempt to login with extra fields trying to escalate to admin (role 0)
+        payload = {
+            "username": username,
+            "password": password,
+            "isadmin": True,
+            "issso": True,
+            "role": 0  # Try to become admin
+        }
+
+        rv = client.post('/auth/session', json=payload)
+
+        # 3. Check response
+        assert rv.status_code == 200  # Login should succeed
+
+        # 4. CRITICAL: Check if the user's role in the database was actually changed
+        u.reload()
+
+        # The role should remain unchanged
+        assert u.role == original_role
+        assert u.role != 0  # Explicitly ensure not admin (unless originally admin, but signup default isn't)
+
+
+class TestCSRFSecurity:
+    '''Test CSRF Protection Mechanisms
+    '''
+
+    def test_csrf_rejection_bad_origin(self, client):
+        '''Verify block on untrusted Origin'''
+        user = User.signup("csrf_user", "pass", "csrf@test.com").activate()
+        client.set_cookie('piann', user.secret, domain='test.test')
+
+        rv = client.post('/auth/active',
+                         json={
+                             'profile': {},
+                             'agreement': True
+                         },
+                         headers={'Origin': 'http://evil.com'})
+        assert rv.status_code == 403, "Should block untrusted Origin"
+
+    def test_csrf_rejection_bad_referer(self, client):
+        '''Verify block on untrusted Referer (when Origin missing)'''
+        user = User.signup("csrf_user2", "pass", "csrf2@test.com").activate()
+        client.set_cookie('piann', user.secret, domain='test.test')
+
+        rv = client.post('/auth/active',
+                         json={
+                             'profile': {},
+                             'agreement': True
+                         },
+                         headers={'Referer': 'http://evil.com/page'},
+                         environ_base={'HTTP_ORIGIN': ''})
+        assert rv.status_code == 403, "Should block untrusted Referer"
+
+    def test_csrf_allow_valid_origin(self, client):
+        '''Verify allow on valid Origin (e.g., from SERVER_NAME)'''
+        user = User.signup("valid_user", "pass", "valid@test.com")
+        client.set_cookie('piann', user.secret, domain='test.test')
+
+        # 'test.test' is set in conftest.py as SERVER_NAME
+        # The CSRF protection checks if SERVER_NAME is in the Origin
+        rv = client.post('/auth/active',
+                         json={
+                             'profile': {
+                                 'displayedName': 'Valid User',
+                                 'bio': 'Test Bio'
+                             },
+                             'agreement': True
+                         },
+                         headers={'Origin': 'https://test.test'})
+        assert rv.status_code == 200, f"Should yield 200 for valid Origin. Got {rv.status_code}, msg: {rv.get_json()}"
+
+    def test_security_headers_presence(self, client):
+        '''Verify security headers are present in response'''
+        rv = client.get('/')
+        assert 'Content-Security-Policy' in rv.headers
+        assert 'X-Content-Type-Options' in rv.headers
+        assert rv.headers['X-Content-Type-Options'] == 'nosniff'
+        assert 'X-Frame-Options' in rv.headers
+        assert rv.headers['X-Frame-Options'] == 'DENY'
+
+    def test_cookie_security(self, client):
+        '''Verify cookies have Secure and SameSite attributes'''
+        # Login to get cookies
+        username = secrets.token_hex(8)
+        password = secrets.token_hex(8)
+        u = User.signup(username, password, f"{username}@test.test").activate()
+
+        rv = client.post('/auth/session',
+                         json={
+                             'username': username,
+                             'password': password
+                         },
+                         headers={'Origin': 'https://test.test'})
+        assert rv.status_code == 200
+
+        # Check Set-Cookie headers
+        # client.cookie_jar stores them, but we want to check the raw header attributes
+        # rv.headers.getlist('Set-Cookie') returns a list of cookie strings
+
+        cookies = rv.headers.getlist('Set-Cookie')
+        assert len(cookies) > 0
+
+        for cookie in cookies:
+            assert 'SameSite=Lax' in cookie, f"Cookie missing SameSite=Lax: {cookie}"
+            assert 'Secure' in cookie, f"Cookie missing Secure: {cookie}"
+
+
+class TestInformationDisclosure:
+    '''Verify that sensitive information is not disclosed
+    '''
+
+    def test_server_header_removed(self, client):
+        '''Verify Server header is removed or sanitized'''
+        rv = client.get('/')
+        # Flask/Werkzeug usually sends 'Server: Werkzeug/x.x.x Python/x.x.x' or similar if not handled.
+        # We explicitly removed it in app.py
+        assert 'Server' not in rv.headers, f"Server header should be removed, found: {rv.headers.get('Server')}"
+
+    def test_404_handler_json(self, client):
+        '''Verify 404 returns JSON and no stack trace'''
+        rv = client.get('/non/existent/path')
+        assert rv.status_code == 404
+        assert rv.is_json
+        data = rv.get_json()
+        assert data['status'] == 'err'
+        assert data['message'] == 'Not Found'
+
+    def test_500_handler_json(self, client):
+        '''Verify 500 returns generic JSON message'''
+        # We need to disable exception propagation to let the error handler catch it
+        client.application.config['PROPAGATE_EXCEPTIONS'] = False
+
+        # We need to force an error.
+        from unittest.mock import patch
+
+        # Patch 'model.auth.User.login' to raise Exception
+        with patch('mongo.user.User.login',
+                   side_effect=Exception("Database Boom")):
+            # Trigger login
+            rv = client.post('/auth/session',
+                             json={
+                                 'username': 'user',
+                                 'password': 'pass'
+                             },
+                             headers={'Origin': 'https://test.test'})
+            # The exception in User.login should be caught by app.errorhandler(500)
+            assert rv.status_code == 500, f"Expected 500, got {rv.status_code}"
+            assert rv.is_json
+            data = rv.get_json()
+            assert data['status'] == 'err'
+            assert data['message'] == 'Internal Server Error'
+            # Ensure no stack trace in message
+            assert 'Database Boom' not in data['message']
+
+
+class TestHSTS:
+    '''Verify Strict-Transport-Security header
+    '''
+
+    def test_hsts_header_presence(self, client):
+        '''Verify HSTS header is present and has correct max-age'''
+        rv = client.get('/')
+        assert 'Strict-Transport-Security' in rv.headers
+        hsts = rv.headers['Strict-Transport-Security']
+        assert 'max-age=31536000' in hsts
+        assert 'includeSubDomains' in hsts
+
+
 def test_verify_link_without_subdirectory(app):
     server_name = '4pi.n0j.tw'
     app.config['SERVER_NAME'] = server_name

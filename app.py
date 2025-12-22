@@ -18,6 +18,11 @@ def app():
     app.config['PREFERRED_URL_SCHEME'] = 'https'
     app.url_map.strict_slashes = False
     setup_smtp(app)
+
+    # Apply security configurations (CSRF, Headers, Error Handlers)
+    from model.utils.security import setup_security
+    setup_security(app)
+
     # Register flask blueprint
     api2prefix = [
         (auth_api, '/auth'),

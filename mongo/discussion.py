@@ -29,13 +29,12 @@ class Discussion:
     def _detect_contains_code(cls, content: str) -> bool:
         if not content:
             return False
-        py_block_re = re.compile(
-            r'(?m)^('
-            r'\s*for\s+\w[\w,\s]*\s+in\s+.+:\s*$'
-            r'|\s*(?:if|elif|while)\s+.+:\s*$'
-            r'|\s*(?:def|class)\s+\w+\s*(?:\(|:).*$'
-            r'|\s*(?:try|except|finally|with)\b.*:\s*$'
-            r')\n[ \t]{2,}\S+')
+        py_block_re = re.compile(r'(?m)^('
+                                 r'\s*for\s+\w[\w,\s]*\s+in\s+.+:\s*$'
+                                 r'|\s*(?:if|elif|while)\s+.+:\s*$'
+                                 r'|\s*(?:def|class)\s+\w+\s*(?:\(|:).*$'
+                                 r'|\s*(?:try|except|finally|with)\b.*:\s*$'
+                                 r')\n[ \t]{2,}\S+')
         if py_block_re.search(content):
             return True
         if _CODE_BLOCK_MARKER_RE.search(content):
@@ -108,7 +107,11 @@ class Discussion:
         }
 
     @classmethod
-    def get_feed(cls, user, mode: str, limit: int, page: int,
+    def get_feed(cls,
+                 user,
+                 mode: str,
+                 limit: int,
+                 page: int,
                  problem_id: str = None) -> Dict:
         allowed_ids = cls._get_viewable_problem_ids(user)
 
@@ -130,18 +133,15 @@ class Discussion:
         posts_list = None
         if mode == 'Hot':
             posts_list = list(queryset)
-            posts_list.sort(
-                key=lambda p: (
-                    -int(p.is_pinned or False),
-                    -(p.like_count or 0) - (p.reply_count or 0),
-                    -p.created_time.timestamp(),
-                    -int(p.post_id),
-                ),
-            )
+            posts_list.sort(key=lambda p: (
+                -int(p.is_pinned or False),
+                -(p.like_count or 0) - (p.reply_count or 0),
+                -p.created_time.timestamp(),
+                -int(p.post_id),
+            ), )
         else:
             # New: Pinned DESC, Created DESC, ID DESC
-            queryset = queryset.order_by('-is_pinned',
-                                         '-created_time',
+            queryset = queryset.order_by('-is_pinned', '-created_time',
                                          '-post_id')
 
         total = len(posts_list) if posts_list is not None else queryset.count()
@@ -181,7 +181,8 @@ class Discussion:
         docs = queryset.order_by('problem_id').skip(skip).limit(limit)
 
         return {
-            'Total': total,
+            'Total':
+            total,
             'Problems': [{
                 'Problem_Id': doc.problem_id,
                 'Problem_Name': doc.problem_name,
@@ -202,8 +203,8 @@ class Discussion:
             pass
 
     @classmethod
-    def _check_code_deadline(cls, problem, user
-                             ) -> Tuple[str, bool, Optional[datetime]]:
+    def _check_code_deadline(cls, problem,
+                             user) -> Tuple[str, bool, Optional[datetime]]:
         """回傳 (role_label, code_allowed, deadline)"""
         # 1. Role Check
         role_label = 'student'
@@ -263,8 +264,8 @@ class Discussion:
         return role_label, code_allowed, deadline
 
     @classmethod
-    def get_problem_meta(cls, user, problem_id
-                         ) -> Tuple[Optional[Dict], Optional[str]]:
+    def get_problem_meta(cls, user,
+                         problem_id) -> Tuple[Optional[Dict], Optional[str]]:
         try:
             pid = int(str(problem_id).strip())
         except ValueError:
@@ -298,12 +299,11 @@ class Discussion:
                 pid = int(problem_id)
                 problem = engine.Problem.objects(problem_id=pid).first()
                 if problem:
-                    _, code_allowed, _ = cls._check_code_deadline(problem,
-                                                                  user)
+                    _, code_allowed, _ = cls._check_code_deadline(
+                        problem, user)
                     if not code_allowed:
                         return None, (
-                            'Posting code is not allowed before deadline.'
-                        )
+                            'Posting code is not allowed before deadline.')
             except ValueError:
                 pass
 
@@ -337,12 +337,12 @@ class Discussion:
 
         matches = []
         for post in queryset:
-            if pattern.search(post.title or '') or pattern.search(
-                    post.content or ''):
+            if pattern.search(post.title or '') or pattern.search(post.content
+                                                                  or ''):
                 matches.append({
                     # Sort Key: Time DESC, ID DESC (stable tie-breaker)
-                    'sort_key': (post.created_time.timestamp(),
-                                 int(post.post_id)),
+                    'sort_key':
+                    (post.created_time.timestamp(), int(post.post_id)),
                     'data': {
                         'Post_Id': post.post_id,
                         'Author': post.author.username if post.author else '',
@@ -416,12 +416,11 @@ class Discussion:
                 pid = int(post.problem_id)
                 problem = engine.Problem.objects(problem_id=pid).first()
                 if problem:
-                    _, code_allowed, _ = cls._check_code_deadline(problem,
-                                                                  user)
+                    _, code_allowed, _ = cls._check_code_deadline(
+                        problem, user)
                     if not code_allowed:
                         return None, (
-                            'Posting code is not allowed before deadline.'
-                        )
+                            'Posting code is not allowed before deadline.')
             except ValueError:
                 pass
 
@@ -463,8 +462,9 @@ class Discussion:
         if target_id == post_id:
             target = post
         else:
-            target = engine.DiscussionReply.objects(
-                post=post, reply_id=target_id, is_deleted=False).first()
+            target = engine.DiscussionReply.objects(post=post,
+                                                    reply_id=target_id,
+                                                    is_deleted=False).first()
             target_type = 'reply'
 
         if not target:
@@ -561,8 +561,8 @@ class Discussion:
             return {'Message': 'Post deleted.'}, None
 
         if target_type == 'reply':
-            reply = engine.DiscussionReply.objects(
-                post=post, reply_id=target_id).first()
+            reply = engine.DiscussionReply.objects(post=post,
+                                                   reply_id=target_id).first()
             if not reply or reply.is_deleted:
                 return None, 'Reply not found.'
 

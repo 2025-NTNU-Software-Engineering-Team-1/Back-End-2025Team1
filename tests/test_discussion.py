@@ -15,8 +15,8 @@ class TestDiscussion(BaseTester):
         engine.DiscussionLog.drop_collection()
 
     def _assert_discussion_log(self, action, username, target_id):
-        log = engine.DiscussionLog.objects(action=action).order_by(
-            '-timestamp').first()
+        log = engine.DiscussionLog.objects(
+            action=action).order_by('-timestamp').first()
         assert log is not None
         assert log.user.username == username
         assert log.target_id == str(target_id)
@@ -357,7 +357,9 @@ class TestDiscussion(BaseTester):
             rv = client.get('/discussion/problems')
             payload = rv.get_json()
             assert rv.status_code == 200, payload
-            problem_ids = [p['Problem_Id'] for p in payload['data']['Problems']]
+            problem_ids = [
+                p['Problem_Id'] for p in payload['data']['Problems']
+            ]
             assert visible.problem_id in problem_ids
             assert hidden.problem_id not in problem_ids
         finally:
@@ -597,7 +599,7 @@ class TestDiscussion(BaseTester):
 
     def test_create_discussion_post_code_detected_blocked(
             self, forge_client, monkeypatch):
-        
+
         def fake_check(problem, user):
             return 'student', False, None
 
@@ -704,6 +706,7 @@ class TestDiscussion(BaseTester):
 
     def test_reply_discussion_post_code_blocked(self, forge_client,
                                                 monkeypatch):
+
         def fake_check(problem, user):
             return 'student', False, None
 
@@ -722,6 +725,7 @@ class TestDiscussion(BaseTester):
 
     def test_reply_discussion_post_code_detected_blocked(
             self, forge_client, monkeypatch):
+
         def fake_check(problem, user):
             return 'student', False, None
 
@@ -919,7 +923,9 @@ class TestDiscussion(BaseTester):
         deadline = datetime.now() + timedelta(days=1)
         engine.Problem._get_collection().update_one(
             {'_id': problem.id},
-            {'$set': {'deadline': deadline}},
+            {'$set': {
+                'deadline': deadline
+            }},
         )
         payload = {
             'Title': 'Code Post',
