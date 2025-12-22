@@ -7,8 +7,6 @@ import sys
 sys.path.insert(0, '/app')
 
 from mongo import engine
-from mongo.problem import Problem
-
 # Find and update the existing problem
 p = engine.Problem.objects(problem_name__contains='Trial Test').first()
 if p:

@@ -1522,10 +1522,9 @@ def request_trial_submission(user,
     problem = problem_proxy
     # Backward compatibility for clients sending legacy key casing.
     data = request.get_json(silent=True) or {}
-    if "Use_Default_Test_Cases" in data:
-        use_default_test_cases = data.get("Use_Default_Test_Cases")
-    elif "use_default_test_cases" in data:
-        use_default_test_cases = data.get("use_default_test_cases")
+    use_default_test_cases = data.get(
+        "Use_Default_Test_Cases",
+        data.get("use_default_test_cases", use_default_test_cases))
 
     # Validate language type (0: C, 1: C++, 2: Python)
     if language_type not in [0, 1, 2]:

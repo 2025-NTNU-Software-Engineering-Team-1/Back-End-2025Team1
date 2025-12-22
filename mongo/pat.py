@@ -11,12 +11,14 @@ __all__ = ['PersonalAccessToken', 'PAT']
 
 
 class _ObjectsProxy:
+    """Expose engine.objects on the wrapper class; only used here for PATs."""
 
     def __get__(self, instance, owner):
         return owner.engine.objects
 
 
 class PersonalAccessToken(MongoBase, engine=engine.PersonalAccessToken):
+    # Expose the engine's objects for direct querying on this wrapper.
     objects = _ObjectsProxy()
 
     @classmethod

@@ -101,13 +101,8 @@ def _get_problem_deadline(problem_id):
     return p_deadline
 
 
-def _check_deadline_guard(target_course, user, raw_data):
-    raw_id = (raw_data.get('problemId') or raw_data.get('Problem_id')
-              or raw_data.get('problem_id'))
-    actual_contains_code = (str(raw_data.get('Contains_Code', '')).lower()
-                            == 'true' or raw_data.get('Contains_Code') is True
-                            or raw_data.get('contains_code') is True)
-    if not (actual_contains_code and raw_id):
+def _check_deadline_guard(target_course, user, contains_code, problem_id):
+    if not (contains_code and problem_id):
         return None
 
     capability = _course_capability(target_course, user)
@@ -116,42 +111,7 @@ def _check_deadline_guard(target_course, user, raw_data):
     if is_staff:
         return None
 
-    try:
-        query_id = int(raw_id)
-    except (ValueError, TypeError):
-        query_id = raw_id
-
-    deadline = _get_problem_deadline(query_id)
-    if deadline is None:
-        return None
-
-    now = datetime.now(deadline.tzinfo) if getattr(deadline, 'tzinfo',
-                                                   None) else datetime.now()
-    if now < deadline:
-        return HTTPError('Posting code is not allowed before deadline.', 403)
-    return None
-
-
-def _check_code_deadline(user, target_course, problem_id, contains_code):
-    if not contains_code:
-        return None
-
-    capability = target_course.own_permission(user)
-    if capability & (Course.Permission.GRADE | Course.Permission.MODIFY):
-        return None
-
-    if problem_id is None:
-        return HTTPError('problemId is required when Contains_Code is true.',
-                         400)
-
-    if isinstance(problem_id, str) and problem_id.isdigit():
-        problem_id = int(problem_id)
-
-    problem = Problem(problem_id)
-    if not problem:
-        return HTTPError('Problem not found.', 404)
-
-    deadline = getattr(problem.obj, 'deadline', None)
+    deadline = _get_problem_deadline(problem_id)
     if deadline is None:
         return None
 
@@ -201,11 +161,10 @@ def modify_post(user, course, title, content, target_thread_id, contains_code,
         return HTTPError('You are not in this course.', 403)
 
     if request.method == 'POST':
-        raw_data = request.get_json(silent=True) or {}
-        err = _check_deadline_guard(target_course, user, raw_data)
+        err = _check_deadline_guard(target_course, user, contains_code,
+                                    problem_id)
         if err is not None:
             return err
-    if request.method == 'POST':
         # add reply
         if course:
             r = Post.add_post(course, user, content, title)
@@ -248,8 +207,6 @@ def update_post_status(user, post_id, action):
         return HTTPError('You are not in this course.', 403)
 
     author = getattr(target_thread, 'author', None)
-    is_author = bool(author
-                     and getattr(author, 'username', None) == user.username)
     is_staff = user.role in (engine.User.Role.ADMIN, engine.User.Role.TEACHER,
                              engine.User.Role.TA)
     if not is_staff:

@@ -5,7 +5,6 @@ IMPORTANT: This module forces the use of mongomock (in-memory database)
 for all tests, ensuring that tests NEVER touch the real MongoDB database.
 """
 import os
-import sys
 
 # =============================================================================
 # CRITICAL: Force mongomock BEFORE any mongo module is imported

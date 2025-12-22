@@ -6,6 +6,7 @@ import mongomock
 from flask.testing import FlaskClient
 from mongo import *
 from mongoengine import connect, disconnect
+from . import conftest
 
 
 def random_string(k=None):
@@ -93,6 +94,3 @@ class BaseTester:
         else:
             rv_data = None
         return rv, rv_json, rv_data
-
-
-from .conftest import *

@@ -51,7 +51,7 @@ def create_test_users():
             user_id = hash_id(user_data["username"], user_data["password"])
             email = user_data["email"].lower().strip()
 
-            user = engine.User(
+            engine.User(
                 user_id=user_id,
                 user_id2=user_id,
                 username=user_data["username"],
