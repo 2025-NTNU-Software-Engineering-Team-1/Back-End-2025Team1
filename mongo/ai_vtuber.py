@@ -1,7 +1,6 @@
 from datetime import datetime
 from . import engine
 from .base import MongoBase
-from .course import Course
 
 __all__ = [
     'AiModel',
@@ -18,6 +17,9 @@ class AiModel(MongoBase, engine=engine.AiModel):
 
     def __init__(self, name):
         self.obj = self.engine.objects(name=name).first()
+
+    def __eq__(self, other):
+        return super().__eq__(other)
 
     @property
     def rpm_limit(self):
@@ -84,7 +86,13 @@ class AiApiKey(MongoBase, engine=engine.AiApiKey):
     """
 
     def __init__(self, key_id):
-        self.obj = self.engine.objects(id=key_id).first()
+        # MongoBase.__new__ handles setting self.obj if key_id is a document or valid PK
+        # We only need to manual query if self.obj wasn't set or is an empty/new doc
+        if not getattr(self, 'obj', None) or not self.obj.id:
+            self.obj = self.engine.objects(id=key_id).first()
+
+    def __eq__(self, other):
+        return super().__eq__(other)
 
     @classmethod
     def get_active_keys_by_course_name(cls, course_name: str):

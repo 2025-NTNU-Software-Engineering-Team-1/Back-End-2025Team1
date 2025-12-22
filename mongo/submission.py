@@ -1016,7 +1016,13 @@ class Submission(MongoBase, BaseSubmission, engine=engine.Submission):
     '''
 
     def __init__(self, submission_id):
+        # MongoBase.__new__ handles setting self.obj if submission_id is a document or valid PK
+        if not getattr(self, 'obj', None) or not self.obj.id:
+            self.obj = self.engine.objects(id=submission_id).first()
         self.submission_id = str(submission_id)
+
+    def __eq__(self, other):
+        return super().__eq__(other)
 
     def __str__(self):
         return f'submission [{self.submission_id}]'
@@ -1465,7 +1471,13 @@ class TrialSubmission(MongoBase, BaseSubmission,
     '''
 
     def __init__(self, submission_id):
+        # MongoBase.__new__ handles setting self.obj if submission_id is a document or valid PK
+        if not getattr(self, 'obj', None) or not self.obj.id:
+            self.obj = self.engine.objects(id=submission_id).first()
         self.submission_id = str(submission_id)
+
+    def __eq__(self, other):
+        return super().__eq__(other)
 
     def __str__(self):
         return f'trial_submission [{self.submission_id}]'
@@ -1496,7 +1508,6 @@ class TrialSubmission(MongoBase, BaseSubmission,
 
         # No User.add_submission()
         # No Homework.student_status update
-        pass
 
     def submit(self,
                code_file,

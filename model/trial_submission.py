@@ -9,11 +9,14 @@ from mongo.user import User, Role
 from mongo.utils import MinioClient
 from mongo import engine
 from werkzeug.datastructures import FileStorage
-from zipfile import is_zipfile
 import zipfile
 
 __all__ = ["trial_submission_api"]
 trial_submission_api = Blueprint("trial_submission_api", __name__)
+
+
+def is_zipfile(file):
+    return zipfile.is_zipfile(file)
 
 
 @trial_submission_api.route("/test", methods=["GET"])
@@ -109,7 +112,6 @@ def upload_trial_files(user, trial_id: str):
     except Exception as e:
         current_app.logger.error(
             f"Error retrieving owner for trial_id {trial_id}: {str(e)}")
-        pass
 
     is_owner = (req_user.username == ts_owner_username)
     is_staff = req_user.role <= 1  # 0 admin, 1 teacher

@@ -2,7 +2,6 @@ import json
 import requests
 import re
 from mongo import AiApiKey, AiApiLog, AiTokenUsage, Course, Problem, Submission
-from .request import HTTPError
 from flask import current_app
 from mongo.engine import DEFAULT_AI_MODEL
 

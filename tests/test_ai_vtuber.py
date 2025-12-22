@@ -1,5 +1,4 @@
 import pytest
-import json
 import os
 from unittest.mock import patch
 from mongo import engine, AiApiKey

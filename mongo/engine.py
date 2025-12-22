@@ -435,7 +435,6 @@ class Problem(Document):
         max_length=10**4,
         default='',
     )
-    meta = {'strict': False}
 
     # === Test Mode Fields ===
     test_mode_enabled = BooleanField(db_field='testModeEnabled', default=False)
@@ -829,11 +828,8 @@ class AiApiKey(Document):
     last_reset_date = DateTimeField(default=datetime.now,
                                     db_field='lastResetDate')
     created_by = ReferenceField('User', db_field='createdBy', required=True)
-    meta = {'collection': 'ai_api_key'}
     created_at = DateTimeField(default=datetime.now, db_field='createdAt')
     updated_at = DateTimeField(default=datetime.now, db_field='updatedAt')
-    created_by = ReferenceField('User', db_field='createdBy', required=True)
-    is_active = BooleanField(db_field='isActive', default=True)
     meta = {
         'collection': 'ai_api_key',
         'indexes': [{

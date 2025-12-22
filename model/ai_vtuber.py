@@ -1,5 +1,4 @@
-from flask import Blueprint, request, current_app
-import json
+from flask import Blueprint, current_app
 
 from mongo import *
 from model.auth import login_required
