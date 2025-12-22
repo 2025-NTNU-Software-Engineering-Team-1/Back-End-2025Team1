@@ -49,6 +49,95 @@ def _normalize_bool(value):
     return None
 
 
+def _course_capability(target_course, user):
+    user_ref = getattr(user, 'obj', user)
+    return target_course.own_permission(user_ref)
+
+
+def _get_problem_deadline(problem_id):
+    if isinstance(problem_id, str) and problem_id.isdigit():
+        problem_id = int(problem_id)
+
+    p_obj = engine.Problem.objects(problem_id=problem_id).first()
+    if p_obj is None:
+        p_obj = engine.Problem.objects(pk=problem_id).first()
+    if p_obj is None and isinstance(problem_id, int):
+        p_obj = engine.Problem.objects(problem_id=str(problem_id)).first()
+    if p_obj is None and isinstance(problem_id, int):
+        p_obj = engine.Problem.objects(pk=str(problem_id)).first()
+    p_deadline = None
+    if p_obj is not None:
+        p_deadline = getattr(p_obj, 'deadline', None) or getattr(
+            p_obj, 'Deadline', None)
+        if p_deadline is None and hasattr(p_obj, '_data'):
+            p_deadline = p_obj._data.get('deadline') or p_obj._data.get(
+                'Deadline')
+        if p_deadline is None:
+            try:
+                p_deadline = p_obj.to_mongo().get(
+                    'deadline') or p_obj.to_mongo().get('Deadline')
+            except Exception:
+                p_deadline = None
+    if p_deadline is None:
+        try:
+            raw = engine.Problem._get_collection().find_one(
+                {
+                    '_id': problem_id
+                }) or engine.Problem._get_collection().find_one(
+                    {
+                        'problemId': problem_id
+                    })
+            if raw is None and isinstance(problem_id, int):
+                raw = engine.Problem._get_collection().find_one(
+                    {
+                        '_id': str(problem_id)
+                    }) or engine.Problem._get_collection().find_one(
+                        {
+                            'problemId': str(problem_id)
+                        })
+            if raw:
+                p_deadline = raw.get('deadline') or raw.get('Deadline')
+                if p_deadline is None:
+                    for key, value in raw.items():
+                        if isinstance(key, str) and key.lower() == 'deadline':
+                            p_deadline = value
+                            break
+        except Exception:
+            p_deadline = None
+    return p_deadline
+
+
+def _check_deadline_guard(target_course, user, raw_data):
+    raw_id = (raw_data.get('problemId') or raw_data.get('Problem_id')
+              or raw_data.get('problem_id'))
+    actual_contains_code = (str(raw_data.get('Contains_Code', '')).lower()
+                            == 'true' or raw_data.get('Contains_Code') is True
+                            or raw_data.get('contains_code') is True)
+    if not (actual_contains_code and raw_id):
+        return None
+
+    capability = _course_capability(target_course, user)
+    is_staff = bool(capability &
+                    (Course.Permission.GRADE | Course.Permission.MODIFY))
+    if is_staff:
+        return None
+
+    try:
+        query_id = int(raw_id)
+    except (ValueError, TypeError):
+        query_id = raw_id
+
+    deadline = _get_problem_deadline(query_id)
+    if deadline is None:
+        return None
+
+    now = datetime.now(deadline.tzinfo) if getattr(deadline, 'tzinfo',
+                                                   None) else datetime.now()
+    if now < deadline:
+        return HTTPError('Posting code is not allowed before deadline.', 403)
+    return None
+
+
 def _check_code_deadline(user, target_course, problem_id, contains_code):
     if not contains_code:
         return None
@@ -69,18 +158,11 @@ def _check_code_deadline(user, target_course, problem_id, contains_code):
         return HTTPError('Problem not found.', 404)
 
     deadline = getattr(problem.obj, 'deadline', None)
-    if deadline is None and getattr(problem.obj, 'homeworks', None):
-        for hw in problem.obj.homeworks:
-            hw_end = getattr(getattr(hw, 'duration', None), 'end', None)
-            if hw_end is not None:
-                deadline = hw_end
-                break
-
     if deadline is None:
         return None
 
-    now = datetime.now(deadline.tzinfo) if getattr(deadline, 'tzinfo',
-                                                   None) else datetime.now()
+    now = datetime.now(deadline.tzinfo) if getattr(
+        deadline, 'tzinfo', None) else datetime.now()
     if now < deadline:
         return HTTPError('Posting code is not allowed before deadline.', 403)
     return None
@@ -120,17 +202,13 @@ def modify_post(user, course, title, content, target_thread_id, contains_code,
         return HTTPError(
             'Request is fail,course and target_thread_id are both none.', 400)
 
-    capability = target_course.own_permission(user)
-    if capability == 0:
+    capability = _course_capability(target_course, user)
+    if capability <= 0:
         return HTTPError('You are not in this course.', 403)
 
-    contains_code = _normalize_bool(contains_code) or False
     if request.method == 'POST':
-        if problem_id is None:
-            data = request.get_json(silent=True) or {}
-            problem_id = data.get('problemId') or data.get('Problem_id')
-        err = _check_code_deadline(user, target_course, problem_id,
-                                   contains_code)
+        raw_data = request.get_json(silent=True) or {}
+        err = _check_deadline_guard(target_course, user, raw_data)
         if err is not None:
             return err
     if request.method == 'POST':
@@ -171,17 +249,16 @@ def update_post_status(user, post_id, action):
         target_thread = target_post.thread
 
     target_course = Course(target_thread.course_id)
-    capability = target_course.own_permission(user)
-    if capability == 0:
+    capability = _course_capability(target_course, user)
+    if capability <= 0:
         return HTTPError('You are not in this course.', 403)
 
     author = getattr(target_thread, 'author', None)
     is_author = bool(author
                      and getattr(author, 'username', None) == user.username)
-    can_manage = is_author or bool(capability
-                                   & Course.Permission.GRADE) or bool(
-                                       capability & Course.Permission.MODIFY)
-    if not can_manage:
+    is_staff = user.role in (engine.User.Role.ADMIN, engine.User.Role.TEACHER,
+                             engine.User.Role.TA)
+    if not is_staff:
         return HTTPError('Forbidden, you don\'t have enough permission.', 403)
 
     action = action.upper()

@@ -404,6 +404,7 @@ class Problem(Document):
     ac_user = IntField(db_field='ACUser', default=0)
     submitter = IntField(default=0)
     homeworks = ListField(ReferenceField('Homework'), default=list)
+    deadline = DateTimeField(required=False, db_field='deadline')
     # user can view stdout/stderr
     can_view_stdout = BooleanField(db_field='canViewStdout', default=True)
     cpp_report_url = StringField(
