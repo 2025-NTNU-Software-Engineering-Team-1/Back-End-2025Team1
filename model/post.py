@@ -79,8 +79,8 @@ def _check_code_deadline(user, target_course, problem_id, contains_code):
     if deadline is None:
         return None
 
-    now = datetime.now(deadline.tzinfo) if getattr(
-        deadline, 'tzinfo', None) else datetime.now()
+    now = datetime.now(deadline.tzinfo) if getattr(deadline, 'tzinfo',
+                                                   None) else datetime.now()
     if now < deadline:
         return HTTPError('Posting code is not allowed before deadline.', 403)
     return None
@@ -173,10 +173,11 @@ def update_post_status(user, post_id, action):
         return HTTPError('You are not in this course.', 403)
 
     author = getattr(target_thread, 'author', None)
-    is_author = bool(author and getattr(author, 'username', None)
-                     == user.username)
-    can_manage = is_author or bool(capability & Course.Permission.GRADE) or bool(
-        capability & Course.Permission.MODIFY)
+    is_author = bool(author
+                     and getattr(author, 'username', None) == user.username)
+    can_manage = is_author or bool(capability
+                                   & Course.Permission.GRADE) or bool(
+                                       capability & Course.Permission.MODIFY)
     if not can_manage:
         return HTTPError('Forbidden, you don\'t have enough permission.', 403)
 

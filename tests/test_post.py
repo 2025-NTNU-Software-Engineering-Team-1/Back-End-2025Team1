@@ -280,12 +280,10 @@ class TestPost(BaseTester):
         post_id = rvget.get_json()['data'][0]['thread']['id']
 
         client_ta = forge_client(ta_user.username)
-        rv = client_ta.put(f'/post/status/{post_id}',
-                           json={'Action': 'PIN'})
+        rv = client_ta.put(f'/post/status/{post_id}', json={'Action': 'PIN'})
         assert rv.status_code == 200, rv.get_json()
 
-        rv = client_ta.put(f'/post/status/{post_id}',
-                           json={'Action': 'CLOSE'})
+        rv = client_ta.put(f'/post/status/{post_id}', json={'Action': 'CLOSE'})
         assert rv.status_code == 200, rv.get_json()
 
         thread = engine.PostThread.objects.get(id=post_id)
@@ -329,8 +327,8 @@ class TestPost(BaseTester):
                                  })
         assert rv.status_code == 403, rv.get_json()
 
-    def test_post_with_code_before_deadline_ta_exempt(
-            self, forge_client, make_course):
+    def test_post_with_code_before_deadline_ta_exempt(self, forge_client,
+                                                      make_course):
         ta_user = utils.user.create_user(role=engine.User.Role.TA)
         c_data = make_course('teacher',
                              students={'student': 'student'},
