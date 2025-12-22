@@ -1,14 +1,11 @@
 import secrets
 import typing
-from typing import Literal, Tuple, Dict, Any, Union
-import mongomock
-from mongoengine import connect
-from mongo import *
-from flask.testing import FlaskClient
-from .conftest import *
+from typing import Any, Dict, Literal, Tuple, Union
 
-if typing.TYPE_CHECKING:
-    from flask.testing import TestResponse
+import mongomock
+from flask.testing import FlaskClient
+from mongo import *
+from mongoengine import connect, disconnect
 
 
 def random_string(k=None):
@@ -35,6 +32,8 @@ class BaseTester:
 
     @classmethod
     def drop_db(cls):
+        # Disconnect any existing connections first
+        disconnect(alias='default')
         conn = connect(
             cls.DB,
             host=cls.MONGO_HOST,
@@ -94,3 +93,6 @@ class BaseTester:
         else:
             rv_data = None
         return rv, rv_json, rv_data
+
+
+from .conftest import *

@@ -1755,7 +1755,7 @@ class TestTrialSubmissionAPI(BaseTester):
         rv = client.post('/problem/999999/trial/request',
                          json={
                              'languageType': 2,
-                             'Use_Default_Test_Cases': True
+                             'use_default_test_cases': True
                          })
         assert rv.status_code == 404
         assert 'Problem not found' in rv.get_json()['message']

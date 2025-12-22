@@ -1,4 +1,5 @@
 import mongomock
+from mongoengine import disconnect
 
 from mongo import *
 from mongo import engine
@@ -60,5 +61,7 @@ def drop_db(
     host: str = 'mongodb://localhost',
     db: str = 'normal-oj',
 ):
+    # Disconnect any existing connections first
+    disconnect(alias='default')
     conn = connect(db, host=host, mongo_client_class=mongomock.MongoClient)
     conn.drop_database(db)

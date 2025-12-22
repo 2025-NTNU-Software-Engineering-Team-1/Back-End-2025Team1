@@ -19,14 +19,25 @@ def app():
     app.url_map.strict_slashes = False
     setup_smtp(app)
     # Register flask blueprint
-    api2prefix = [(auth_api, '/auth'), (profile_api, '/profile'),
-                  (problem_api, '/problem'), (submission_api, '/submission'),
-                  (course_api, '/course'), (homework_api, '/homework'),
-                  (test_api, '/test'), (ann_api, '/ann'),
-                  (ranking_api, '/ranking'), (post_api, '/post'),
-                  (copycat_api, '/copycat'), (health_api, '/health'),
-                  (user_api, '/user'), (pat_api, '/pat'),
-                  (trial_submission_api, '/trial-submission'), (ai_api, '/ai')]
+    api2prefix = [
+        (auth_api, '/auth'),
+        (profile_api, '/profile'),
+        (problem_api, '/problem'),
+        (submission_api, '/submission'),
+        (course_api, '/course'),
+        (homework_api, '/homework'),
+        (test_api, '/test'),
+        (ann_api, '/ann'),
+        (ranking_api, '/ranking'),
+        (post_api, '/post'),
+        (discussion_api, '/discussion'),
+        (copycat_api, '/copycat'),
+        (health_api, '/health'),
+        (user_api, '/user'),
+        (pat_api, '/pat'),
+        (trial_submission_api, '/trial-submission'),
+        (ai_api, '/ai'),
+    ]
     for api, prefix in api2prefix:
         app.register_blueprint(api, url_prefix=prefix)
 

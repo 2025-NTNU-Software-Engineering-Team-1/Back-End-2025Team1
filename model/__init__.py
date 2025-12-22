@@ -8,6 +8,7 @@ from . import announcement
 from . import test
 from . import ranking
 from . import post
+from . import discussion
 from . import copycat
 from . import health
 from . import user
@@ -25,6 +26,7 @@ from .announcement import *
 from .test import *
 from .ranking import *
 from .post import *
+from .discussion import *
 from .copycat import *
 from .health import *
 from .user import *
@@ -43,6 +45,7 @@ __all__ = [
     *announcement.__all__,
     *ranking.__all__,
     *post.__all__,
+    *discussion.__all__,
     *copycat.__all__,
     *health.__all__,
     *user.__all__,

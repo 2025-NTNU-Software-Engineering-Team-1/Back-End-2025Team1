@@ -726,6 +726,203 @@ def get_checksum(token: str, problem_id: int):
     return HTTPResponse(data=digest)
 
 
+# === Trial Mode APIs for Sandbox ===
+
+
+@problem_api.route('/<int:problem_id>/public-testdata', methods=['GET'])
+@Request.args('token: str')
+def get_public_testdata(token: str, problem_id: int):
+    """Download public test cases ZIP for Trial Mode (sandbox only)."""
+    if sandbox.find_by_token(token) is None:
+        return HTTPError('Invalid sandbox token', 401)
+    problem = Problem(problem_id)
+    if not problem:
+        return HTTPError(f'Problem {problem_id} not found', 404)
+
+    # Check if test mode is enabled
+    if not getattr(problem.obj, 'test_mode_enabled', False):
+        return HTTPError('Test mode is not enabled for this problem', 403)
+
+    # Try MinIO path first
+    minio_path = getattr(problem.obj, 'public_cases_zip_minio_path', None)
+    if minio_path:
+        minio_client = MinioClient()
+        try:
+            resp = minio_client.client.get_object(
+                minio_client.bucket,
+                minio_path,
+            )
+            return send_file(
+                BytesIO(resp.read()),
+                mimetype='application/zip',
+                as_attachment=True,
+                download_name=f'public-testdata-{problem_id}.zip',
+            )
+        except Exception as exc:
+            current_app.logger.error(
+                f'Failed to fetch public testdata from MinIO: {exc}')
+            return HTTPError(f'Failed to fetch public testdata: {exc}', 500)
+        finally:
+            if 'resp' in locals():
+                resp.close()
+                resp.release_conn()
+
+    # Fallback to GridFS
+    public_cases_zip = getattr(problem.obj, 'public_cases_zip', None)
+    if public_cases_zip and public_cases_zip.grid_id:
+        return send_file(
+            public_cases_zip,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=f'public-testdata-{problem_id}.zip',
+        )
+
+    return HTTPError('Public test cases not found', 404)
+
+
+@problem_api.route('/<int:problem_id>/public-checksum', methods=['GET'])
+@Request.args('token: str')
+def get_public_checksum(token: str, problem_id: int):
+    """Get checksum of public test cases for cache validation (sandbox only)."""
+    if sandbox.find_by_token(token) is None:
+        return HTTPError('Invalid sandbox token', 401)
+    problem = Problem(problem_id)
+    if not problem:
+        return HTTPError(f'Problem {problem_id} not found', 404)
+
+    if not getattr(problem.obj, 'test_mode_enabled', False):
+        return HTTPError('Test mode is not enabled for this problem', 403)
+
+    # Try MinIO path first
+    minio_path = getattr(problem.obj, 'public_cases_zip_minio_path', None)
+    if minio_path:
+        minio_client = MinioClient()
+        try:
+            content = minio_client.download_file(minio_path)
+            digest = hashlib.md5(content).hexdigest()
+            return HTTPResponse(data={'checksum': digest})
+        except Exception as exc:
+            current_app.logger.error(
+                f'Failed to fetch public testdata checksum: {exc}')
+            return HTTPError(f'Failed to fetch checksum: {exc}', 500)
+
+    # Fallback to GridFS
+    public_cases_zip = getattr(problem.obj, 'public_cases_zip', None)
+    if public_cases_zip and public_cases_zip.grid_id:
+        content = public_cases_zip.read()
+        public_cases_zip.seek(0)  # Reset for potential re-read
+        digest = hashlib.md5(content).hexdigest()
+        return HTTPResponse(data={'checksum': digest})
+
+    return HTTPError('Public test cases not found', 404)
+
+
+@problem_api.route('/<int:problem_id>/ac-code', methods=['GET'])
+@Request.args('token: str')
+def get_ac_code(token: str, problem_id: int):
+    """Download AC Code for Trial Mode (sandbox only). Returns ZIP with language info."""
+    if sandbox.find_by_token(token) is None:
+        return HTTPError('Invalid sandbox token', 401)
+    problem = Problem(problem_id)
+    if not problem:
+        return HTTPError(f'Problem {problem_id} not found', 404)
+
+    if not getattr(problem.obj, 'test_mode_enabled', False):
+        return HTTPError('Test mode is not enabled for this problem', 403)
+
+    # Get AC code language
+    ac_code_language = getattr(problem.obj, 'ac_code_language', None)
+
+    # Try MinIO path first
+    minio_path = getattr(problem.obj, 'ac_code_minio_path', None)
+    if minio_path:
+        minio_client = MinioClient()
+        try:
+            resp = minio_client.client.get_object(
+                minio_client.bucket,
+                minio_path,
+            )
+            response = send_file(
+                BytesIO(resp.read()),
+                mimetype='application/zip',
+                as_attachment=True,
+                download_name=f'ac-code-{problem_id}.zip',
+            )
+            # Add language info in response header
+            if ac_code_language is not None:
+                response.headers['X-AC-Code-Language'] = str(ac_code_language)
+            return response
+        except Exception as exc:
+            current_app.logger.error(
+                f'Failed to fetch AC code from MinIO: {exc}')
+            return HTTPError(f'Failed to fetch AC code: {exc}', 500)
+        finally:
+            if 'resp' in locals():
+                resp.close()
+                resp.release_conn()
+
+    # Fallback to GridFS
+    ac_code = getattr(problem.obj, 'ac_code', None)
+    if ac_code and ac_code.grid_id:
+        response = send_file(
+            ac_code,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=f'ac-code-{problem_id}.zip',
+        )
+        if ac_code_language is not None:
+            response.headers['X-AC-Code-Language'] = str(ac_code_language)
+        return response
+
+    return HTTPError('AC code not found', 404)
+
+
+@problem_api.route('/<int:problem_id>/ac-code-checksum', methods=['GET'])
+@Request.args('token: str')
+def get_ac_code_checksum(token: str, problem_id: int):
+    """Get checksum of AC code for cache validation (sandbox only)."""
+    if sandbox.find_by_token(token) is None:
+        return HTTPError('Invalid sandbox token', 401)
+    problem = Problem(problem_id)
+    if not problem:
+        return HTTPError(f'Problem {problem_id} not found', 404)
+
+    if not getattr(problem.obj, 'test_mode_enabled', False):
+        return HTTPError('Test mode is not enabled for this problem', 403)
+
+    # Get AC code language for inclusion in checksum response
+    ac_code_language = getattr(problem.obj, 'ac_code_language', None)
+
+    # Try MinIO path first
+    minio_path = getattr(problem.obj, 'ac_code_minio_path', None)
+    if minio_path:
+        minio_client = MinioClient()
+        try:
+            content = minio_client.download_file(minio_path)
+            digest = hashlib.md5(content).hexdigest()
+            return HTTPResponse(data={
+                'checksum': digest,
+                'language': ac_code_language,
+            })
+        except Exception as exc:
+            current_app.logger.error(
+                f'Failed to fetch AC code checksum: {exc}')
+            return HTTPError(f'Failed to fetch checksum: {exc}', 500)
+
+    # Fallback to GridFS
+    ac_code = getattr(problem.obj, 'ac_code', None)
+    if ac_code and ac_code.grid_id:
+        content = ac_code.read()
+        ac_code.seek(0)
+        digest = hashlib.md5(content).hexdigest()
+        return HTTPResponse(data={
+            'checksum': digest,
+            'language': ac_code_language,
+        })
+
+    return HTTPError('AC code not found', 404)
+
+
 @problem_api.route('/<int:problem_id>/meta', methods=['GET'])
 @Request.args('token: str')
 def get_meta(token: str, problem_id: int):
@@ -1323,6 +1520,12 @@ def request_trial_submission(user,
         return HTTPError("Problem not found.", 404)
 
     problem = problem_proxy
+    # Backward compatibility for clients sending legacy key casing.
+    data = request.get_json(silent=True) or {}
+    if "Use_Default_Test_Cases" in data:
+        use_default_test_cases = data.get("Use_Default_Test_Cases")
+    elif "use_default_test_cases" in data:
+        use_default_test_cases = data.get("use_default_test_cases")
 
     # Validate language type (0: C, 1: C++, 2: Python)
     if language_type not in [0, 1, 2]:

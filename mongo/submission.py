@@ -1556,67 +1556,103 @@ class TrialSubmission(MongoBase, BaseSubmission,
                 f"Attempted to send {self} but test mode is disabled.")
             return False
 
-        # 1. User's code
-        files = {
-            'src': io.BytesIO(b"".join(self._get_code_raw())),
-        }
+        # Check if allowWrite is enabled (Trial not supported for allowWrite problems)
+        problem_config = problem.config or {}
+        if problem_config.get('allowWrite', False):
+            self.logger.warning(
+                f"Attempted to send {self} but allowWrite is enabled (not supported for Trial)."
+            )
+            raise ValueError(
+                "Trial submission not supported for problems with allowWrite enabled."
+            )
 
-        # 2. Test cases (public or custom)
-        # TODO: This logic depends heavily on sandbox API.
-        # The sandbox needs to receive either the public cases or custom cases.
-        # This might involve passing Minio paths or zips.
+        # Validate test case availability
         if self.use_default_case:
             if not problem.public_cases_zip_minio_path:
                 raise TestCaseNotFound(self.problem_id)
-            # files['public_cases'] = ... (logic to get public cases zip)
         else:
             if not self.custom_input_minio_path:
-                raise TestCaseNotFound(self.problem_id)  # Or a different error
-            # files['custom_cases'] = ... (logic to get custom input zip)
+                raise TestCaseNotFound(self.problem_id)
+            # For custom test cases, AC code is required (unless Interactive mode)
+            execution_mode = problem_config.get('executionMode', 'general')
+            if execution_mode != 'interactive' and not problem.ac_code_minio_path:
+                raise ValueError(
+                    "AC code required for custom test cases (non-interactive mode)"
+                )
 
-        # 3. AC code (for comparison)
-        # TODO: Add logic for sending AC code
-        # if problem.ac_code_minio_path:
-        #    ac_code_raw = ... (logic to get AC code zip)
-        #    files['ac_code'] = ac_code_raw
+        # Prepare source code file
+        files = {
+            'src': ('src.zip', io.BytesIO(b"".join(self._get_code_raw())),
+                    'application/zip'),
+        }
 
+        # Target sandbox
         tar = self.target_sandbox()
         if tar is None:
             self.logger.error(f'can not target a sandbox for {repr(self)}')
             return False
 
+        # Assign token for sandbox verification
         TrialSubmission.assign_token(self.id, tar.token)
 
+        # Prepare form data for sandbox
         post_data = {
             'token': tar.token,
             'problem_id': self.problem_id,
             'language': self.language,
-            'submission_type': 'test',  # Flag for sandbox
-            'use_default_case': self.use_default_case,
-            # 'ac_code_language': problem.ac_code_language,
-            # 'public_cases_path': problem.public_cases_zip_minio_path,
-            # 'custom_cases_path': self.custom_input_minio_path,
-            # 'ac_code_path': problem.ac_code_minio_path,
+            'submission_type': 'trial',  # Flag for sandbox to handle as trial
+            'use_default_case': str(self.use_default_case).lower(
+            ),  # Convert to string for form data
         }
 
-        # This URL might be different, e.g., /submit_test/
+        # Add custom testcases path if using custom test cases
+        if not self.use_default_case:
+            post_data['custom_testcases_path'] = self.custom_input_minio_path
+
         judge_url = f'{tar.url}/submit/{self.id}'
 
-        self.logger.info(f'send {self} to {tar.name}')
-        self.logger.warning(
-            f"TrialSubmission.send() is a placeholder and needs sandbox API integration."
+        self.logger.info(
+            f'send {self} to {tar.name} (trial={True}, use_default={self.use_default_case})'
         )
 
-        self.logger.error("Test submission sandbox endpoint not implemented.")
-        return False
+        try:
+            resp = rq.post(
+                judge_url,
+                data=post_data,
+                files=files,
+            )
+            self.logger.info(
+                f'receive {self} resp from sandbox: {resp.status_code}')
+            return self.sandbox_resp_handler(resp)
+        except Exception as exc:
+            self.logger.error(f'Failed to send {self} to sandbox: {exc}')
+            return False
 
-        # resp = rq.post(
-        #     judge_url,
-        #     data=post_data,
-        #     files=files,
-        # )
-        # self.logger.info(f'recieve {self} resp from sandbox')
-        # return self.sandbox_resp_handler(resp)
+    @classmethod
+    def assign_token(cls, submission_id, token=None):
+        '''
+        Generate a token for the trial submission (for sandbox verification).
+        '''
+        if token is None:
+            token = gen_token()
+        RedisCache().set(gen_key(submission_id), token)
+        return token
+
+    @classmethod
+    def verify_token(cls, submission_id, token):
+        '''
+        Verify sandbox token for trial submission result callback.
+        '''
+        cache = RedisCache()
+        key = gen_key(submission_id)
+        s_token = cache.get(key)
+        if s_token is None:
+            return False
+        s_token = s_token.decode('ascii')
+        valid = secrets.compare_digest(s_token, token)
+        if valid:
+            cache.delete(key)
+        return valid
 
     def own_permission(self, user) -> BaseSubmission.Permission:
         '''
@@ -1779,6 +1815,13 @@ class TrialSubmission(MongoBase, BaseSubmission,
 
         if not problem.test_mode_enabled:
             raise PermissionError("Test mode is not enabled for this problem.")
+
+        # Check if allowWrite is enabled (Trial not supported for allowWrite problems)
+        problem_config = problem.config or {}
+        if problem_config.get('allowWrite', False):
+            raise PermissionError(
+                "Trial submission not supported for problems with allowWrite enabled."
+            )
 
         if timestamp is None:
             timestamp = datetime.now()
