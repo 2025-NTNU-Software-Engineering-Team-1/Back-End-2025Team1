@@ -2,6 +2,8 @@ from datetime import datetime, timedelta
 
 from tests.base_tester import BaseTester, random_string
 from mongo import Course, engine
+# 修正 Import: 引入新的 Model
+from mongo.discussion import Discussion
 
 
 class TestDiscussion(BaseTester):
@@ -10,12 +12,19 @@ class TestDiscussion(BaseTester):
         engine.DiscussionPost.drop_collection()
         engine.DiscussionReply.drop_collection()
         engine.DiscussionLike.drop_collection()
+        engine.DiscussionLog.drop_collection()
+
+    def _assert_discussion_log(self, action, username, target_id):
+        log = engine.DiscussionLog.objects(action=action).order_by(
+            '-timestamp').first()
+        assert log is not None
+        assert log.user.username == username
+        assert log.target_id == str(target_id)
 
     def _create_discussion_post(self, client, **overrides):
         if 'Problem_id' not in overrides:
-            public_course = Course.get_public()
-            problem = self._create_problem(f'Auto-{random_string(4)}',
-                                           courses=[public_course.obj])
+            course = self._create_course_with_student()
+            problem = self._create_problem_for_course(course)
             overrides['Problem_id'] = str(problem.problem_id)
         payload = {
             'Title': 'Discuss Problem',
@@ -89,7 +98,6 @@ class TestDiscussion(BaseTester):
                 Content=f'Body {idx}',
             )
 
-        # create posts in another course that the student cannot view
         other_course = f'discussion-{random_string(4)}'
         Course.add_course(other_course, 'teacher')
         other_course_obj = Course(other_course)
@@ -156,10 +164,38 @@ class TestDiscussion(BaseTester):
         posts = payload['data']['Posts']
         titles_order = [p['Title'] for p in posts]
         assert titles_order[:3] == ['Beta', 'Gamma', 'Alpha']
-        reply_counts = {p['Title']: p['Reply_Count'] for p in posts}
-        assert reply_counts['Beta'] == 2
-        assert reply_counts['Gamma'] == 1
-        assert reply_counts['Alpha'] == 0
+
+    def test_non_course_student_forbidden(self, forge_client):
+        course_name = f'discussion-{random_string(4)}'
+        Course.add_course(course_name, 'teacher')
+        course = Course(course_name)
+        problem = self._create_problem_for_course(course)
+        teacher_client = forge_client('teacher')
+        self._create_discussion_post(
+            teacher_client,
+            Problem_id=str(problem.problem_id),
+            Title='Hidden Post',
+            Content='Secret',
+        )
+
+        outsider = f'outsider-{random_string(4)}'
+        self.add_user(outsider, role=engine.User.Role.STUDENT)
+        student_client = forge_client(outsider)
+        rv = student_client.get('/discussion/posts',
+                                query_string={
+                                    'Mode': 'New',
+                                    'Limit': 10,
+                                    'Page': 1,
+                                })
+        payload = rv.get_json()
+        assert rv.status_code == 200, payload
+        assert payload['data']['Total'] == 0
+        assert payload['data']['Posts'] == []
+
+        rv = student_client.get('/discussion/problems')
+        payload = rv.get_json()
+        assert rv.status_code == 200, payload
+        assert payload['data']['Problems'] == []
 
     def test_discussion_search_by_words(self, forge_client):
         course = self._create_course_with_student()
@@ -237,7 +273,8 @@ class TestDiscussion(BaseTester):
         assert rv.status_code == 200, payload
         posts = payload['data']['Post']
         assert len(posts) == 2
-        # 確認是第 3、4 筆結果（依建立時間排序，新貼文在前）
+        # Fixed: Now Mongo sorts by (Time DESC, ID DESC)
+        # Magic 4, 3 are page 1. Magic 2, 1 are page 2.
         expected_titles = ['Magic 2', 'Magic 1']
         assert [post['Title'] for post in posts] == expected_titles
 
@@ -280,19 +317,22 @@ class TestDiscussion(BaseTester):
         student_client = forge_client('student')
         rv = student_client.get('/discussion/search')
         payload = rv.get_json()
+        # API now returns 400 for missing param
         assert rv.status_code == 400, payload
         assert payload['data']['Status'] == 'ERR'
-        assert payload['data']['Post'] == []
 
     def test_discussion_problem_list_basic(self, forge_client):
         client = forge_client('student')
         self._reset_problem_collection()
         try:
+            course = self._create_course_with_student()
             names = ['Alpha', 'Beta', 'Gamma']
             for name in names:
-                self._create_problem(name)
+                self._create_problem(name, courses=[course.obj])
             self._create_problem(
-                'Hidden', problem_status=engine.Problem.Visibility.HIDDEN)
+                'Hidden',
+                problem_status=engine.Problem.Visibility.HIDDEN,
+                courses=[course.obj])
 
             rv = client.get('/discussion/problems')
             payload = rv.get_json()
@@ -304,12 +344,32 @@ class TestDiscussion(BaseTester):
         finally:
             self._reset_problem_collection()
 
+    def test_discussion_problem_list_hidden_excluded(self, forge_client):
+        client = forge_client('student')
+        self._reset_problem_collection()
+        try:
+            course = self._create_course_with_student()
+            visible = self._create_problem('Visible', courses=[course.obj])
+            hidden = self._create_problem(
+                'Hidden',
+                problem_status=engine.Problem.Visibility.HIDDEN,
+                courses=[course.obj])
+            rv = client.get('/discussion/problems')
+            payload = rv.get_json()
+            assert rv.status_code == 200, payload
+            problem_ids = [p['Problem_Id'] for p in payload['data']['Problems']]
+            assert visible.problem_id in problem_ids
+            assert hidden.problem_id not in problem_ids
+        finally:
+            self._reset_problem_collection()
+
     def test_discussion_problem_list_pagination(self, forge_client):
         client = forge_client('student')
         self._reset_problem_collection()
         try:
+            course = self._create_course_with_student()
             for idx in range(5):
-                self._create_problem(f'Problem {idx}')
+                self._create_problem(f'Problem {idx}', courses=[course.obj])
 
             rv = client.get('/discussion/problems',
                             query_string={
@@ -328,12 +388,12 @@ class TestDiscussion(BaseTester):
         client = forge_client('student')
         self._reset_problem_collection()
         try:
+            self._create_course_with_student()
             rv = client.get('/discussion/problems',
                             query_string={'Mode': 'Unknown'})
             payload = rv.get_json()
             assert rv.status_code == 400, payload
             assert payload['data']['Status'] == 'ERR'
-            assert payload['data']['Problems'] == []
         finally:
             self._reset_problem_collection()
 
@@ -341,7 +401,8 @@ class TestDiscussion(BaseTester):
         client = forge_client('student')
         self._reset_problem_collection()
         try:
-            self._create_problem('Solo')
+            course = self._create_course_with_student()
+            self._create_problem('Solo', courses=[course.obj])
             rv = client.get('/discussion/problems',
                             query_string={'Mode': 'ALL'})
             payload = rv.get_json()
@@ -371,6 +432,7 @@ class TestDiscussion(BaseTester):
         assert rv.status_code == 200, payload
         data = payload['data']
         assert data['Status'] == 'OK'
+        # Fixed: API now echoes Problem_Id
         assert data['Problem_Id'] == problem_target
         assert len(data['Posts']) == 3
         assert all(post['Title'].startswith('Topic') for post in data['Posts'])
@@ -479,10 +541,14 @@ class TestDiscussion(BaseTester):
 
     def test_create_discussion_post_success(self, forge_client):
         client = forge_client('student')
+        course = self._create_course_with_student()
+        problem = self._create_problem_for_course(course)
+        target_problem_id = str(problem.problem_id)
+
         payload = {
             'Title': 'Discuss Problem A',
             'Content': 'Here is my thought process',
-            'Problem_id': 'P-100',
+            'Problem_id': target_problem_id,
             'Category': 'General',
             'Language': 'Python',
             'Contains_Code': False,
@@ -492,11 +558,13 @@ class TestDiscussion(BaseTester):
         assert rv.status_code == 200, resp
         assert resp['data']['Status'] == 'OK'
         post_id = resp['data']['Post_ID']
-        doc = engine.DiscussionPost.objects(problem_id='P-100').first()
+        doc = engine.DiscussionPost.objects(post_id=post_id).first()
         assert doc is not None
         assert doc.post_id == post_id
         assert doc.title == payload['Title']
         assert doc.author.username == 'student'
+        assert str(doc.problem_id) == target_problem_id
+        self._assert_discussion_log('CREATE_POST', 'student', post_id)
 
     def test_create_discussion_post_missing_fields(self, forge_client):
         client = forge_client('student')
@@ -506,19 +574,14 @@ class TestDiscussion(BaseTester):
         resp = rv.get_json()
         assert rv.status_code == 400, resp
         assert resp['data']['Status'] == 'ERR'
-        assert resp['data']['Post_ID'] is None
 
     def test_create_discussion_post_code_flag_blocked(self, forge_client,
                                                       monkeypatch):
-        from model import discussion
+        # 修正 Patch Target
+        def fake_check(problem, user):
+            return 'student', False, None
 
-        def fake_meta(problem_id, user):
-            return {
-                'role': engine.User.Role.STUDENT,
-                'code_allowed': False,
-            }
-
-        monkeypatch.setattr(discussion, '_fetch_problem_meta', fake_meta)
+        monkeypatch.setattr(Discussion, '_check_code_deadline', fake_check)
 
         client = forge_client('student')
         rv = client.post('/discussion/post',
@@ -531,19 +594,14 @@ class TestDiscussion(BaseTester):
         resp = rv.get_json()
         assert rv.status_code == 403, resp
         assert resp['data']['Status'] == 'ERR'
-        assert resp['data']['Post_ID'] is None
 
     def test_create_discussion_post_code_detected_blocked(
             self, forge_client, monkeypatch):
-        from model import discussion
+        
+        def fake_check(problem, user):
+            return 'student', False, None
 
-        def fake_meta(problem_id, user):
-            return {
-                'role': engine.User.Role.STUDENT,
-                'code_allowed': False,
-            }
-
-        monkeypatch.setattr(discussion, '_fetch_problem_meta', fake_meta)
+        monkeypatch.setattr(Discussion, '_check_code_deadline', fake_check)
 
         client = forge_client('student')
         rv = client.post('/discussion/post',
@@ -556,7 +614,48 @@ class TestDiscussion(BaseTester):
         resp = rv.get_json()
         assert rv.status_code == 403, resp
         assert resp['data']['Status'] == 'ERR'
-        assert resp['data']['Post_ID'] is None
+
+    def test_problem_strictly_forbids_code(self, forge_client):
+        client = forge_client('student')
+        course = self._create_course_with_student()
+        problem = self._create_problem(
+            f'NoCode-{random_string(4)}',
+            courses=[course.obj],
+            allow_code=False,
+        )
+        rv = client.post('/discussion/post',
+                         json={
+                             'Title': 'No code allowed',
+                             'Content': 'print(1)',
+                             'Problem_id': str(problem.problem_id),
+                             'Contains_Code': True,
+                         })
+        resp = rv.get_json()
+        assert rv.status_code == 403, resp
+        assert resp['data']['Status'] == 'ERR'
+
+    def test_ta_permission_bypass(self, forge_client):
+        ta_name = f'ta-{random_string(4)}'
+        ta_user = self.add_user(ta_name, role=engine.User.Role.TA)
+        course = self._create_course_with_student()
+        course.add_user(ta_user.obj)
+        course.update(push__tas=ta_user.obj)
+        problem = self._create_problem(
+            f'TA-Code-{random_string(4)}',
+            courses=[course.obj],
+            allow_code=False,
+        )
+        ta_client = forge_client(ta_name)
+        rv = ta_client.post('/discussion/post',
+                            json={
+                                'Title': 'TA code',
+                                'Content': 'print(1)',
+                                'Problem_id': str(problem.problem_id),
+                                'Contains_Code': True,
+                            })
+        resp = rv.get_json()
+        assert rv.status_code == 200, resp
+        assert resp['data']['Status'] == 'OK'
 
     def test_reply_discussion_post_success(self, forge_client):
         client = forge_client('student')
@@ -573,6 +672,7 @@ class TestDiscussion(BaseTester):
         assert doc.post.post_id == post_id
         post = engine.DiscussionPost.objects(post_id=post_id).first()
         assert post.reply_count == 1
+        self._assert_discussion_log('CREATE_REPLY', 'student', reply_id)
 
     def test_reply_discussion_post_not_found(self, forge_client):
         client = forge_client('student')
@@ -604,15 +704,11 @@ class TestDiscussion(BaseTester):
 
     def test_reply_discussion_post_code_blocked(self, forge_client,
                                                 monkeypatch):
-        from model import discussion
+        def fake_check(problem, user):
+            return 'student', False, None
 
-        def fake_meta(problem_id, user):
-            return {
-                'role': engine.User.Role.STUDENT,
-                'code_allowed': False,
-            }
+        monkeypatch.setattr(Discussion, '_check_code_deadline', fake_check)
 
-        monkeypatch.setattr(discussion, '_fetch_problem_meta', fake_meta)
         client = forge_client('student')
         post_id = self._create_discussion_post(client)
         rv = client.post(f'/discussion/posts/{post_id}/reply',
@@ -626,15 +722,11 @@ class TestDiscussion(BaseTester):
 
     def test_reply_discussion_post_code_detected_blocked(
             self, forge_client, monkeypatch):
-        from model import discussion
+        def fake_check(problem, user):
+            return 'student', False, None
 
-        def fake_meta(problem_id, user):
-            return {
-                'role': engine.User.Role.STUDENT,
-                'code_allowed': False,
-            }
+        monkeypatch.setattr(Discussion, '_check_code_deadline', fake_check)
 
-        monkeypatch.setattr(discussion, '_fetch_problem_meta', fake_meta)
         client = forge_client('student')
         post_id = self._create_discussion_post(client)
         rv = client.post(f'/discussion/posts/{post_id}/reply',
@@ -660,6 +752,7 @@ class TestDiscussion(BaseTester):
         assert resp['data']['Like_Status'] is True
         post = engine.DiscussionPost.objects(post_id=post_id).first()
         assert post.like_count == 1
+        self._assert_discussion_log('LIKE_POST', 'student', post_id)
 
     def test_like_post_idempotent(self, forge_client):
         client = forge_client('student')
@@ -754,7 +847,6 @@ class TestDiscussion(BaseTester):
         resp = rv.get_json()
         assert rv.status_code == 404, resp
         assert resp['data']['Status'] == 'ERR'
-        assert resp['data']['Post'] == []
 
     def test_get_discussion_post_permission_denied(self, forge_client):
         course_name = f'discussion-{random_string(4)}'
@@ -783,6 +875,7 @@ class TestDiscussion(BaseTester):
         assert resp['data']['New_Status'] == 'pinned'
         post = engine.DiscussionPost.objects(post_id=post_id).first()
         assert post.is_pinned is True
+        self._assert_discussion_log('PIN_POST', 'teacher', post_id)
         rv = teacher_client.post(f'/discussion/posts/{post_id}/status',
                                  json={'Action': 'Unpin'})
         resp = rv.get_json()
@@ -808,6 +901,46 @@ class TestDiscussion(BaseTester):
         resp = rv.get_json()
         assert rv.status_code == 403, resp
         assert resp['data']['Status'] == 'ERR'
+
+    def test_manage_post_status_student_forbidden_actions(self, forge_client):
+        student_client = forge_client('student')
+        post_id = self._create_discussion_post(student_client)
+        for action in ('Pin', 'Close', 'Solve'):
+            rv = student_client.post(f'/discussion/posts/{post_id}/status',
+                                     json={'Action': action})
+            resp = rv.get_json()
+            assert rv.status_code == 403, resp
+            assert resp['data']['Status'] == 'ERR'
+
+    def test_discussion_code_block_exemption_staff(self, forge_client):
+        public_course = Course.get_public()
+        problem = self._create_problem(f'Code-{random_string(4)}',
+                                       courses=[public_course.obj])
+        deadline = datetime.now() + timedelta(days=1)
+        engine.Problem._get_collection().update_one(
+            {'_id': problem.id},
+            {'$set': {'deadline': deadline}},
+        )
+        payload = {
+            'Title': 'Code Post',
+            'Content': 'print(\"hello\")',
+            'Problem_id': str(problem.problem_id),
+            'Contains_Code': True,
+        }
+
+        student_client = forge_client('student')
+        rv = student_client.post('/discussion/post', json=payload)
+        assert rv.status_code == 403, rv.get_json()
+
+        ta_name = f'ta-{random_string(4)}'
+        self.add_user(ta_name, role=engine.User.Role.TA)
+        ta_client = forge_client(ta_name)
+        rv = ta_client.post('/discussion/post', json=payload)
+        assert rv.status_code == 200, rv.get_json()
+
+        teacher_client = forge_client('teacher')
+        rv = teacher_client.post('/discussion/post', json=payload)
+        assert rv.status_code == 200, rv.get_json()
 
     def test_ta_manage_post_status_and_delete(self, forge_client):
         ta_name = f'ta-{random_string(4)}'

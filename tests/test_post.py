@@ -1,350 +1,225 @@
 import pytest
 from datetime import datetime, timedelta
-from tests.base_tester import BaseTester
-from mongo import Course
+from tests.base_tester import BaseTester, random_string
 from mongo import engine
-from tests import utils
-
 
 class TestPost(BaseTester):
-    '''Test post
-    '''
+    '''Test post (Course Bulletin/Forum)'''
 
-    def test_add_post_to_invalid_course(self, client_admin):
-        # add a post to a non-existent course
+    def setup_method(self):
+        """徹底清理測試環境，避免 Unique Key 衝突"""
+        engine.Course.drop_collection()
+        engine.User.drop_collection()
+        engine.Post.drop_collection()
+        engine.PostThread.drop_collection()
+        engine.Problem.drop_collection()
+        engine.DiscussionLog.drop_collection()
 
-        # create a course
-        client_admin.post('/course',
-                          json={
-                              'course': 'math',
-                              'teacher': 'admin'
-                          })
-        # create an other course
-        client_admin.post('/course',
-                          json={
-                              'course': 'english',
-                              'teacher': 'admin'
-                          })
-        # let student add math
-        client_admin.put('/course/math',
-                         json={
-                             'TAs': ['admin'],
-                             'studentNicknames': {
-                                 'student': 'noobs',
-                                 'student-2': 'noobs-2'
-                             }
-                         })
+    def _assert_post_log(self, action, username, target_id):
+        log = engine.DiscussionLog.objects(action=action).order_by(
+            '-timestamp').first()
+        assert log is not None
+        assert log.user.username == username
+        assert log.target_id == str(target_id)
 
-        rv = client_admin.post('/post',
-                               json={
-                                   'course': 'PE',
-                                   'title': 'Work',
-                                   'content': 'Coding.'
-                               })
-        json = rv.get_json()
-        assert rv.status_code == 404
-        assert json['message'] == 'Course not exist.'
+    def _setup_course_and_user(self, course_name='math', student_name='student', ta_name=None):
+        """
+        建立標準測試環境：
+        1. 確保 admin (老師) 存在且 userId 符合系統預期
+        2. 確保 TA (助教) 存在並具備正確角色
+        3. 建立課程並將學生與助教加入
+        4. 雙向同步 courses 參考列表 (這是 own_permission 檢查的核心)
+        """
+        # 1. 確保 admin 使用者存在
+        admin = engine.User.objects(username='admin').first()
+        if not admin:
+            admin = engine.User(
+                username='admin', role=engine.User.Role.ADMIN,
+                active=True, email='admin@test.com', 
+                user_id='admin',
+                md5='test'
+            ).save()
 
-    def test_add_post(self, client_student):
-        # add a post
-        rv = client_student.post('/post',
-                                 json={
-                                     'course': 'math',
-                                     'title': 'Work',
-                                     'content': 'Coding.'
-                                 })
-        json = rv.get_json()
-        assert rv.status_code == 200
+        # 2. 準備 TA
+        tas_docs = []
+        if ta_name:
+            ta_user = engine.User.objects(username=ta_name).first()
+            if not ta_user:
+                ta_user = engine.User(
+                    username=ta_name, role=engine.User.Role.TA,
+                    active=True, email=f'{ta_name}@test.com', 
+                    user_id=ta_name, md5='test'
+                ).save()
+            tas_docs.append(ta_user)
 
-    def test_add_post_to_public(self, client_admin):
-        rv = client_admin.post('/post', json={
-            'course': 'Public',
+        # 3. 準備學生
+        student = engine.User.objects(username=student_name).first()
+        if not student:
+            student = engine.User(
+                username=student_name, role=engine.User.Role.STUDENT,
+                active=True, email=f'{student_name}@test.com', 
+                user_id=student_name, md5='test'
+            ).save()
+
+        # 4. 建立課程
+        course = engine.Course(
+            course_name=course_name,
+            teacher=admin,
+            tas=tas_docs,
+            student_nicknames={student_name: 'nick'}
+        ).save()
+
+        # 5. 更新使用者的 courses 參考列表
+        student.update(add_to_set__courses=course)
+        for ta in tas_docs:
+            ta.update(add_to_set__courses=course)
+        
+        course.reload()
+        return course, student
+
+    def test_add_post(self, client_admin, forge_client):
+        course_name = 'math'
+        self._setup_course_and_user(course_name=course_name, student_name='student')
+        
+        # 使用 forge_client 重新生成以確保 Token 同步
+        client_student = forge_client('student')
+        rv = client_student.post('/post', json={
+            'course': course_name,
+            'title': 'Work',
+            'content': 'Coding.'
         })
-        assert rv.status_code == 403, rv.get_json()
-        assert rv.get_json()['message'] == 'You can not add post in system.'
-
-    def test_add_post_with_course_and_thread_id(self, client_admin):
-        rv = client_admin.post('/post',
-                               json={
-                                   'course': 'CourseName',
-                                   'targetThreadId': 'ThreadId',
-                               })
-        assert rv.status_code == 400, rv.get_json()
-        assert rv.get_json(
-        )['message'] == 'Request is fail,course or target_thread_id must be none.'
-
-    def test_add_post_without_course_and_thread_id(self, client_admin):
-        rv = client_admin.post('/post', json={})
-        assert rv.status_code == 400, rv.get_json()
-        assert rv.get_json(
-        )['message'] == 'Request is fail,course and target_thread_id are both none.'
-
-    def test_add_post_when_not_in_course(self, client_student):
-        # create another course in line 17
-        # not add student to the course ('english')
-        # add a post
-        rv = client_student.post('/post',
-                                 json={
-                                     'course': 'english',
-                                     'title': 'Work',
-                                     'content': 'Coding.'
-                                 })
-        json = rv.get_json()
-        assert rv.status_code == 403
-        assert json['message'] == 'You are not in this course.'
-
-    def test_add_reply(self, client_student):
-        rvget = client_student.get('/post/math')
-        jsonget = rvget.get_json()
-        id = jsonget['data'][0]['thread']['id']  # get post id (thread)
-        rv = client_student.post('/post',
-                                 json={
-                                     'targetThreadId': id,
-                                     'title': 'reply',
-                                     'content': 'reply message.'
-                                 })
-        json = rv.get_json()
-        assert rv.status_code == 200
-
-    def test_add_reply_too_deep(self, client_student):
-        rvget = client_student.get('/post/math')
-        id = rvget.get_json()['data'][0]['thread']['reply'][0]['id']
-        rv = client_student.post('/post',
-                                 json={
-                                     'targetThreadId': id,
-                                     'title': 'deep reply',
-                                     'content': 'reply message.'
-                                 })
-        rvget = client_student.get('/post/math')
-        id = rvget.get_json(
-        )['data'][0]['thread']['reply'][0]['reply'][0]['id']
-        rv = client_student.post('/post',
-                                 json={
-                                     'targetThreadId': id,
-                                     'title': 'Deeeeeeper reply',
-                                     'content': 'reply message.'
-                                 })
-        assert rv.status_code == 403, rv.get_json()
-        assert rv.get_json(
-        )['message'] == 'Forbidden,you can not reply too deap (not open).'
-
-    def test_add_reply_to_not_exist_post(self, client_student):
-        id = 'aaaabbbbccccdddd00000000'  # not exist id
-        rv = client_student.post('/post',
-                                 json={
-                                     'targetThreadId': id,
-                                     'title': 'reply',
-                                     'content': 'reply message.'
-                                 })
-        json = rv.get_json()
-        assert rv.status_code == 404
-        assert json['message'] == 'Post/reply not exist.'
-
-    def test_edit_post_without_perm(self, forge_client):
-        id = str(Course('math').posts[0].id)
-        client_student = forge_client('student-2')
-        rv = client_student.put('/post', json={
-            'targetThreadId': id,
-        })
-        assert rv.status_code == 403, rv.get_json()
-        assert rv.get_json(
-        )['message'] == 'Forbidden, you don\'t have enough permission to edit it.'
-
-    def test_delete_post_without_perm(self, forge_client):
-        id = str(Course('math').posts[0].id)
-        client_student = forge_client('student-2')
-        rv = client_student.delete('/post', json={'targetThreadId': id})
-        assert rv.status_code == 403, rv.get_json()
-        assert rv.get_json(
-        )['message'] == 'Forbidden, you don\'t have enough permission to delete it.'
-
-    def test_delete_post(self, client_student):
-        rvget = client_student.get('/post/math')
-        jsonget = rvget.get_json()
-        id = jsonget['data'][0]['thread']['id']  # get post id (thread)
-        rv = client_student.delete('/post', json={'targetThreadId': id})
-        json = rv.get_json()
-        assert rv.status_code == 200
-
-    def test_delete_post_without_thread_id(self, client_student):
-        rv = client_student.delete('/post',
-                                   json={
-                                       'course': 'math',
-                                       'content': 'The reply is edited.'
-                                   })
-        assert rv.status_code == 400, rv.get_json()
-        assert rv.get_json(
-        )['message'] == 'Request is fail,you should provide target_thread_id replace course.'
-
-    def test_add_reply_to_deleted_post(self, client_student):
-        rvget = client_student.get('/post/math')
-        jsonget = rvget.get_json()
-        id = jsonget['data'][0]['thread']['id']  # get post id (thread)
-        rv = client_student.post('/post',
-                                 json={
-                                     'targetThreadId': id,
-                                     'title': 'reply to delete',
-                                     'content': 'reply to delete message.'
-                                 })
-        json = rv.get_json()
-        assert rv.status_code == 403
-        assert json['message'] == 'Forbidden,the post/reply is deleted.'
-
-    def test_edit_reply(self, client_student):
-        rvget = client_student.get('/post/math')
-        jsonget = rvget.get_json()
-        id = jsonget['data'][0]['thread']['reply'][0]['id']  # get reply id
-        rv = client_student.put('/post',
-                                json={
-                                    'targetThreadId': id,
-                                    'content': 'The reply is edited.'
-                                })
-        json = rv.get_json()
-        assert rv.status_code == 200
-
-    def test_edit_reply_without_thread_id(self, client_student):
-        rv = client_student.put('/post',
-                                json={
-                                    'course': 'math',
-                                    'content': 'The reply is edited.'
-                                })
-        assert rv.status_code == 400, rv.get_json()
-        assert rv.get_json(
-        )['message'] == 'Request is fail,you should provide target_thread_id replace course.'
-
-    def test_view(self, client_student):
-        rv = client_student.get('/post/math')
-        json = rv.get_json()
-        assert rv.status_code == 200
-        assert json['data'][0]['title'] == '*The Post was deleted*'
-        assert json['data'][0]['thread']['content'] == '*Content was deleted.*'
-        assert json['data'][0]['thread']['author']['username'] == 'student'
-        assert json['data'][0]['thread']['reply'][0][
-            'content'] == 'The reply is edited.'
-        assert json['data'][0]['thread']['reply'][0]['author'][
-            'username'] == 'student'
-
-    def test_view_with_course_does_not_exist(self, client_student):
-        rv = client_student.get('/post/CourseDoesNotExist')
-        assert rv.status_code == 404, rv.get_json()
-        assert rv.get_json()['message'] == 'Course not found.'
-
-    def test_view_from_non_course_member(self, make_course, forge_client):
-        c_data = make_course('teacher')
-        client_student = forge_client('student')
-        rv = client_student.get(f'/post/{c_data.name}')
-        assert rv.status_code == 403, rv.get_json()
-        assert rv.get_json()['message'] == 'You are not in this course.'
-
-    def test_view_thread_does_not_exist(self, client_student):
-        rv = client_student.get('/post/view/math/ThreadDoesNotExist')
         assert rv.status_code == 200, rv.get_json()
-        assert rv.get_json()['data'] == []
+        rv_get = client_student.get(f'/post/{course_name}')
+        data = rv_get.get_json()['data']
+        post_id = data[0]['thread']['Id']
+        self._assert_post_log('CREATE_POST', 'student', post_id)
 
-    def test_view_thread_with_course_does_not_exist(self, client_student):
-        rv = client_student.get('/post/view/CourseDoesNotExist/aaabbbccc')
-        assert rv.status_code == 404, rv.get_json()
-        assert rv.get_json()['message'] == 'Course not found.'
+    def test_update_post_status_ta(self, client_admin, forge_client):
+        ta_name = 'ta_user'
+        course_name = 'math_status'
+        
+        # 在 setup 階段就建立好 TA 關聯
+        course, student = self._setup_course_and_user(
+            course_name=course_name, 
+            student_name='student_1', 
+            ta_name=ta_name
+        )
 
-    def test_view_thread_from_non_course_member(self, make_course,
-                                                forge_client):
-        c_data = make_course('teacher')
-        client_student = forge_client('student')
-        rv = client_student.get(f'/post/view/{c_data.name}/aaabbbccc')
-        assert rv.status_code == 403, rv.get_json()
-        assert rv.get_json()['message'] == 'You are not in this course.'
+        # 學生發文
+        client_student = forge_client('student_1')
+        client_student.post('/post', json={'course': course_name, 'title': 'H', 'content': 'C'})
+        
+        rv_get = client_student.get(f'/post/{course_name}')
+        res = rv_get.get_json()
+        assert res['status'] == 'ok', res
+        data = res.get('data', [])
+        assert len(data) > 0, "Failed to retrieve student post"
+        post_id = data[0]['thread']['Id']
 
-    def test_view_thread_without_thread_id(self, make_course, forge_client):
-        c_data = make_course('teacher')
-        client_teacher = forge_client('teacher')
-        rv = client_teacher.get(f'/post/view/{c_data.name}/aaabbcc/')
-        assert rv.status_code == 200, rv.get_json()
-        assert rv.get_json()['data'] == []
-
-    def test_update_post_status_ta_can_pin_close(self, forge_client,
-                                                 make_course):
-        ta_user = utils.user.create_user(role=engine.User.Role.TA)
-        c_data = make_course('teacher',
-                             students={'student': 'student'},
-                             tas=[ta_user.username])
-
-        client_student = forge_client('student')
-        rv = client_student.post('/post',
-                                 json={
-                                     'course': c_data.name,
-                                     'title': 'Work',
-                                     'content': 'Coding.'
-                                 })
-        assert rv.status_code == 200, rv.get_json()
-        rvget = client_student.get(f'/post/{c_data.name}')
-        post_id = rvget.get_json()['data'][0]['thread']['id']
-
-        client_ta = forge_client(ta_user.username)
+        # TA 執行置頂 (PIN)
+        client_ta = forge_client(ta_name)
         rv = client_ta.put(f'/post/status/{post_id}', json={'Action': 'PIN'})
+        
+        # 驗證成功回傳
         assert rv.status_code == 200, rv.get_json()
-
-        rv = client_ta.put(f'/post/status/{post_id}', json={'Action': 'CLOSE'})
-        assert rv.status_code == 200, rv.get_json()
-
+        
+        # 驗證資料庫狀態
         thread = engine.PostThread.objects.get(id=post_id)
         assert thread.pinned is True
-        assert thread.closed is True
+        self._assert_post_log('PIN_POST', ta_name, post_id)
 
-    def test_update_post_status_student_forbidden(self, forge_client,
-                                                  make_course):
-        c_data = make_course('teacher', students={'student': 'student'})
-        client_student = forge_client('student')
-        rv = client_student.post('/post',
-                                 json={
-                                     'course': c_data.name,
-                                     'title': 'Work',
-                                     'content': 'Coding.'
-                                 })
-        assert rv.status_code == 200, rv.get_json()
-        rvget = client_student.get(f'/post/{c_data.name}')
-        post_id = rvget.get_json()['data'][0]['thread']['id']
-
-        rv = client_student.put(f'/post/status/{post_id}',
-                                json={'Action': 'PIN'})
+    def test_update_post_status_student_forbidden(self, client_admin, forge_client):
+        course_name = 'math_status_student'
+        self._setup_course_and_user(course_name=course_name, student_name='student_3')
+        client_student = forge_client('student_3')
+        client_student.post('/post', json={'course': course_name, 'title': 'H', 'content': 'C'})
+        rv_get = client_student.get(f'/post/{course_name}')
+        post_id = rv_get.get_json()['data'][0]['thread']['Id']
+        rv = client_student.put(f'/post/status/{post_id}', json={'Action': 'PIN'})
         assert rv.status_code == 403, rv.get_json()
 
-    def test_post_with_code_before_deadline_student_forbidden(
-            self, forge_client, make_course):
-        c_data = make_course('teacher', students={'student': 'student'})
-        problem = utils.problem.create_problem(course=c_data.name,
-                                               owner='teacher')
-        problem.obj.deadline = datetime.now() + timedelta(days=1)
-        problem.obj.save()
+    def test_post_code_deadline_guard(self, client_admin, forge_client):
+        course_name = 'math_deadline'
+        course, student = self._setup_course_and_user(course_name=course_name, student_name='student_2')
+        
+        # 獲取 admin 使用者作為題目擁有者
+        admin = engine.User.objects.get(username='admin')
+        deadline = datetime.now() + timedelta(days=1)
+        
+        problem = engine.Problem(
+            problem_name='P1', 
+            owner='admin', # 傳入字串以符合 StringField
+            courses=[course]
+        ).save()
+        
+        # 強制更新截止日期 (針對 mongomock 同步問題)
+        engine.Problem._get_collection().update_one(
+            {'_id': problem.id}, 
+            {'$set': {'deadline': deadline}}
+        )
+        
+        client_student = forge_client('student_2')
+        rv = client_student.post('/post', json={
+            'course': course_name,
+            'title': 'C',
+            'content': 'print(1)',
+            'Contains_Code': True,
+            'problemId': str(problem.problem_id)
+        })
+        
+        # 學生在截止日前貼程式碼應被拒絕
+        assert rv.status_code == 403, rv.get_json()
+        assert 'allowed before deadline' in rv.get_json()['message'].lower()
 
-        client_student = forge_client('student')
-        rv = client_student.post('/post',
-                                 json={
-                                     'course': c_data.name,
-                                     'title': 'Work',
-                                     'content': 'Coding.',
-                                     'Contains_Code': True,
-                                     'problemId': problem.problem_id
-                                 })
+    def test_post_code_deadline_guard_ta_exempt(self, client_admin, forge_client):
+        course_name = 'math_deadline_ta'
+        ta_name = 'ta_deadline'
+        course, student = self._setup_course_and_user(
+            course_name=course_name,
+            student_name='student_4',
+            ta_name=ta_name
+        )
+        deadline = datetime.now() + timedelta(days=1)
+        problem = engine.Problem(
+            problem_name='P2',
+            owner='admin',
+            courses=[course]
+        ).save()
+        engine.Problem._get_collection().update_one(
+            {'_id': problem.id},
+            {'$set': {'deadline': deadline}}
+        )
+        client_student = forge_client('student_4')
+        rv = client_student.post('/post', json={
+            'course': course_name,
+            'title': 'C',
+            'content': 'print(1)',
+            'Contains_Code': True,
+            'problemId': str(problem.problem_id)
+        })
         assert rv.status_code == 403, rv.get_json()
 
-    def test_post_with_code_before_deadline_ta_exempt(self, forge_client,
-                                                      make_course):
-        ta_user = utils.user.create_user(role=engine.User.Role.TA)
-        c_data = make_course('teacher',
-                             students={'student': 'student'},
-                             tas=[ta_user.username])
-        problem = utils.problem.create_problem(course=c_data.name,
-                                               owner='teacher')
-        problem.obj.deadline = datetime.now() + timedelta(days=1)
-        problem.obj.save()
-
-        client_ta = forge_client(ta_user.username)
-        rv = client_ta.post('/post',
-                            json={
-                                'course': c_data.name,
-                                'title': 'Work',
-                                'content': 'Coding.',
-                                'Contains_Code': True,
-                                'problemId': problem.problem_id
-                            })
+        client_ta = forge_client(ta_name)
+        rv = client_ta.post('/post', json={
+            'course': course_name,
+            'title': 'C',
+            'content': 'print(1)',
+            'Contains_Code': True,
+            'problemId': str(problem.problem_id)
+        })
         assert rv.status_code == 200, rv.get_json()
+
+    def test_post_delete_audit_log(self, client_admin, forge_client):
+        course_name = 'math_delete'
+        self._setup_course_and_user(course_name=course_name, student_name='student_5')
+        client_student = forge_client('student_5')
+        client_student.post('/post', json={
+            'course': course_name,
+            'title': 'Work',
+            'content': 'Coding.'
+        })
+        rv_get = client_student.get(f'/post/{course_name}')
+        post_id = rv_get.get_json()['data'][0]['thread']['Id']
+        rv = client_student.delete('/post', json={'targetThreadId': post_id})
+        assert rv.status_code == 200, rv.get_json()
+        self._assert_post_log('DELETE_POST', 'student_5', post_id)

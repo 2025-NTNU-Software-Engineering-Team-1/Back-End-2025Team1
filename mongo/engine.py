@@ -407,6 +407,7 @@ class Problem(Document):
     deadline = DateTimeField(required=False, db_field='deadline')
     # user can view stdout/stderr
     can_view_stdout = BooleanField(db_field='canViewStdout', default=True)
+    allow_code = BooleanField(db_field='allowCode', default=True)
     cpp_report_url = StringField(
         db_field='cppReportUrl',
         default='',
@@ -692,6 +693,15 @@ class DiscussionLike(Document):
     target_type = StringField(required=True, choices=['post', 'reply'])
     target_id = IntField(required=True)
     created_time = DateTimeField(default=datetime.now, db_field='createdTime')
+
+
+class DiscussionLog(Document):
+    user = ReferenceField('User', required=True)
+    action = StringField(required=True)
+    target_type = StringField()
+    target_id = StringField()
+    timestamp = DateTimeField(default=datetime.now)
+    meta = {'collection': 'discussion_log'}
 
 
 class Config(Document):
