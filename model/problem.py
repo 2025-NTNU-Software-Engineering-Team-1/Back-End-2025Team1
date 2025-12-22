@@ -14,6 +14,7 @@ from mongo import *
 from mongo import engine
 from mongo import sandbox
 from mongo.utils import drop_none, MinioClient, RedisCache
+import hashlib
 from mongo.problem import *
 from mongo.submission import TrialSubmission
 from .utils.problem_utils import build_config_and_pipeline as _build_config_and_pipeline
@@ -1519,6 +1520,12 @@ def request_trial_submission(user,
         return HTTPError("Problem not found.", 404)
 
     problem = problem_proxy
+    # Backward compatibility for clients sending legacy key casing.
+    data = request.get_json(silent=True) or {}
+    if "Use_Default_Test_Cases" in data:
+        use_default_test_cases = data.get("Use_Default_Test_Cases")
+    elif "use_default_test_cases" in data:
+        use_default_test_cases = data.get("use_default_test_cases")
 
     # Validate language type (0: C, 1: C++, 2: Python)
     if language_type not in [0, 1, 2]:

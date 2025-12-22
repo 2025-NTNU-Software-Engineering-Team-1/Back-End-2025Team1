@@ -238,6 +238,7 @@ def upload_trial_files(user, trial_id: str):
             f"Failed to send trial submission to sandbox: {e}")
         # Continue anyway - files are uploaded
 
+
     current_app.logger.info(
         f"Successfully uploaded files for trial_id: {trial_id}")
     return HTTPResponse("Files received.",
