@@ -237,8 +237,6 @@ class User(MongoBase, engine=engine.User):
             'data': data
         }
         token = jwt.encode(payload, JWT_SECRET, algorithm='HS256')
-        if isinstance(token, bytes):
-            return token.decode('utf-8')
         return token
 
     def properties(self, *keys) -> Dict[str, Any]:
@@ -309,7 +307,7 @@ def jwt_decode(token):
             token,
             JWT_SECRET,
             issuer=JWT_ISS,
-            algorithms='HS256',
+            algorithms=['HS256'],
         )
     except jwt.exceptions.PyJWTError:
         return None

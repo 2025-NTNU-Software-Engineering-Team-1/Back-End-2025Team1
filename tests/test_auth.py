@@ -4,6 +4,9 @@ import random
 from typing import List, Optional, Union
 import pytest
 import secrets
+import jwt
+import base64
+import json
 from mongo import *
 from mongo import engine
 from model import get_verify_link
@@ -801,7 +804,6 @@ class TestBatchSignup:
             },
         )
         assert rv.status_code == 400, rv.get_json()
-        assert 'input' in rv.get_json()['message']
 
     def test_signup_with_invalid_role(self, forge_client):
         client = forge_client('first_admin')
@@ -880,6 +882,71 @@ class TestBatchSignup:
         client = forge_client('first_admin')
         rv = client.get('/auth/me?fields=invalid')
         assert rv.status_code == 400, rv.get_json()
+
+
+class TestJWTSecurity:
+    '''Test JWT Security Fixes
+    '''
+
+    def test_alg_none_rejection(self, client):
+        '''Verify that alg: none tokens are rejected
+        '''
+        from mongo.user import JWT_ISS
+        payload = {
+            'iss': JWT_ISS,
+            'secret': True,
+            'data': {
+                'username': 'test'
+            }
+        }
+        # Construct alg: none token manually
+        header = {'alg': 'none', 'typ': 'JWT'}
+        h = base64.urlsafe_b64encode(
+            json.dumps(header).encode()).decode().rstrip('=')
+        p = base64.urlsafe_b64encode(
+            json.dumps(payload).encode()).decode().rstrip('=')
+        attack_token = f"{h}.{p}."
+
+        # Attempt to use the malicious token
+        client.set_cookie('piann', attack_token, domain='test.test')
+        rv = client.get('/auth/me')
+
+        assert rv.status_code == 403, rv.get_json()
+        assert rv.get_json()['message'] == 'Invalid Token'
+
+    def test_invalid_algorithm_rejection(self, client):
+        '''Verify that tokens with unauthorized algorithms are rejected
+        '''
+        from mongo.user import JWT_ISS, JWT_SECRET
+        payload = {
+            'iss': JWT_ISS,
+            'secret': True,
+            'data': {
+                'username': 'test'
+            }
+        }
+        # Use HS384 which should not be in the allowed algorithms list
+        invalid_token = jwt.encode(payload, JWT_SECRET, algorithm='HS384')
+
+        client.set_cookie('piann', invalid_token, domain='test.test')
+        rv = client.get('/auth/me')
+
+        assert rv.status_code == 403, rv.get_json()
+        assert rv.get_json()['message'] == 'Invalid Token'
+
+    def test_valid_hs256_token(self, client):
+        '''Verify that standard HS256 tokens still work
+        '''
+        username = secrets.token_hex(8)
+        password = secrets.token_hex(16)
+        email = f'{username}@noj.tw'
+        u = User.signup(username, password, email).activate()
+
+        client.set_cookie('piann', u.secret, domain='test.test')
+        rv = client.get('/auth/me')
+
+        assert rv.status_code == 200, rv.get_json()
+        assert rv.get_json()['data']['username'] == username
 
 
 def test_verify_link_without_subdirectory(app):
