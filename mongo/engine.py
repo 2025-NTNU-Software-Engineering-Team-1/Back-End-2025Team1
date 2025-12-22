@@ -404,6 +404,7 @@ class Problem(Document):
     ac_user = IntField(db_field='ACUser', default=0)
     submitter = IntField(default=0)
     homeworks = ListField(ReferenceField('Homework'), default=list)
+    deadline = DateTimeField(required=False, db_field='deadline')
     # user can view stdout/stderr
     can_view_stdout = BooleanField(db_field='canViewStdout', default=True)
     cpp_report_url = StringField(
@@ -626,6 +627,9 @@ class PostThread(Document):
     created = DateTimeField(required=True)
     updated = DateTimeField(required=True)
     status = IntField(default=0, choices=[0, 1])  # not delete / delete
+    pinned = BooleanField(default=False)
+    closed = BooleanField(default=False)
+    solved = BooleanField(default=False)
     reply = ListField(ReferenceField('PostThread', db_field='postThread'),
                       dafault=list)
 

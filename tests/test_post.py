@@ -1,6 +1,9 @@
 import pytest
+from datetime import datetime, timedelta
 from tests.base_tester import BaseTester
 from mongo import Course
+from mongo import engine
+from tests import utils
 
 
 class TestPost(BaseTester):
@@ -257,3 +260,91 @@ class TestPost(BaseTester):
         rv = client_teacher.get(f'/post/view/{c_data.name}/aaabbcc/')
         assert rv.status_code == 200, rv.get_json()
         assert rv.get_json()['data'] == []
+
+    def test_update_post_status_ta_can_pin_close(self, forge_client,
+                                                 make_course):
+        ta_user = utils.user.create_user(role=engine.User.Role.TA)
+        c_data = make_course('teacher',
+                             students={'student': 'student'},
+                             tas=[ta_user.username])
+
+        client_student = forge_client('student')
+        rv = client_student.post('/post',
+                                 json={
+                                     'course': c_data.name,
+                                     'title': 'Work',
+                                     'content': 'Coding.'
+                                 })
+        assert rv.status_code == 200, rv.get_json()
+        rvget = client_student.get(f'/post/{c_data.name}')
+        post_id = rvget.get_json()['data'][0]['thread']['id']
+
+        client_ta = forge_client(ta_user.username)
+        rv = client_ta.put(f'/post/status/{post_id}', json={'Action': 'PIN'})
+        assert rv.status_code == 200, rv.get_json()
+
+        rv = client_ta.put(f'/post/status/{post_id}', json={'Action': 'CLOSE'})
+        assert rv.status_code == 200, rv.get_json()
+
+        thread = engine.PostThread.objects.get(id=post_id)
+        assert thread.pinned is True
+        assert thread.closed is True
+
+    def test_update_post_status_student_forbidden(self, forge_client,
+                                                  make_course):
+        c_data = make_course('teacher', students={'student': 'student'})
+        client_student = forge_client('student')
+        rv = client_student.post('/post',
+                                 json={
+                                     'course': c_data.name,
+                                     'title': 'Work',
+                                     'content': 'Coding.'
+                                 })
+        assert rv.status_code == 200, rv.get_json()
+        rvget = client_student.get(f'/post/{c_data.name}')
+        post_id = rvget.get_json()['data'][0]['thread']['id']
+
+        rv = client_student.put(f'/post/status/{post_id}',
+                                json={'Action': 'PIN'})
+        assert rv.status_code == 403, rv.get_json()
+
+    def test_post_with_code_before_deadline_student_forbidden(
+            self, forge_client, make_course):
+        c_data = make_course('teacher', students={'student': 'student'})
+        problem = utils.problem.create_problem(course=c_data.name,
+                                               owner='teacher')
+        problem.obj.deadline = datetime.now() + timedelta(days=1)
+        problem.obj.save()
+
+        client_student = forge_client('student')
+        rv = client_student.post('/post',
+                                 json={
+                                     'course': c_data.name,
+                                     'title': 'Work',
+                                     'content': 'Coding.',
+                                     'Contains_Code': True,
+                                     'problemId': problem.problem_id
+                                 })
+        assert rv.status_code == 403, rv.get_json()
+
+    def test_post_with_code_before_deadline_ta_exempt(self, forge_client,
+                                                      make_course):
+        ta_user = utils.user.create_user(role=engine.User.Role.TA)
+        c_data = make_course('teacher',
+                             students={'student': 'student'},
+                             tas=[ta_user.username])
+        problem = utils.problem.create_problem(course=c_data.name,
+                                               owner='teacher')
+        problem.obj.deadline = datetime.now() + timedelta(days=1)
+        problem.obj.save()
+
+        client_ta = forge_client(ta_user.username)
+        rv = client_ta.post('/post',
+                            json={
+                                'course': c_data.name,
+                                'title': 'Work',
+                                'content': 'Coding.',
+                                'Contains_Code': True,
+                                'problemId': problem.problem_id
+                            })
+        assert rv.status_code == 200, rv.get_json()
