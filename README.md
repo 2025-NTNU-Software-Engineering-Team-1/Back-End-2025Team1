@@ -30,6 +30,7 @@ You can also run tests in parallel to speed up the process (e.g., using 4 worker
 ```bash
 poetry run pytest -n 4
 ```
+If you found any tests failed, add `--dist loadfile` to the command to ensure the tests in a file are run in a same worker.
 
 All tests should pass (or skip). Create an issue if you found any tests failed.
 
