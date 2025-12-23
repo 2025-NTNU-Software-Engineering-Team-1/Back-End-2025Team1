@@ -21,7 +21,7 @@ def app():
 
     # Apply security configurations (CSRF, Headers, Error Handlers)
     from model.utils.security import setup_security
-    setup_security(app)
+    # setup_security(app)
 
     # Register flask blueprint
     api2prefix = [
