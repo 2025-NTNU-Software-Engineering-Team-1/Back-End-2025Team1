@@ -12,6 +12,7 @@ _DEFAULT_LIMIT = 20
 _MIN_LIMIT = 1
 _MAX_LIMIT = 50
 _MAX_PAGE = 1000
+_ERR_INVALID_PARAM = 'Invalid parameter.'
 
 
 def _clamp_int(raw_value, default, min_v, max_v, name):
@@ -29,6 +30,58 @@ def _err(msg, code=400):
     return HTTPError(msg, code, data={'Status': 'ERR'})
 
 
+def format_discussion_post(post):
+    author_info = ''
+    if getattr(post, 'author', None):
+        author_info = getattr(post.author, 'info', None)
+        if not author_info:
+            author_info = post.author.username
+    problem_id = ''
+    try:
+        raw = post.to_mongo().to_dict()
+        problem_id = raw.get('problemId', post.problem_id)
+    except Exception:
+        problem_id = getattr(post, 'problem_id', '')
+    if problem_id is None:
+        problem_id = ''
+    created_time = post.created_time.isoformat()
+    like_count = post.like_count or 0
+    reply_count = post.reply_count or 0
+    is_pinned = bool(post.is_pinned)
+    is_solved = bool(post.is_solved)
+    is_closed = bool(post.is_closed)
+    return {
+        'Post_Id': post.post_id,
+        'postId': post.post_id,
+        'post_id': post.post_id,
+        'Author': author_info,
+        'author': author_info,
+        'Title': post.title,
+        'title': post.title,
+        'Created_Time': created_time,
+        'createdTime': created_time,
+        'created_time': created_time,
+        'Like_Count': like_count,
+        'likeCount': like_count,
+        'like_count': like_count,
+        'Reply_Count': reply_count,
+        'replyCount': reply_count,
+        'reply_count': reply_count,
+        'Is_Pinned': is_pinned,
+        'isPinned': is_pinned,
+        'is_pinned': is_pinned,
+        'Is_Solved': is_solved,
+        'isSolved': is_solved,
+        'is_solved': is_solved,
+        'Is_Closed': is_closed,
+        'isClosed': is_closed,
+        'is_closed': is_closed,
+        'Problem_Id': problem_id,
+        'problemId': problem_id,
+        'problem_id': problem_id,
+    }
+
+
 @discussion_api.route('/posts', methods=['GET'])
 @login_required
 def list_discussion_posts(user):
@@ -39,13 +92,22 @@ def list_discussion_posts(user):
     except ValueError as exc:
         return _err(str(exc), 400)
 
-    problem_id = (request.args.get('Problem_Id') or '').strip()
+    raw_problem_id = request.args.get('Problem_Id')
+    problem_id = ''
+    if raw_problem_id is not None:
+        problem_id = str(raw_problem_id).strip()
     mode = (request.args.get('Mode') or 'New').strip()
 
     if mode not in ('New', 'Hot'):
         return _err('Invalid Mode. Available values: New, Hot.', 400)
 
-    data = Discussion.get_feed(user, mode, limit, page, problem_id)
+    try:
+        data = Discussion.get_feed(user, mode, limit, page, problem_id)
+    except ValueError:
+        return _err(_ERR_INVALID_PARAM, 400)
+
+    raw_posts = data.get('Posts', [])
+    data['Posts'] = [format_discussion_post(post) for post in raw_posts]
 
     resp_data = {
         'Status': 'OK',
@@ -57,6 +119,8 @@ def list_discussion_posts(user):
     # 如果 Request 有 Problem_Id，Response 也要帶回去 (滿足測試)
     if problem_id:
         resp_data['Problem_Id'] = problem_id
+        resp_data['problemId'] = problem_id
+        resp_data['problem_id'] = problem_id
 
     return HTTPResponse('Success.', data=resp_data)
 

@@ -26,6 +26,16 @@ _CODE_WEAK_LINE_RE = re.compile(
 class Discussion:
 
     @classmethod
+    def _role_can_bypass_acl(cls, user) -> bool:
+        role_value = (user.role.value
+                      if hasattr(user.role, 'value') else user.role)
+        try:
+            role_value = int(role_value)
+        except (TypeError, ValueError):
+            role_value = 2  # Default Student
+        return role_value in _PERMITTED_ROLES_INT
+
+    @classmethod
     def _detect_contains_code(cls, content: str) -> bool:
         if not content:
             return False
@@ -91,22 +101,6 @@ class Discussion:
         return str(problem_id) in allowed_ids
 
     @classmethod
-    def _serialize_post_simple(cls, post) -> Dict:
-        """列表用的序列化"""
-        return {
-            'Post_Id': post.post_id,
-            'Author': post.author.username if post.author else '',
-            'Title': post.title,
-            'Created_Time': post.created_time.isoformat(),
-            'Like_Count': post.like_count or 0,
-            'Reply_Count': post.reply_count or 0,
-            'Is_Pinned': bool(post.is_pinned),
-            'Is_Solved': bool(post.is_solved),
-            'Is_Closed': bool(post.is_closed),
-            'Problem_Id': post.problem_id,
-        }
-
-    @classmethod
     def get_feed(cls,
                  user,
                  mode: str,
@@ -114,21 +108,43 @@ class Discussion:
                  page: int,
                  problem_id: str = None) -> Dict:
         allowed_ids = cls._get_viewable_problem_ids(user)
+        if cls._role_can_bypass_acl(user):
+            allowed_ids = None
+
+        allow_public_problem = False
+        if problem_id is not None:
+            problem_id = str(problem_id).strip()
+            if not problem_id:
+                problem_id = None
 
         # 若非管理員且無課程
         if allowed_ids is not None and not allowed_ids:
-            return {'Total': 0, 'Posts': []}
+            if not problem_id:
+                return {'Total': 0, 'Posts': []}
+            if problem_id.isdigit():
+                problem = engine.Problem.objects(
+                    problem_id=int(problem_id),
+                    problem_status=engine.Problem.Visibility.SHOW,
+                ).first()
+                allow_public_problem = bool(problem)
+            if not allow_public_problem and not cls._can_view_problem(
+                    user, problem_id):
+                return {'Total': 0, 'Posts': []}
 
         queryset = engine.DiscussionPost.objects(is_deleted=False)
 
-        if allowed_ids is not None:
+        if allowed_ids is not None and allowed_ids:
             queryset = queryset.filter(problem_id__in=list(allowed_ids))
 
         if problem_id:
             # 權限檢查：如果指定了題目，要在允許清單內
-            if allowed_ids is not None and problem_id not in allowed_ids:
+            if (allowed_ids is not None and problem_id not in allowed_ids
+                    and not allow_public_problem):
                 return {'Total': 0, 'Posts': []}
-            queryset = queryset.filter(problem_id=problem_id)
+            candidates = [problem_id]
+            if problem_id.isdigit():
+                candidates.append(int(problem_id))
+            queryset = queryset.filter(problem_id__in=candidates)
 
         posts_list = None
         if mode == 'Hot':
@@ -154,9 +170,11 @@ class Discussion:
         else:
             window = queryset.skip(start).limit(limit)
 
+        window = list(window)
+
         return {
             'Total': total,
-            'Posts': [cls._serialize_post_simple(p) for p in window],
+            'Posts': window,
         }
 
     @classmethod
