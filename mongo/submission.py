@@ -1884,16 +1884,16 @@ class TrialSubmission(MongoBase, BaseSubmission,
                     status_str = 'Pending'
 
                 history_list.append({
-                    "Trial_Submission_Id": str(sub.id),
-                    "Problem_Id": str(sub.problem_id),
-                    "Status": status_str,
-                    "Score": sub.score,
-                    "Language_Type": sub.language,  # 0: C, 1: C++, 2: Python
-                    "Timestamp":
+                    "trial_submission_id": str(sub.id),
+                    "problem_Id": str(sub.problem_id),
+                    "status": status_str,
+                    "score": sub.score,
+                    "language_type": sub.language,  # 0: C, 1: C++, 2: Python
+                    "timestamp":
                     sub.timestamp.timestamp()  # 回傳 Unix Timestamp 方便前端處理
                 })
 
-            return {"Total_Count": total_count, "History": history_list}
+            return {"total_count": total_count, "history": history_list}
         except Exception as e:
             current_app.logger.error(
                 f"Error getting trial submission history: {e}")

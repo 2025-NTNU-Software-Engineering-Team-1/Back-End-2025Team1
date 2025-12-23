@@ -1,4 +1,7 @@
 import copy
+import os
+import json
+import time
 from typing import Dict, Tuple
 from mongo.problem import Problem
 
@@ -22,7 +25,8 @@ def build_config_and_pipeline(problem: Problem) -> Tuple[Dict, Dict]:
                               config_payload.get('compilation', False))
     config_payload.setdefault('resourceData', False)
     config_payload.setdefault('resourceDataTeacher', False)
-    config_payload['trialMode'] = config_payload.get('trialMode', False)
+    config_payload['trialMode'] = config_payload.get(
+        'trialMode', config_payload.get('testMode', False))
     config_payload['maxNumberOfTrial'] = config_payload.get(
         'maxNumberOfTrial', 0)
     config_payload['trialResultVisible'] = config_payload.get(

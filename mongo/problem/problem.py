@@ -100,35 +100,43 @@ class Problem(MongoBase, engine=engine.Problem):
 
     @property
     def trial_mode_enabled(self) -> bool:
-        """Check if trial mode is enabled for this problem."""
-        # Check new field name first
+        """Check if trial mode is enabled for this problem.
+        Checks config.trialMode first, then database fields for backward compatibility.
+        """
+        # Check config.trialMode first (current way)
+        config = self.obj.config or {}
+        if 'trialMode' in config:
+            return bool(config['trialMode'])
+        # Also check testMode for backward compatibility
+        if 'testMode' in config:
+            return bool(config['testMode'])
+        # Try database field name (backward compatibility)
         if hasattr(self.obj, 'trial_mode_enabled'):
-            return getattr(self.obj, 'trial_mode_enabled', False)
-
-        # Backward compatibility: check old field name
+            value = getattr(self.obj, 'trial_mode_enabled', False)
+            if value is not None:
+                return bool(value)
+        # Try database field name directly
+        if hasattr(self.obj, 'trialModeEnabled'):
+            value = getattr(self.obj, 'trialModeEnabled', False)
+            if value is not None:
+                return bool(value)
+        # Backward compatibility: try old field names and migrate
         if hasattr(self.obj, 'test_mode_enabled'):
-            old_value = getattr(self.obj, 'test_mode_enabled', False)
-            # Migrate old field to new field
-            if old_value:
-                self.obj.trial_mode_enabled = True
-                self.obj.save()
-            return old_value
-
-        # Check database field directly
-        if hasattr(self.obj, '_data'):
-            db_data = self.obj._data
-            if 'trialModeEnabled' in db_data:
-                return db_data.get('trialModeEnabled', False)
-
-            # Backward compatibility: check old DB field
-            if 'testModeEnabled' in db_data:
-                old_value = db_data.get('testModeEnabled', False)
+            value = getattr(self.obj, 'test_mode_enabled', False)
+            if value is not None:
                 # Migrate old field to new field
-                if old_value:
+                if value:
                     self.obj.trial_mode_enabled = True
                     self.obj.save()
-                return old_value
-
+                return bool(value)
+        if hasattr(self.obj, 'testModeEnabled'):
+            value = getattr(self.obj, 'testModeEnabled', False)
+            if value is not None:
+                # Migrate old field to new field
+                if value:
+                    self.obj.trial_mode_enabled = True
+                    self.obj.save()
+                return bool(value)
         return False
 
     @property
@@ -283,6 +291,11 @@ class Problem(MongoBase, engine=engine.Problem):
                 'resource_data_teacher.zip':
                 ('resource_data_teacher', 'resource_data_teacher.zip'),
                 'dockerfiles.zip': ('network_dockerfile', 'Dockerfiles.zip'),
+                'public_testdata.zip':
+                ('public_testdata', 'public_testdata.zip'),
+                'ac_code.c': ('ac_code', 'ac_code.c'),
+                'ac_code.cpp': ('ac_code', 'ac_code.cpp'),
+                'ac_code.py': ('ac_code', 'ac_code.py'),
             }
 
             meta = meta or {}
@@ -672,9 +685,6 @@ class Problem(MongoBase, engine=engine.Problem):
 
                 # Merge stashed logic for aliasing and new fields using trial_mode dict
                 if 'maxNumberOfTrial' in trial_mode:
-                    print(
-                        f"DEBUG: setting maxNumberOfTrial to {trial_mode['maxNumberOfTrial']}"
-                    )
                     full_config['maxNumberOfTrial'] = trial_mode[
                         'maxNumberOfTrial']
                 if 'trialResultVisible' in trial_mode:
@@ -685,7 +695,6 @@ class Problem(MongoBase, engine=engine.Problem):
                         'trialResultDownloadable']
 
             kwargs['config'] = full_config
-            print(f"DEBUG: full_config after update: {full_config}")
             _sync_config_aliases(kwargs['config'])
 
         if 'test_case_info' in kwargs and kwargs.get(

@@ -227,6 +227,14 @@ def upload_problem_assets(user: User, problem: Problem):
             request.files.get('resource_data_teacher.zip'),
             'dockerfiles.zip':
             request.files.get('dockerfiles.zip'),
+            'public_testdata.zip':
+            request.files.get('public_testdata.zip'),
+            'ac_code.c':
+            request.files.get('ac_code.c'),
+            'ac_code.cpp':
+            request.files.get('ac_code.cpp'),
+            'ac_code.py':
+            request.files.get('ac_code.py'),
         }
 
         valid_files = {k: v for k, v in files_data.items() if v is not None}
@@ -1554,12 +1562,57 @@ def request_trial_submission(user,
     Returns:
         Trial_Submission_Id if successful
     """
+    import json
+    import os
+    log_data = {
+        'location': 'problem.py:1514',
+        'message': 'request_trial_submission entry',
+        'data': {
+            'problem_id': problem_id,
+            'username': user.username,
+            'language_type': language_type,
+            'use_default_test_cases': use_default_test_cases
+        },
+        'timestamp': int(datetime.now().timestamp() * 1000),
+        'sessionId': 'debug-session',
+        'runId': 'run1',
+        'hypothesisId': 'A'
+    }
+    try:
+        log_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            '.cursor', 'debug.log')
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(log_data) + '\n')
+    except Exception as e:
+        current_app.logger.error(f"Failed to write debug log: {e}")
     current_app.logger.info(
         f"Requesting trial submission for problem id-{problem_id} by user {user.username}"
     )
     # Load problem
     problem_proxy = Problem(problem_id)
     if not problem_proxy or not getattr(problem_proxy, "obj", None):
+        import os
+        log_data = {
+            'location': 'problem.py:1520',
+            'message': 'Problem not found',
+            'data': {
+                'problem_id': problem_id
+            },
+            'timestamp': int(datetime.now().timestamp() * 1000),
+            'sessionId': 'debug-session',
+            'runId': 'run1',
+            'hypothesisId': 'B'
+        }
+        try:
+            log_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                '.cursor', 'debug.log')
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(log_data) + '\n')
+        except Exception:
+            pass
         current_app.logger.error(f"Problem {problem_id} not found")
         return HTTPError("Problem not found.", 404)
 
@@ -1573,45 +1626,120 @@ def request_trial_submission(user,
 
     # Validate language type (0: C, 1: C++, 2: Python)
     if language_type not in [0, 1, 2]:
+        import os
+        log_data = {
+            'location': 'problem.py:1532',
+            'message': 'Invalid language type',
+            'data': {
+                'language_type': language_type
+            },
+            'timestamp': int(datetime.now().timestamp() * 1000),
+            'sessionId': 'debug-session',
+            'runId': 'run1',
+            'hypothesisId': 'C'
+        }
+        try:
+            log_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                '.cursor', 'debug.log')
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(log_data) + '\n')
+        except Exception:
+            pass
         current_app.logger.error(f"Invalid language type: {language_type}")
         return HTTPError(
             "Invalid language type. Must be 0 (C), 1: C++, 2: Python).", 400)
 
     # Check if user has permission to submit
-    if not problem.permission(user, Problem.Permission.ONLINE):
-        current_app.logger.warning(
-            f"User {user.username} lacks permission for problem {problem_id}")
+    has_permission = problem.permission(user, Problem.Permission.ONLINE)
+    import os
+    log_data = {
+        'location': 'problem.py:1538',
+        'message': 'Permission check',
+        'data': {
+            'has_permission': has_permission,
+            'problem_id': problem_id,
+            'username': user.username
+        },
+        'timestamp': int(datetime.now().timestamp() * 1000),
+        'sessionId': 'debug-session',
+        'runId': 'run1',
+        'hypothesisId': 'D'
+    }
+    try:
+        log_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            '.cursor', 'debug.log')
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(log_data) + '\n')
+    except Exception:
+        pass
+    if not has_permission:
         return HTTPError(
             "You don't have permission to submit to this problem.", 403)
 
-    # Check if trial mode is enabled using property accessor (handles backward compatibility)
+    # Check if trial mode is enabled
+    trial_enabled = problem.trial_mode_enabled
+    import os
+    log_data = {
+        'location': 'problem.py:1543',
+        'message': 'Trial mode check',
+        'data': {
+            'trial_enabled':
+            trial_enabled,
+            'problem_id':
+            problem_id,
+            'hasattr_trial_mode_enabled':
+            hasattr(problem.obj, 'trial_mode_enabled'),
+            'hasattr_trialModeEnabled':
+            hasattr(problem.obj, 'trialModeEnabled'),
+            'trial_mode_enabled_value':
+            getattr(problem.obj, 'trial_mode_enabled', None),
+            'trialModeEnabled_value':
+            getattr(problem.obj, 'trialModeEnabled', None)
+        },
+        'timestamp': int(datetime.now().timestamp() * 1000),
+        'sessionId': 'debug-session',
+        'runId': 'run1',
+        'hypothesisId': 'E'
+    }
     try:
-        trial_enabled = problem.trial_mode_enabled
-        current_app.logger.info(
-            f"Problem {problem_id} trial_mode_enabled: {trial_enabled} "
-            f"(hasattr trial_mode_enabled: {hasattr(problem.obj, 'trial_mode_enabled')}, "
-            f"hasattr test_mode_enabled: {hasattr(problem.obj, 'test_mode_enabled')})"
-        )
-    except Exception as e:
-        current_app.logger.error(f"Error checking trial_mode_enabled: {e}",
-                                 exc_info=True)
-        # Fallback: check directly
-        trial_enabled = getattr(
-            problem.obj, 'trial_mode_enabled',
-            getattr(problem.obj, 'test_mode_enabled', False))
-
+        log_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            '.cursor', 'debug.log')
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(log_data) + '\n')
+    except Exception:
+        pass
     if not trial_enabled:
-        current_app.logger.warning(
-            f"Trial mode not enabled for problem {problem_id} (trial_enabled={trial_enabled})"
-        )
         return HTTPError("Trial mode is not enabled for this problem.", 403)
 
     # Use TrialSubmission.add() instead of creating engine object directly
     try:
-        current_app.logger.info(
-            f"Creating trial submission for problem {problem_id}, "
-            f"user {user.username}, lang {language_type}, "
-            f"use_default={use_default_test_cases}")
+        import json
+        import os
+        log_data = {
+            'location': 'problem.py:1547',
+            'message': 'Before TrialSubmission.add',
+            'data': {
+                'problem_id': problem_id,
+                'username': user.username,
+                'lang': language_type,
+                'use_default_case': use_default_test_cases
+            },
+            'timestamp': int(datetime.now().timestamp() * 1000),
+            'sessionId': 'debug-session',
+            'runId': 'run1',
+            'hypothesisId': 'F'
+        }
+        try:
+            log_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                '.cursor', 'debug.log')
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(log_data) + '\n')
+        except Exception:
+            pass
         trial_submission = TrialSubmission.add(
             problem_id=problem_id,
             username=user.username,
@@ -1619,146 +1747,80 @@ def request_trial_submission(user,
             timestamp=datetime.now(),
             ip_addr=request.remote_addr,
             use_default_case=use_default_test_cases)
-
-        current_app.logger.info(
-            f"Trial submission created successfully: {trial_submission.id}")
-
+        import os
+        log_data = {
+            'location': 'problem.py:1556',
+            'message': 'After TrialSubmission.add success',
+            'data': {
+                'trial_submission_id': str(trial_submission.id)
+            },
+            'timestamp': int(datetime.now().timestamp() * 1000),
+            'sessionId': 'debug-session',
+            'runId': 'run1',
+            'hypothesisId': 'F'
+        }
+        try:
+            log_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                '.cursor', 'debug.log')
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(log_data) + '\n')
+        except Exception:
+            pass
         return HTTPResponse(
             "Trial submission created successfully.",
-            data={"Trial_Submission_Id": str(trial_submission.id)})
+            data={"trial_submission_id": str(trial_submission.id)})
     except PermissionError as e:
-        current_app.logger.warning(
-            f"Permission error for trial submission by user {user.username} on problem id-{problem_id}: {str(e)}",
-            exc_info=True)
+        import json
+        import os
+        log_data = {
+            'location': 'problem.py:1560',
+            'message': 'PermissionError in TrialSubmission.add',
+            'data': {
+                'error': str(e),
+                'problem_id': problem_id,
+                'username': user.username
+            },
+            'timestamp': int(datetime.now().timestamp() * 1000),
+            'sessionId': 'debug-session',
+            'runId': 'run1',
+            'hypothesisId': 'F'
+        }
+        try:
+            log_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                '.cursor', 'debug.log')
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(log_data) + '\n')
+        except Exception:
+            pass
+        current_app.logger.info(
+            f"Permission error for trial submission by user {user.username} on problem id-{problem_id}: {str(e)}"
+        )
         return HTTPError(str(e), 403)
     except Exception as e:
-        current_app.logger.error(f"Error creating trial submission: {str(e)}",
-                                 exc_info=True)
-        return HTTPError(f"Failed to create trial submission: {str(e)}", 500)
-
-
-@problem_api.get("/<int:problem_id>/check-trial-mode")
-@login_required
-@Request.doc('problem_id', 'problem', Problem)
-def check_trial_mode(user: User, problem: Problem):
-    """
-    Check trial_mode_enabled status for a problem (for debugging).
-    """
-    if not problem.permission(user, Problem.Permission.VIEW):
-        return permission_error_response()
-
-    trial_mode_enabled = getattr(problem.obj, 'trial_mode_enabled', None)
-    trial_mode_enabled_db = getattr(problem.obj, 'trialModeEnabled', None)
-
-    return HTTPResponse("Trial mode status checked.",
-                        data={
-                            "problem_id":
-                            problem.problem_id,
-                            "problem_name":
-                            getattr(problem.obj, 'problem_name', 'N/A'),
-                            "trial_mode_enabled":
-                            trial_mode_enabled,
-                            "trialModeEnabled_db":
-                            trial_mode_enabled_db,
-                            "has_attr_trial_mode_enabled":
-                            hasattr(problem.obj, 'trial_mode_enabled'),
-                            "has_attr_trialModeEnabled":
-                            hasattr(problem.obj, 'trialModeEnabled'),
-                        })
-
-
-@problem_api.post("/<int:problem_id>/enable-trial-mode")
-@identity_verify(0, 1)  # admin and teacher only
-@Request.doc('problem_id', 'problem', Problem)
-def enable_trial_mode(user: User, problem: Problem):
-    """
-    Enable trial_mode_enabled for a problem (admin/teacher only).
-    """
-    if not problem.permission(user, Problem.Permission.MANAGE):
-        return permission_error_response()
-
-    try:
-        # Update trial_mode_enabled to True
-        problem.obj.trial_mode_enabled = True
-        problem.obj.save()
-
-        current_app.logger.info(
-            f"Trial mode enabled for problem {problem.problem_id} by user {user.username}"
-        )
-
-        return HTTPResponse("Trial mode enabled successfully.",
-                            data={
-                                "problem_id":
-                                problem.problem_id,
-                                "problem_name":
-                                getattr(problem.obj, 'problem_name', 'N/A'),
-                                "trial_mode_enabled":
-                                True,
-                            })
-    except Exception as e:
-        current_app.logger.error(f"Error enabling trial mode: {e}")
-        return HTTPError(f"Failed to enable trial mode: {e}", 500)
-
-
-@problem_api.post("/<int:problem_id>/test-settings")
-@login_required
-def save_test_settings(user, problem_id: int):
-    """
-    Save user's test case settings (use default or custom testcases).
-    This endpoint validates the request and returns success.
-    The actual custom testcases are uploaded when creating a trial submission.
-    """
-    current_app.logger.info(
-        f"Saving test settings for problem id-{problem_id} by user {user.username}"
-    )
-
-    # Load problem
-    problem = Problem(problem_id)
-    if not problem or not getattr(problem, "obj", None):
-        return HTTPError("Problem not found.", 404)
-
-    # Check if user has permission to submit
-    if not problem.permission(user, Problem.Permission.ONLINE):
-        return HTTPError(
-            "You don't have permission to submit to this problem.", 403)
-
-    # Get form data
-    use_default_testcases = request.form.get("use_default_testcases",
-                                             "true").lower() == "true"
-    custom_testcases_file = request.files.get("custom_testcases")
-
-    # Validate custom testcases if provided
-    if not use_default_testcases and custom_testcases_file:
-        # Validate it's a zip file
-        if not zipfile.is_zipfile(custom_testcases_file):
-            return HTTPError("Custom testcases must be a valid zip file.", 400)
-
-        # Check file size (5MB limit, same as trial submission)
-        custom_testcases_file.seek(0, 2)  # Seek to end
-        file_size = custom_testcases_file.tell()
-        custom_testcases_file.seek(0)  # Reset
-
-        if file_size > 5 * 1024 * 1024:
-            return HTTPError("Custom testcases file too large (>5MB).", 400)
-
-        # Check uncompressed size
+        import json
+        import os
+        log_data = {
+            'location': 'problem.py:1565',
+            'message': 'Exception in TrialSubmission.add',
+            'data': {
+                'error': str(e),
+                'error_type': type(e).__name__,
+                'problem_id': problem_id
+            },
+            'timestamp': int(datetime.now().timestamp() * 1000),
+            'sessionId': 'debug-session',
+            'runId': 'run1',
+            'hypothesisId': 'F'
+        }
         try:
-            with zipfile.ZipFile(custom_testcases_file, 'r') as zf:
-                uncompressed_total = sum(info.file_size
-                                         for info in zf.infolist())
-            if uncompressed_total > 5 * 1024 * 1024:
-                return HTTPError(
-                    "Custom testcases uncompressed size too large (>5MB).",
-                    400)
-        except zipfile.BadZipFile:
-            return HTTPError("Custom testcases must be a valid zip file.", 400)
-        except Exception as e:
-            current_app.logger.error(f"Error validating custom testcases: {e}")
-            return HTTPError(f"Failed to validate custom testcases: {e}", 400)
-
-    # Settings are valid, return success
-    # Note: The actual custom testcases will be uploaded when creating a trial submission
-    current_app.logger.info(
-        f"Test settings saved successfully for problem id-{problem_id} by user {user.username}"
-    )
-    return HTTPResponse("Test settings saved successfully.")
+            log_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                '.cursor', 'debug.log')
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(log_data) + '\n')
+        except Exception:
+            pass
+        current_app.logger.error(f"Error creating trial submission: {str(e)}")
+        return HTTPError(f"Failed to create trial submission: {str(e)}", 500)
