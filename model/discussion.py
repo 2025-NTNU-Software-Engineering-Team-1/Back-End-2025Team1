@@ -52,33 +52,15 @@ def format_discussion_post(post):
     is_closed = bool(post.is_closed)
     return {
         'Post_Id': post.post_id,
-        'postId': post.post_id,
-        'post_id': post.post_id,
         'Author': author_info,
-        'author': author_info,
         'Title': post.title,
-        'title': post.title,
         'Created_Time': created_time,
-        'createdTime': created_time,
-        'created_time': created_time,
         'Like_Count': like_count,
-        'likeCount': like_count,
-        'like_count': like_count,
         'Reply_Count': reply_count,
-        'replyCount': reply_count,
-        'reply_count': reply_count,
         'Is_Pinned': is_pinned,
-        'isPinned': is_pinned,
-        'is_pinned': is_pinned,
         'Is_Solved': is_solved,
-        'isSolved': is_solved,
-        'is_solved': is_solved,
         'Is_Closed': is_closed,
-        'isClosed': is_closed,
-        'is_closed': is_closed,
         'Problem_Id': problem_id,
-        'problemId': problem_id,
-        'problem_id': problem_id,
     }
 
 

@@ -1,11 +1,24 @@
 from flask import Blueprint, request
 from .auth import login_required
 from .utils import HTTPError, HTTPResponse, Request
+from mongo import engine
 from mongo.post import Post
 
 __all__ = ['post_api']
 
 post_api = Blueprint('post_api', __name__)
+
+
+def _get_problem_title(problem_id):
+    if not problem_id:
+        return ''
+    pid = int(problem_id) if str(problem_id).isdigit() else problem_id
+    problem = (engine.Problem.objects(problem_id=pid).first()
+               or engine.Problem.objects(pk=pid).first())
+    if not problem:
+        return ''
+    return (getattr(problem, 'problem_name', None)
+            or getattr(problem, 'title', None) or '')
 
 
 @post_api.route('/<course>', methods=['GET'])
@@ -42,6 +55,14 @@ def modify_post(user, course, title, content, target_thread_id, contains_code,
 
     if err_msg:
         return HTTPError(err_msg, code)
+    if request.method == 'POST':
+        problem_title = _get_problem_title(problem_id)
+        return HTTPResponse('success.',
+                            data={
+                                'Problem_Name': problem_title,
+                                'problemName': problem_title,
+                                'problem_name': problem_title,
+                            })
     return HTTPResponse('success.')
 
 
