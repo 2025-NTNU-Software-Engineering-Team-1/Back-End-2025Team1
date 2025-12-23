@@ -31,35 +31,40 @@ def _err(msg, code=400):
 
 
 def format_discussion_post(post):
-    author_info = ''
+    author_display = ""
     if getattr(post, 'author', None):
-        author_info = getattr(post.author, 'info', None)
-        if not author_info:
-            author_info = post.author.username
+        info = getattr(post.author, 'info', {})
+
+        if isinstance(info, dict):
+            author_display = info.get('displayedName', '').strip()
+
+        if not author_display:
+            author_display = getattr(post.author, 'username', '')
+
     problem_id = ''
     try:
         raw = post.to_mongo().to_dict()
         problem_id = raw.get('problemId', post.problem_id)
     except Exception:
         problem_id = getattr(post, 'problem_id', '')
+
     if problem_id is None:
         problem_id = ''
+
     created_time = post.created_time.isoformat()
     like_count = post.like_count or 0
     reply_count = post.reply_count or 0
-    is_pinned = bool(post.is_pinned)
-    is_solved = bool(post.is_solved)
-    is_closed = bool(post.is_closed)
+
     return {
         'Post_Id': post.post_id,
-        'Author': author_info,
+        'Author': author_display,
         'Title': post.title,
         'Created_Time': created_time,
         'Like_Count': like_count,
         'Reply_Count': reply_count,
-        'Is_Pinned': is_pinned,
-        'Is_Solved': is_solved,
-        'Is_Closed': is_closed,
+        'Is_Pinned': bool(post.is_pinned),
+        'Is_Solved': bool(post.is_solved),
+        'Is_Closed': bool(post.is_closed),
         'Problem_Id': problem_id,
     }
 
