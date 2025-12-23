@@ -1558,3 +1558,67 @@ def request_trial_submission(user,
     except Exception as e:
         current_app.logger.error(f"Error creating trial submission: {str(e)}")
         return HTTPError(f"Failed to create trial submission: {str(e)}", 500)
+
+
+@problem_api.post("/<int:problem_id>/test-settings")
+@login_required
+def save_test_settings(user, problem_id: int):
+    """
+    Save user's test case settings (use default or custom testcases).
+    This endpoint validates the request and returns success.
+    The actual custom testcases are uploaded when creating a trial submission.
+    """
+    current_app.logger.info(
+        f"Saving test settings for problem id-{problem_id} by user {user.username}"
+    )
+
+    # Load problem
+    problem = Problem(problem_id)
+    if not problem or not getattr(problem, "obj", None):
+        return HTTPError("Problem not found.", 404)
+
+    # Check if user has permission to submit
+    if not problem.permission(user, Problem.Permission.ONLINE):
+        return HTTPError(
+            "You don't have permission to submit to this problem.", 403)
+
+    # Get form data
+    use_default_testcases = request.form.get("use_default_testcases",
+                                             "true").lower() == "true"
+    custom_testcases_file = request.files.get("custom_testcases")
+
+    # Validate custom testcases if provided
+    if not use_default_testcases and custom_testcases_file:
+        # Validate it's a zip file
+        if not zipfile.is_zipfile(custom_testcases_file):
+            return HTTPError("Custom testcases must be a valid zip file.", 400)
+
+        # Check file size (5MB limit, same as trial submission)
+        custom_testcases_file.seek(0, 2)  # Seek to end
+        file_size = custom_testcases_file.tell()
+        custom_testcases_file.seek(0)  # Reset
+
+        if file_size > 5 * 1024 * 1024:
+            return HTTPError("Custom testcases file too large (>5MB).", 400)
+
+        # Check uncompressed size
+        try:
+            with zipfile.ZipFile(custom_testcases_file, 'r') as zf:
+                uncompressed_total = sum(info.file_size
+                                         for info in zf.infolist())
+            if uncompressed_total > 5 * 1024 * 1024:
+                return HTTPError(
+                    "Custom testcases uncompressed size too large (>5MB).",
+                    400)
+        except zipfile.BadZipFile:
+            return HTTPError("Custom testcases must be a valid zip file.", 400)
+        except Exception as e:
+            current_app.logger.error(f"Error validating custom testcases: {e}")
+            return HTTPError(f"Failed to validate custom testcases: {e}", 400)
+
+    # Settings are valid, return success
+    # Note: The actual custom testcases will be uploaded when creating a trial submission
+    current_app.logger.info(
+        f"Test settings saved successfully for problem id-{problem_id} by user {user.username}"
+    )
+    return HTTPResponse("Test settings saved successfully.")
