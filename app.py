@@ -15,13 +15,14 @@ def app():
 
     # Create a flask app
     app = Flask(__name__)
-    app.config['PREFERRED_URL_SCHEME'] = 'https'
+    app.config['PREFERRED_URL_SCHEME'] = os.environ.get(
+        'PREFERRED_URL_SCHEME', 'http')
     app.url_map.strict_slashes = False
     setup_smtp(app)
 
     # Apply security configurations (CSRF, Headers, Error Handlers)
     from model.utils.security import setup_security
-    # setup_security(app)
+    setup_security(app)
 
     # Register flask blueprint
     api2prefix = [
