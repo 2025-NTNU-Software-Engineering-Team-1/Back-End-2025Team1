@@ -104,6 +104,7 @@ class Problem(MongoBase, engine=engine.Problem):
         # Check new field name first
         if hasattr(self.obj, 'trial_mode_enabled'):
             return getattr(self.obj, 'trial_mode_enabled', False)
+
         # Backward compatibility: check old field name
         if hasattr(self.obj, 'test_mode_enabled'):
             old_value = getattr(self.obj, 'test_mode_enabled', False)
@@ -112,11 +113,13 @@ class Problem(MongoBase, engine=engine.Problem):
                 self.obj.trial_mode_enabled = True
                 self.obj.save()
             return old_value
-        # Check database field directly (for compatibility)
+
+        # Check database field directly
         if hasattr(self.obj, '_data'):
             db_data = self.obj._data
             if 'trialModeEnabled' in db_data:
                 return db_data.get('trialModeEnabled', False)
+
             # Backward compatibility: check old DB field
             if 'testModeEnabled' in db_data:
                 old_value = db_data.get('testModeEnabled', False)
@@ -125,6 +128,7 @@ class Problem(MongoBase, engine=engine.Problem):
                     self.obj.trial_mode_enabled = True
                     self.obj.save()
                 return old_value
+
         return False
 
     @property
@@ -474,20 +478,40 @@ class Problem(MongoBase, engine=engine.Problem):
                 config['networkAccessRestriction'],
             )
         full_config = {
-            'compilation': config.get('compilation', False),
-            'testMode': trial_mode.get('Enabled', False),
-            'aiVTuber': config.get('aiVTuber', False),
-            'acceptedFormat': config.get('acceptedFormat', 'code'),
-            'staticAnalys': static_analysis_cfg,
-            'staticAnalysis': static_analysis_cfg,
-            'artifactCollection': config.get('artifactCollection', []),
-            'allowRead': pipeline.get('allowRead', False),
-            'allowWrite': pipeline.get('allowWrite', False),
-            'executionMode': pipeline.get('executionMode', 'general'),
-            'customChecker': pipeline.get('customChecker', False),
-            'teacherFirst': pipeline.get('teacherFirst', False),
-            'scoringScript': pipeline.get('scoringScrip', {'custom': False}),
-            'testModeQuotaPerStudent': trial_mode.get('Quota_Per_Student', 0),
+            'compilation':
+            config.get('compilation', False),
+            'trialMode':
+            trial_mode.get('Enabled', False)
+            or trial_mode.get('trialMode', False),
+            'aiVTuber':
+            config.get('aiVTuber', False),
+            'acceptedFormat':
+            config.get('acceptedFormat', 'code'),
+            'staticAnalys':
+            static_analysis_cfg,
+            'staticAnalysis':
+            static_analysis_cfg,
+            'artifactCollection':
+            config.get('artifactCollection', []),
+            'allowRead':
+            pipeline.get('allowRead', False),
+            'allowWrite':
+            pipeline.get('allowWrite', False),
+            'executionMode':
+            pipeline.get('executionMode', 'general'),
+            'customChecker':
+            pipeline.get('customChecker', False),
+            'teacherFirst':
+            pipeline.get('teacherFirst', False),
+            'scoringScript':
+            pipeline.get('scoringScrip', {'custom': False}),
+            'maxNumberOfTrial':
+            trial_mode.get('Quota_Per_Student', 0)
+            or trial_mode.get('maxNumberOfTrial', 0),
+            'trialResultVisible':
+            trial_mode.get('trialResultVisible', False),
+            'trialResultDownloadable':
+            trial_mode.get('trialResultDownloadable', False),
         }
         for key in (
                 'aiVTuberMaxToken',
@@ -608,7 +632,7 @@ class Problem(MongoBase, engine=engine.Problem):
                 # Sync trial_mode_enabled from config.trialMode (frontend sends this)
                 if 'trialMode' in config_update:
                     trial_mode_enabled = config_update['trialMode']
-                    full_config['testMode'] = trial_mode_enabled
+                    full_config['trialMode'] = trial_mode_enabled
                     # Sync trial_mode_enabled database field
                     problem.obj.trial_mode_enabled = trial_mode_enabled
 
@@ -636,14 +660,32 @@ class Problem(MongoBase, engine=engine.Problem):
             if 'Trial_Mode' in kwargs and kwargs.get('Trial_Mode') is not None:
                 trial_mode = kwargs.pop('Trial_Mode')
                 if 'Enabled' in trial_mode:
-                    full_config['testMode'] = trial_mode['Enabled']
+                    full_config['trialMode'] = trial_mode['Enabled']
                     # Sync trial_mode_enabled database field
                     problem.obj.trial_mode_enabled = trial_mode['Enabled']
+                elif 'trialMode' in trial_mode:
+                    full_config['trialMode'] = trial_mode['trialMode']
+                    problem.obj.trial_mode_enabled = trial_mode['trialMode']
                 if 'Quota_Per_Student' in trial_mode:
-                    full_config['testModeQuotaPerStudent'] = trial_mode[
+                    full_config['maxNumberOfTrial'] = trial_mode[
                         'Quota_Per_Student']
 
+                # Merge stashed logic for aliasing and new fields using trial_mode dict
+                if 'maxNumberOfTrial' in trial_mode:
+                    print(
+                        f"DEBUG: setting maxNumberOfTrial to {trial_mode['maxNumberOfTrial']}"
+                    )
+                    full_config['maxNumberOfTrial'] = trial_mode[
+                        'maxNumberOfTrial']
+                if 'trialResultVisible' in trial_mode:
+                    full_config['trialResultVisible'] = trial_mode[
+                        'trialResultVisible']
+                if 'trialResultDownloadable' in trial_mode:
+                    full_config['trialResultDownloadable'] = trial_mode[
+                        'trialResultDownloadable']
+
             kwargs['config'] = full_config
+            print(f"DEBUG: full_config after update: {full_config}")
             _sync_config_aliases(kwargs['config'])
 
         if 'test_case_info' in kwargs and kwargs.get(

@@ -38,8 +38,8 @@ def assert_basic_problem_config(config):
     assert config['allowWrite'] is False
     assert config['scoringScript'] == {'custom': False}
     assert config['teacherFirst'] is False
-    assert config['testMode'] is False
-    assert config['testModeQuotaPerStudent'] == 0
+    assert config['trialMode'] is False
+    assert config['maxNumberOfTrial'] == 0
     assert config.get('staticAnalys', {}).get('custom') is False
 
 
@@ -303,7 +303,7 @@ class TestProblem(BaseTester):
         assert config['staticAnalysis']['networkAccessRestriction'][
             'connectWithLocal']['whitelist'] == ['192.168.2.2']
         assert config['scoringScript'] == {'custom': False}
-        assert config['testMode'] is True
+        assert config['trialMode'] is True
 
     def test_add_problem_with_empty_course_list(self, client_admin):
         request_json = {

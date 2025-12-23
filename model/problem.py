@@ -174,6 +174,17 @@ def get_problem_detailed(user, problem: Problem):
     config_payload, pipeline_payload = _build_config_and_pipeline(problem)
     if config_payload:
         info['config'] = config_payload
+        # Add Trial_Mode info
+        info['Trial_Mode'] = {
+            'trialMode':
+            config_payload.get('trialMode', False),
+            'maxNumberOfTrial':
+            config_payload.get('maxNumberOfTrial', 0),
+            'trialResultVisible':
+            config_payload.get('trialResultVisible', False),
+            'trialResultDownloadable':
+            config_payload.get('trialResultDownloadable', False),
+        }
     if pipeline_payload:
         info['pipeline'] = pipeline_payload
     info.update({'submitCount': problem.submit_count(user)})
@@ -268,9 +279,17 @@ def upload_problem_assets(user: User, problem: Problem):
     'can_view_stdout',
     'allowed_language',
     'default_code',
+    'Trial_Mode',
 )
 def create_problem(user: User, **ks):
     data = request.json or {}
+
+    # Handle Trial_Mode alias
+    if 'Trial_Mode' in data:
+        data['Test_Mode'] = data['Trial_Mode']
+        if 'Trial_Mode' in ks:
+            # If Request.json put it in ks, move it or let logic handle data['Test_Mode']
+            del ks['Trial_Mode']
 
     alias_pairs = (
         ('problem_name', 'problemName'),
@@ -346,6 +365,15 @@ def create_problem(user: User, **ks):
     if 'trialModeQuotaPerStudent' in config_payload:
         derived_trial_mode['Quota_Per_Student'] = config_payload[
             'trialModeQuotaPerStudent']
+    if 'maxNumberOfTrial' in config_payload:
+        derived_trial_mode['maxNumberOfTrial'] = config_payload[
+            'maxNumberOfTrial']
+    if 'trialResultVisible' in config_payload:
+        derived_trial_mode['trialResultVisible'] = config_payload[
+            'trialResultVisible']
+    if 'trialResultDownloadable' in config_payload:
+        derived_trial_mode['trialResultDownloadable'] = config_payload[
+            'trialResultDownloadable']
     if not trial_mode_payload:
         trial_mode_payload = derived_trial_mode
     else:
@@ -408,6 +436,7 @@ def manage_problem(user: User, problem: Problem):
         'Trial_Mode',
     )
     def modify_problem(**p_ks):
+
         kwargs = {
             'problem_name': p_ks.pop('problemName', None),
             'description': p_ks.pop('description', None),
@@ -425,7 +454,11 @@ def manage_problem(user: User, problem: Problem):
             'Trial_Mode': p_ks.pop('Trial_Mode', None),
         }
 
+        if 'config' in kwargs or 'pipeline' in kwargs or 'Trial_Mode' in kwargs:
+            full_config = problem.obj.config or {}
+
         data = request.json or {}
+
         config_payload = data.get('config') or {}
         pipeline_payload = data.get('pipeline') or {}
 
@@ -489,11 +522,21 @@ def manage_problem(user: User, problem: Problem):
         trial_mode_payload = data.get('Trial_Mode') or kwargs.get(
             'Trial_Mode') or {}
         derived_trial_mode = {}
+
         if 'trialMode' in config_payload:
             derived_trial_mode['Enabled'] = config_payload['trialMode']
         if 'trialModeQuotaPerStudent' in config_payload:
             derived_trial_mode['Quota_Per_Student'] = config_payload[
                 'trialModeQuotaPerStudent']
+        if 'maxNumberOfTrial' in config_payload:
+            derived_trial_mode['maxNumberOfTrial'] = config_payload[
+                'maxNumberOfTrial']
+        if 'trialResultVisible' in config_payload:
+            derived_trial_mode['trialResultVisible'] = config_payload[
+                'trialResultVisible']
+        if 'trialResultDownloadable' in config_payload:
+            derived_trial_mode['trialResultDownloadable'] = config_payload[
+                'trialResultDownloadable']
         if derived_trial_mode:
             trial_mode_payload = {
                 **trial_mode_payload,

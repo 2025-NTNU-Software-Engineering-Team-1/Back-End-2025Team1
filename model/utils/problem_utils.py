@@ -22,8 +22,13 @@ def build_config_and_pipeline(problem: Problem) -> Tuple[Dict, Dict]:
                               config_payload.get('compilation', False))
     config_payload.setdefault('resourceData', False)
     config_payload.setdefault('resourceDataTeacher', False)
-    config_payload['trialMode'] = config_payload.get(
-        'trialMode', config_payload.get('testMode', False))
+    config_payload['trialMode'] = config_payload.get('trialMode', False)
+    config_payload['maxNumberOfTrial'] = config_payload.get(
+        'maxNumberOfTrial', 0)
+    config_payload['trialResultVisible'] = config_payload.get(
+        'trialResultVisible', False)
+    config_payload['trialResultDownloadable'] = config_payload.get(
+        'trialResultDownloadable', False)
     pipeline_payload = {
         'allowRead': config_payload.get('allowRead', False),
         'allowWrite': config_payload.get('allowWrite', False),
