@@ -98,6 +98,45 @@ class Problem(MongoBase, engine=engine.Problem):
             return False
         return bool((1 << language) & self.allowed_language)
 
+    @property
+    def trial_mode_enabled(self) -> bool:
+        """Check if trial mode is enabled for this problem."""
+        # Check new field name first
+        if hasattr(self.obj, 'trial_mode_enabled'):
+            return getattr(self.obj, 'trial_mode_enabled', False)
+        # Backward compatibility: check old field name
+        if hasattr(self.obj, 'test_mode_enabled'):
+            old_value = getattr(self.obj, 'test_mode_enabled', False)
+            # Migrate old field to new field
+            if old_value:
+                self.obj.trial_mode_enabled = True
+                self.obj.save()
+            return old_value
+        # Check database field directly (for compatibility)
+        if hasattr(self.obj, '_data'):
+            db_data = self.obj._data
+            if 'trialModeEnabled' in db_data:
+                return db_data.get('trialModeEnabled', False)
+            # Backward compatibility: check old DB field
+            if 'testModeEnabled' in db_data:
+                old_value = db_data.get('testModeEnabled', False)
+                # Migrate old field to new field
+                if old_value:
+                    self.obj.trial_mode_enabled = True
+                    self.obj.save()
+                return old_value
+        return False
+
+    @property
+    def trial_submission_quota(self) -> int:
+        """Get trial submission quota for this problem."""
+        return getattr(self.obj, 'trial_submission_quota', -1)
+
+    @property
+    def trial_submission_counts(self) -> Dict[str, int]:
+        """Get trial submission counts for this problem."""
+        return getattr(self.obj, 'trial_submission_counts', {})
+
     def submit_count(self, user: User) -> int:
         '''
         Calculate how many submissions the user has submitted to this problem.
@@ -407,7 +446,7 @@ class Problem(MongoBase, engine=engine.Problem):
         default_code: Optional[str] = None,
         config: Optional[dict] = None,
         pipeline: Optional[dict] = None,
-        Test_Mode: Optional[dict] = None,
+        Trial_Mode: Optional[dict] = None,
         **kwargs,
     ):
         if len(courses) == 0:
@@ -419,7 +458,7 @@ class Problem(MongoBase, engine=engine.Problem):
             course_objs.append(course.id)
         config = config or {}
         pipeline = pipeline or {}
-        test_mode = Test_Mode or {}
+        trial_mode = Trial_Mode or {}
         if 'scoringScript' in pipeline and 'scoringScrip' not in pipeline:
             pipeline['scoringScrip'] = pipeline['scoringScript']
         static_analysis_cfg = (config.get('staticAnalysis')
@@ -436,7 +475,7 @@ class Problem(MongoBase, engine=engine.Problem):
             )
         full_config = {
             'compilation': config.get('compilation', False),
-            'testMode': test_mode.get('Enabled', False),
+            'testMode': trial_mode.get('Enabled', False),
             'aiVTuber': config.get('aiVTuber', False),
             'acceptedFormat': config.get('acceptedFormat', 'code'),
             'staticAnalys': static_analysis_cfg,
@@ -448,7 +487,7 @@ class Problem(MongoBase, engine=engine.Problem):
             'customChecker': pipeline.get('customChecker', False),
             'teacherFirst': pipeline.get('teacherFirst', False),
             'scoringScript': pipeline.get('scoringScrip', {'custom': False}),
-            'testModeQuotaPerStudent': test_mode.get('Quota_Per_Student', 0),
+            'testModeQuotaPerStudent': trial_mode.get('Quota_Per_Student', 0),
         }
         for key in (
                 'aiVTuberMaxToken',
@@ -558,12 +597,20 @@ class Problem(MongoBase, engine=engine.Problem):
                     sample_output=desc.get('sampleOutput', []),
                 )
 
-        if 'config' in kwargs or 'pipeline' in kwargs or 'Test_Mode' in kwargs:
+        if 'config' in kwargs or 'pipeline' in kwargs or 'Trial_Mode' in kwargs:
             full_config = problem.obj.config or {}
 
             if 'config' in kwargs and kwargs.get('config') is not None:
-                full_config.update(kwargs.pop('config'))
+                config_update = kwargs.pop('config')
+                full_config.update(config_update)
                 _sync_config_aliases(full_config)
+
+                # Sync trial_mode_enabled from config.trialMode (frontend sends this)
+                if 'trialMode' in config_update:
+                    trial_mode_enabled = config_update['trialMode']
+                    full_config['testMode'] = trial_mode_enabled
+                    # Sync trial_mode_enabled database field
+                    problem.obj.trial_mode_enabled = trial_mode_enabled
 
             if 'pipeline' in kwargs and kwargs.get('pipeline') is not None:
                 pipeline = kwargs.pop('pipeline')
@@ -586,12 +633,14 @@ class Problem(MongoBase, engine=engine.Problem):
                     full_config['staticAnalysis'] = pipeline['staticAnalysis']
                     full_config['staticAnalys'] = pipeline['staticAnalysis']
 
-            if 'Test_Mode' in kwargs and kwargs.get('Test_Mode') is not None:
-                test_mode = kwargs.pop('Test_Mode')
-                if 'Enabled' in test_mode:
-                    full_config['testMode'] = test_mode['Enabled']
-                if 'Quota_Per_Student' in test_mode:
-                    full_config['testModeQuotaPerStudent'] = test_mode[
+            if 'Trial_Mode' in kwargs and kwargs.get('Trial_Mode') is not None:
+                trial_mode = kwargs.pop('Trial_Mode')
+                if 'Enabled' in trial_mode:
+                    full_config['testMode'] = trial_mode['Enabled']
+                    # Sync trial_mode_enabled database field
+                    problem.obj.trial_mode_enabled = trial_mode['Enabled']
+                if 'Quota_Per_Student' in trial_mode:
+                    full_config['testModeQuotaPerStudent'] = trial_mode[
                         'Quota_Per_Student']
 
             kwargs['config'] = full_config

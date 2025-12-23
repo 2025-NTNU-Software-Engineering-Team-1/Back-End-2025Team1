@@ -339,25 +339,25 @@ def create_problem(user: User, **ks):
     if legacy_pipeline:
         ks['pipeline'] = drop_none(legacy_pipeline)
 
-    test_mode_payload = data.get('Test_Mode') or {}
-    derived_test_mode = {}
+    trial_mode_payload = data.get('Trial_Mode') or {}
+    derived_trial_mode = {}
     if 'trialMode' in config_payload:
-        derived_test_mode['Enabled'] = config_payload['trialMode']
+        derived_trial_mode['Enabled'] = config_payload['trialMode']
     if 'trialModeQuotaPerStudent' in config_payload:
-        derived_test_mode['Quota_Per_Student'] = config_payload[
+        derived_trial_mode['Quota_Per_Student'] = config_payload[
             'trialModeQuotaPerStudent']
-    if not test_mode_payload:
-        test_mode_payload = derived_test_mode
+    if not trial_mode_payload:
+        trial_mode_payload = derived_trial_mode
     else:
-        test_mode_payload = {
-            **test_mode_payload,
+        trial_mode_payload = {
+            **trial_mode_payload,
             **{
                 k: v
-                for k, v in derived_test_mode.items() if v is not None
+                for k, v in derived_trial_mode.items() if v is not None
             },
         }
-    if test_mode_payload:
-        ks['Test_Mode'] = drop_none(test_mode_payload)
+    if trial_mode_payload:
+        ks['Trial_Mode'] = drop_none(trial_mode_payload)
 
     try:
         pid = Problem.add(user=user, **ks)
@@ -405,7 +405,7 @@ def manage_problem(user: User, problem: Problem):
         'defaultCode',
         'config',
         'pipeline',
-        'Test_Mode',
+        'Trial_Mode',
     )
     def modify_problem(**p_ks):
         kwargs = {
@@ -422,7 +422,7 @@ def manage_problem(user: User, problem: Problem):
             'default_code': p_ks.pop('defaultCode', None),
             'config': p_ks.pop('config', None),
             'pipeline': p_ks.pop('pipeline', None),
-            'Test_Mode': p_ks.pop('Test_Mode', None),
+            'Trial_Mode': p_ks.pop('Trial_Mode', None),
         }
 
         data = request.json or {}
@@ -486,24 +486,24 @@ def manage_problem(user: User, problem: Problem):
             if legacy_pipeline:
                 kwargs['pipeline'] = drop_none(legacy_pipeline)
 
-        test_mode_payload = data.get('Test_Mode') or kwargs.get(
-            'Test_Mode') or {}
-        derived_test_mode = {}
+        trial_mode_payload = data.get('Trial_Mode') or kwargs.get(
+            'Trial_Mode') or {}
+        derived_trial_mode = {}
         if 'trialMode' in config_payload:
-            derived_test_mode['Enabled'] = config_payload['trialMode']
+            derived_trial_mode['Enabled'] = config_payload['trialMode']
         if 'trialModeQuotaPerStudent' in config_payload:
-            derived_test_mode['Quota_Per_Student'] = config_payload[
+            derived_trial_mode['Quota_Per_Student'] = config_payload[
                 'trialModeQuotaPerStudent']
-        if derived_test_mode:
-            test_mode_payload = {
-                **test_mode_payload,
+        if derived_trial_mode:
+            trial_mode_payload = {
+                **trial_mode_payload,
                 **{
                     k: v
-                    for k, v in derived_test_mode.items() if v is not None
+                    for k, v in derived_trial_mode.items() if v is not None
                 },
             }
-        if test_mode_payload:
-            kwargs['Test_Mode'] = drop_none(test_mode_payload)
+        if trial_mode_payload:
+            kwargs['Trial_Mode'] = drop_none(trial_mode_payload)
 
         Problem.edit_problem(
             user=user,
@@ -739,9 +739,9 @@ def get_public_testdata(token: str, problem_id: int):
     if not problem:
         return HTTPError(f'Problem {problem_id} not found', 404)
 
-    # Check if test mode is enabled
-    if not getattr(problem.obj, 'test_mode_enabled', False):
-        return HTTPError('Test mode is not enabled for this problem', 403)
+    # Check if trial mode is enabled
+    if not getattr(problem.obj, 'trial_mode_enabled', False):
+        return HTTPError('Trial mode is not enabled for this problem', 403)
 
     # Try MinIO path first
     minio_path = getattr(problem.obj, 'public_cases_zip_minio_path', None)
@@ -790,8 +790,8 @@ def get_public_checksum(token: str, problem_id: int):
     if not problem:
         return HTTPError(f'Problem {problem_id} not found', 404)
 
-    if not getattr(problem.obj, 'test_mode_enabled', False):
-        return HTTPError('Test mode is not enabled for this problem', 403)
+    if not getattr(problem.obj, 'trial_mode_enabled', False):
+        return HTTPError('Trial mode is not enabled for this problem', 403)
 
     # Try MinIO path first
     minio_path = getattr(problem.obj, 'public_cases_zip_minio_path', None)
@@ -827,8 +827,8 @@ def get_ac_code(token: str, problem_id: int):
     if not problem:
         return HTTPError(f'Problem {problem_id} not found', 404)
 
-    if not getattr(problem.obj, 'test_mode_enabled', False):
-        return HTTPError('Test mode is not enabled for this problem', 403)
+    if not getattr(problem.obj, 'trial_mode_enabled', False):
+        return HTTPError('Trial mode is not enabled for this problem', 403)
 
     # Get AC code language
     ac_code_language = getattr(problem.obj, 'ac_code_language', None)
@@ -887,8 +887,8 @@ def get_ac_code_checksum(token: str, problem_id: int):
     if not problem:
         return HTTPError(f'Problem {problem_id} not found', 404)
 
-    if not getattr(problem.obj, 'test_mode_enabled', False):
-        return HTTPError('Test mode is not enabled for this problem', 403)
+    if not getattr(problem.obj, 'trial_mode_enabled', False):
+        return HTTPError('Trial mode is not enabled for this problem', 403)
 
     # Get AC code language for inclusion in checksum response
     ac_code_language = getattr(problem.obj, 'ac_code_language', None)
@@ -1058,23 +1058,23 @@ def update_problem_meta(user: User, problem: Problem):
     if legacy_pipeline:
         kwargs['pipeline'] = drop_none(legacy_pipeline)
 
-    test_mode_payload = data.get('Test_Mode') or {}
-    derived_test_mode = {}
+    trial_mode_payload = data.get('Trial_Mode') or {}
+    derived_trial_mode = {}
     if 'trialMode' in config_payload:
-        derived_test_mode['Enabled'] = config_payload['trialMode']
+        derived_trial_mode['Enabled'] = config_payload['trialMode']
     if 'trialModeQuotaPerStudent' in config_payload:
-        derived_test_mode['Quota_Per_Student'] = config_payload[
+        derived_trial_mode['Quota_Per_Student'] = config_payload[
             'trialModeQuotaPerStudent']
-    if derived_test_mode:
-        test_mode_payload = {
-            **test_mode_payload,
+    if derived_trial_mode:
+        trial_mode_payload = {
+            **trial_mode_payload,
             **{
                 k: v
-                for k, v in derived_test_mode.items() if v is not None
+                for k, v in derived_trial_mode.items() if v is not None
             },
         }
-    if test_mode_payload:
-        kwargs['Test_Mode'] = drop_none(test_mode_payload)
+    if trial_mode_payload:
+        kwargs['Trial_Mode'] = drop_none(trial_mode_payload)
 
     if not kwargs:
         return HTTPResponse('Success.')
@@ -1369,10 +1369,10 @@ def get_public_testcases(user, problem_id: int):
     if not problem or not getattr(problem, "obj", None):
         return HTTPError("Problem not found.", 404)
 
-    # Enforce test mode: if field exists and is False -> forbid
-    if hasattr(problem.obj, "test_mode_enabled") and not getattr(
-            problem.obj, "test_mode_enabled", False):
-        return HTTPError("Test mode disabled.", 403)
+    # Enforce trial mode: if field exists and is False -> forbid
+    if hasattr(problem.obj, "trial_mode_enabled") and not getattr(
+            problem.obj, "trial_mode_enabled", False):
+        return HTTPError("Trial mode disabled.", 403)
 
     # Redis Cache Lookup
     cache_key = f'PROBLEM_PUBLIC_TESTCASES_{problem_id}'
@@ -1517,6 +1517,7 @@ def request_trial_submission(user,
     # Load problem
     problem_proxy = Problem(problem_id)
     if not problem_proxy or not getattr(problem_proxy, "obj", None):
+        current_app.logger.error(f"Problem {problem_id} not found")
         return HTTPError("Problem not found.", 404)
 
     problem = problem_proxy
@@ -1529,16 +1530,45 @@ def request_trial_submission(user,
 
     # Validate language type (0: C, 1: C++, 2: Python)
     if language_type not in [0, 1, 2]:
+        current_app.logger.error(f"Invalid language type: {language_type}")
         return HTTPError(
             "Invalid language type. Must be 0 (C), 1: C++, 2: Python).", 400)
 
     # Check if user has permission to submit
     if not problem.permission(user, Problem.Permission.ONLINE):
+        current_app.logger.warning(
+            f"User {user.username} lacks permission for problem {problem_id}")
         return HTTPError(
             "You don't have permission to submit to this problem.", 403)
 
+    # Check if trial mode is enabled using property accessor (handles backward compatibility)
+    try:
+        trial_enabled = problem.trial_mode_enabled
+        current_app.logger.info(
+            f"Problem {problem_id} trial_mode_enabled: {trial_enabled} "
+            f"(hasattr trial_mode_enabled: {hasattr(problem.obj, 'trial_mode_enabled')}, "
+            f"hasattr test_mode_enabled: {hasattr(problem.obj, 'test_mode_enabled')})"
+        )
+    except Exception as e:
+        current_app.logger.error(f"Error checking trial_mode_enabled: {e}",
+                                 exc_info=True)
+        # Fallback: check directly
+        trial_enabled = getattr(
+            problem.obj, 'trial_mode_enabled',
+            getattr(problem.obj, 'test_mode_enabled', False))
+
+    if not trial_enabled:
+        current_app.logger.warning(
+            f"Trial mode not enabled for problem {problem_id} (trial_enabled={trial_enabled})"
+        )
+        return HTTPError("Trial mode is not enabled for this problem.", 403)
+
     # Use TrialSubmission.add() instead of creating engine object directly
     try:
+        current_app.logger.info(
+            f"Creating trial submission for problem {problem_id}, "
+            f"user {user.username}, lang {language_type}, "
+            f"use_default={use_default_test_cases}")
         trial_submission = TrialSubmission.add(
             problem_id=problem_id,
             username=user.username,
@@ -1547,17 +1577,84 @@ def request_trial_submission(user,
             ip_addr=request.remote_addr,
             use_default_case=use_default_test_cases)
 
+        current_app.logger.info(
+            f"Trial submission created successfully: {trial_submission.id}")
+
         return HTTPResponse(
             "Trial submission created successfully.",
             data={"Trial_Submission_Id": str(trial_submission.id)})
     except PermissionError as e:
-        current_app.logger.info(
-            f"Permission error for trial submission by user {user.username} on problem id-{problem_id}: {str(e)}"
-        )
+        current_app.logger.warning(
+            f"Permission error for trial submission by user {user.username} on problem id-{problem_id}: {str(e)}",
+            exc_info=True)
         return HTTPError(str(e), 403)
     except Exception as e:
-        current_app.logger.error(f"Error creating trial submission: {str(e)}")
+        current_app.logger.error(f"Error creating trial submission: {str(e)}",
+                                 exc_info=True)
         return HTTPError(f"Failed to create trial submission: {str(e)}", 500)
+
+
+@problem_api.get("/<int:problem_id>/check-trial-mode")
+@login_required
+@Request.doc('problem_id', 'problem', Problem)
+def check_trial_mode(user: User, problem: Problem):
+    """
+    Check trial_mode_enabled status for a problem (for debugging).
+    """
+    if not problem.permission(user, Problem.Permission.VIEW):
+        return permission_error_response()
+
+    trial_mode_enabled = getattr(problem.obj, 'trial_mode_enabled', None)
+    trial_mode_enabled_db = getattr(problem.obj, 'trialModeEnabled', None)
+
+    return HTTPResponse("Trial mode status checked.",
+                        data={
+                            "problem_id":
+                            problem.problem_id,
+                            "problem_name":
+                            getattr(problem.obj, 'problem_name', 'N/A'),
+                            "trial_mode_enabled":
+                            trial_mode_enabled,
+                            "trialModeEnabled_db":
+                            trial_mode_enabled_db,
+                            "has_attr_trial_mode_enabled":
+                            hasattr(problem.obj, 'trial_mode_enabled'),
+                            "has_attr_trialModeEnabled":
+                            hasattr(problem.obj, 'trialModeEnabled'),
+                        })
+
+
+@problem_api.post("/<int:problem_id>/enable-trial-mode")
+@identity_verify(0, 1)  # admin and teacher only
+@Request.doc('problem_id', 'problem', Problem)
+def enable_trial_mode(user: User, problem: Problem):
+    """
+    Enable trial_mode_enabled for a problem (admin/teacher only).
+    """
+    if not problem.permission(user, Problem.Permission.MANAGE):
+        return permission_error_response()
+
+    try:
+        # Update trial_mode_enabled to True
+        problem.obj.trial_mode_enabled = True
+        problem.obj.save()
+
+        current_app.logger.info(
+            f"Trial mode enabled for problem {problem.problem_id} by user {user.username}"
+        )
+
+        return HTTPResponse("Trial mode enabled successfully.",
+                            data={
+                                "problem_id":
+                                problem.problem_id,
+                                "problem_name":
+                                getattr(problem.obj, 'problem_name', 'N/A'),
+                                "trial_mode_enabled":
+                                True,
+                            })
+    except Exception as e:
+        current_app.logger.error(f"Error enabling trial mode: {e}")
+        return HTTPError(f"Failed to enable trial mode: {e}", 500)
 
 
 @problem_api.post("/<int:problem_id>/test-settings")

@@ -1532,7 +1532,7 @@ class TestTrialSubmissionAPI(BaseTester):
         # Also make sure problem is visible
         try:
             problem.obj.problem_status = 0  # Visible
-            problem.obj.test_mode_enabled = True
+            problem.obj.trial_mode_enabled = True
         except Exception:
             pass
         try:
@@ -1611,11 +1611,11 @@ class TestTrialSubmissionAPI(BaseTester):
         assert rv.status_code == 404
         assert 'Problem not found' in rv.get_json()['message']
 
-    def test_get_public_testcases_test_mode_disabled(
+    def test_get_public_testcases_trial_mode_disabled(
             self, forge_client, setup_problem_with_testcases):
         problem, _ = setup_problem_with_testcases
-        if hasattr(problem.obj, "test_mode_enabled"):
-            problem.obj.test_mode_enabled = False
+        if hasattr(problem.obj, "trial_mode_enabled"):
+            problem.obj.trial_mode_enabled = False
             problem.obj.save()
             problem.reload()
 
@@ -1624,7 +1624,7 @@ class TestTrialSubmissionAPI(BaseTester):
         assert rv.status_code == 403
         json = rv.get_json()
         assert json['status'] == 'err'
-        assert 'Test mode disabled' in json['message']
+        assert 'Trial mode disabled' in json['message']
 
     def test_get_public_testcases_no_zip_uploaded(
             self, forge_client, setup_problem_with_testcases):

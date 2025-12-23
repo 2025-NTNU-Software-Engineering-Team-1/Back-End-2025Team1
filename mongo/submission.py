@@ -1514,22 +1514,23 @@ class TrialSubmission(MongoBase, BaseSubmission,
                use_default_case: bool = True,
                custom_input_file=None) -> bool:
         '''
-        Prepare data for a test submission.
-        Checks for test mode enablement and quota.
+        Prepare data for a trial submission.
+        Checks for trial mode enablement and quota.
         '''
         if not self:
             raise engine.DoesNotExist(f'{self}')
 
         problem = Problem(self.problem)
-        if not problem.test_mode_enabled:
-            raise PermissionError("Test mode is not enabled for this problem.")
+        if not problem.trial_mode_enabled:
+            raise PermissionError(
+                "Trial mode is not enabled for this problem.")
 
         # Check quota
         if problem.trial_submission_quota > 0:
             username = self.user.username
             current_count = problem.trial_submission_counts.get(username, 0)
             if current_count >= problem.trial_submission_quota:
-                raise PermissionError("Test submission quota exceeded.")
+                raise PermissionError("Trial submission quota exceeded.")
 
         custom_input_path = None
         if not use_default_case:
@@ -1562,9 +1563,9 @@ class TrialSubmission(MongoBase, BaseSubmission,
         Send code, public/custom cases, and AC code to sandbox.
         '''
         problem = Problem(self.problem)
-        if not problem.test_mode_enabled:
+        if not problem.trial_mode_enabled:
             self.logger.warning(
-                f"Attempted to send {self} but test mode is disabled.")
+                f"Attempted to send {self} but trial mode is disabled.")
             return False
 
         # Check if allowWrite is enabled (Trial not supported for allowWrite problems)
@@ -1824,8 +1825,9 @@ class TrialSubmission(MongoBase, BaseSubmission,
         if not problem:
             raise engine.DoesNotExist(f'{problem} dose not exist')
 
-        if not problem.test_mode_enabled:
-            raise PermissionError("Test mode is not enabled for this problem.")
+        if not problem.trial_mode_enabled:
+            raise PermissionError(
+                "Trial mode is not enabled for this problem.")
 
         # Check if allowWrite is enabled (Trial not supported for allowWrite problems)
         problem_config = problem.config or {}

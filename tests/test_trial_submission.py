@@ -42,10 +42,10 @@ def setup_problem_with_testcases():
     problem = Problem(problem_id)
     problem.reload()
 
-    # Set visability to SHOW and test_mode_enabled to True
+    # Set visability to SHOW and trial_mode_enabled to True
     try:
         problem.obj.problem_status = 0
-        problem.obj.test_mode_enabled = True
+        problem.obj.trial_mode_enabled = True
     except Exception:
         pass
     try:

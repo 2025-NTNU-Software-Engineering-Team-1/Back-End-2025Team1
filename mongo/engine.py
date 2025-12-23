@@ -436,14 +436,15 @@ class Problem(Document):
         default='',
     )
 
-    # === Test Mode Fields ===
-    test_mode_enabled = BooleanField(db_field='testModeEnabled', default=False)
-    test_submission_quota = IntField(
-        db_field='testSubmissionQuota',
+    # === Trial Mode Fields ===
+    trial_mode_enabled = BooleanField(db_field='trialModeEnabled',
+                                      default=False)
+    trial_submission_quota = IntField(
+        db_field='trialSubmissionQuota',
         default=-1  # -1 for unlimited
     )
 
-    # Public test cases for Test Mode
+    # Public test cases for Trial Mode
     public_cases_zip = ZipField(
         db_field='publicCasesZip',
         default=None,
@@ -455,7 +456,7 @@ class Problem(Document):
         db_field='publicCasesZipMinioPath',
     )
 
-    # AC Code for Test Mode
+    # AC Code for Trial Mode
     ac_code = ZipField(db_field='acCode', default=None, null=True)
     ac_code_minio_path = StringField(
         null=True,
@@ -467,10 +468,10 @@ class Problem(Document):
         null=True,
     )
 
-    # Stats for Test Mode
+    # Stats for Trial Mode
     # Dict[username, count]
-    test_submission_counts = DictField(db_field='testSubmissionCounts',
-                                       default={})
+    trial_submission_counts = DictField(db_field='trialSubmissionCounts',
+                                        default={})
 
 
 class CaseResult(EmbeddedDocument):
@@ -562,7 +563,7 @@ class Submission(BaseSubmissionDocument):
 
 class TrialSubmission(BaseSubmissionDocument):
     """
-    Document for Test Mode Submissions.
+    Document for Trial Mode Submissions.
     These submissions are for testing against public/custom cases
     and do not affect homework scores.
     """
