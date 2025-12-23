@@ -26,6 +26,11 @@ LOGGING_CONFIG = {
         'urllib3.connectionpool': {
             'level': 'INFO'
         },
+        'flask.app': {
+            'level': LOG_LEVEL,
+            'handlers': ['console', 'file'],
+            'propagate': False,
+        },
     },
     'handlers': {
         'console': {
