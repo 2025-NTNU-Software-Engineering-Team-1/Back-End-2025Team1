@@ -1225,6 +1225,7 @@ class TestHSTS:
 def test_verify_link_without_subdirectory(app):
     server_name = '4pi.n0j.tw'
     app.config['SERVER_NAME'] = server_name
+    app.config['PREFERRED_URL_SCHEME'] = 'https'
 
     u = utils.user.create_user()
     expected_url = f'https://{server_name}/auth/active/{u.cookie}'
@@ -1237,6 +1238,7 @@ def test_verify_link_with_subdirectory(app):
     subdirectory = '/4pi'
     app.config['SERVER_NAME'] = server_name
     app.config['APPLICATION_ROOT'] = subdirectory
+    app.config['PREFERRED_URL_SCHEME'] = 'https'
 
     u = utils.user.create_user()
     expected_url = f'https://{server_name}{subdirectory}/auth/active/{u.cookie}'

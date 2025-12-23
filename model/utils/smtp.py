@@ -4,12 +4,14 @@ from smtplib import SMTP
 from typing import Optional, Iterable, List
 
 import os
-import threading
 import logging
+import threading
+
+from flask import current_app
 
 __all__ = ['send_noreply']
 
-logger = logging.getLogger('gunicorn.error')
+logger = logging.getLogger('flask.app')
 
 
 def send(
@@ -38,7 +40,7 @@ def send(
 
     try:
         with SMTP(SMTP_SERVER, SMTP_PORT, timeout=30) as server:
-            server.set_debuglevel(1)  # 啟用 SMTP debug 輸出
+            server.set_debuglevel(1)
             server.ehlo()
             server.starttls()
             server.ehlo()
@@ -71,10 +73,9 @@ def send_noreply(
     SMTP_NOREPLY = os.environ.get('SMTP_NOREPLY')
     SMTP_NOREPLY_PASSWORD = os.environ.get('SMTP_NOREPLY_PASSWORD')
 
-    # 確保 to_addrs 是 list（避免 iterator 問題）
     to_addrs_list = list(to_addrs)
 
-    logger.info(f'[SMTP] send_noreply called for {to_addrs_list}')
+    current_app.logger.info(f'[SMTP] send_noreply called for {to_addrs_list}')
 
     args = (
         SMTP_NOREPLY,
@@ -85,7 +86,6 @@ def send_noreply(
         html or text,
     )
 
-    # 使用 daemon=False 確保 thread 完成執行
     t = threading.Thread(target=send, args=args)
     t.daemon = False
     t.start()

@@ -43,18 +43,18 @@ def setup_security(app):
             # Simplified strict check:
             if server_name and server_name not in origin:
                 app.logger.warning(
-                    f'[CSRF Block] Origin mismatch: {origin} not in {server_name}. ALLOWING FOR DEV.'
+                    f'[CSRF Block] Origin mismatch: {origin} not in {server_name}'
                 )
-                # abort(403)
+                abort(403)
             return
 
         # Fallback to Referer
         if referrer:
             if server_name and server_name not in referrer:
                 app.logger.warning(
-                    f'[CSRF Block] Referer mismatch: {referrer} not in {server_name}. ALLOWING FOR DEV.'
+                    f'[CSRF Block] Referer mismatch: {referrer} not in {server_name}'
                 )
-                # abort(403)
+                abort(403)
             return
 
         # If neither is present, and we have a server_name, we might block.
@@ -62,13 +62,13 @@ def setup_security(app):
         if server_name:
             app.logger.warning(
                 '[CSRF Block] Missing Origin and Referer headers')
-            # abort(403)
+            abort(403)
 
     @app.after_request
     def security_headers(response):
         # Security Headers
-        # Relax CSP for development (allows Vite inline styles and HMR)
-        # response.headers['Content-Security-Policy'] = "default-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self' ws: wss:;"
+        response.headers[
+            'Content-Security-Policy'] = "default-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self' ws: wss:;"
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['X-Frame-Options'] = 'DENY'
         response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'

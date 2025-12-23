@@ -3,6 +3,7 @@ import os
 LOG_DIR = 'logs'
 
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'DEBUG')
+LOG_CONSOLE_LEVEL = os.getenv('LOG_CONSOLE_LEVEL', LOG_LEVEL)
 
 LOGGING_CONFIG = {
     'version': 1,
@@ -36,7 +37,8 @@ LOGGING_CONFIG = {
         'console': {
             'class': 'logging.StreamHandler',
             'stream': 'ext://flask.logging.wsgi_errors_stream',
-            'formatter': 'default'
+            'formatter': 'default',
+            'level': LOG_CONSOLE_LEVEL,
         },
         'file': {
             'class': 'logging.FileHandler',

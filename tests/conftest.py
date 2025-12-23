@@ -19,6 +19,8 @@ os.environ.pop('SMTP_NOREPLY', None)
 if (worker_id := os.environ.get('PYTEST_XDIST_WORKER')):
     os.environ['MINIO_BUCKET'] = f'normal-oj-test-{worker_id}'
 
+os.environ['LOG_CONSOLE_LEVEL'] = 'ERROR'
+
 from typing import Dict, List, Protocol
 from flask import Flask
 from flask.testing import FlaskClient
@@ -130,6 +132,7 @@ def app(tmp_path):
     app = flask_app()
     app.config['TESTING'] = True
     app.config['SERVER_NAME'] = 'test.test'
+    app.config['PREFERRED_URL_SCHEME'] = 'https'
     mongomock.gridfs.enable_gridfs_integration()
 
     # Define custom client to auto-inject Origin for CSRF protection

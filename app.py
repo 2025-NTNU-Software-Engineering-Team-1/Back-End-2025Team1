@@ -90,16 +90,15 @@ def app():
 
 
 def setup_smtp(app: Flask):
-    logger = logging.getLogger('gunicorn.error')
     if os.getenv('SMTP_SERVER') is None:
-        logger.info(
-            '\'SMTP_SERVER\' is not set. email-related function will be disabled'
+        app.logger.info(
+            "'SMTP_SERVER' is not set. email-related function will be disabled"
         )
         return
     if os.getenv('SMTP_NOREPLY') is None:
-        raise RuntimeError('missing required configuration \'SMTP_NOREPLY\'')
+        raise RuntimeError("missing required configuration 'SMTP_NOREPLY'")
     if os.getenv('SMTP_NOREPLY_PASSWORD') is None:
-        logger.info('\'SMTP_NOREPLY\' set but \'SMTP_NOREPLY_PASSWORD\' not')
+        app.logger.info("'SMTP_NOREPLY' set but 'SMTP_NOREPLY_PASSWORD' not")
     # config for external URLs
     server_name = os.getenv('SERVER_NAME')
     if server_name is None:
