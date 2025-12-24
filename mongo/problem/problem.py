@@ -401,7 +401,18 @@ class Problem(MongoBase, engine=engine.Problem):
             try:
                 from zipfile import ZipFile
                 file_obj.seek(0)
-                ZipFile(file_obj).testzip()
+                with ZipFile(file_obj, 'r') as zf:
+                    zf.testzip()
+                    # Special validation for dockerfiles.zip
+                    if asset_type == 'network_dockerfile' or filename.lower(
+                    ) == 'dockerfiles.zip':
+                        self._validate_dockerfile_zip(zf)
+                file_obj.seek(0)
+            except BadZipFile as e:
+                raise BadZipFile(f'Invalid zip file {filename}: {str(e)}')
+            except ValueError:
+                # Re-raise ValueError from _validate_dockerfile_zip
+                raise
             except Exception as e:
                 raise BadZipFile(f'Invalid zip file {filename}: {str(e)}')
 
@@ -420,6 +431,40 @@ class Problem(MongoBase, engine=engine.Problem):
             part_size=5 * 1024 * 1024,
         )
         return path
+
+    def _validate_dockerfile_zip(self, zf):
+        """
+        Validate dockerfiles.zip structure:
+        - Maximum 5 Dockerfiles allowed
+        - Each Dockerfile must be in a folder (e.g., folder/Dockerfile)
+        """
+        dockerfile_entries = []
+        for name in zf.namelist():
+            # Skip directories
+            if name.endswith('/'):
+                continue
+            # Find Dockerfile files
+            if name.endswith('Dockerfile') or '/Dockerfile' in name:
+                dockerfile_entries.append(name)
+
+        if len(dockerfile_entries) == 0:
+            raise ValueError(
+                'dockerfiles.zip must contain at least one Dockerfile')
+
+        if len(dockerfile_entries) > 5:
+            raise ValueError(
+                f'Maximum 5 Dockerfiles allowed, found {len(dockerfile_entries)}'
+            )
+
+        # Validate structure: must be "folder/Dockerfile" format
+        for entry in dockerfile_entries:
+            parts = entry.split('/')
+            # Valid formats: "folder/Dockerfile" (2 parts)
+            if len(parts) != 2:
+                raise ValueError(
+                    f'Invalid Dockerfile structure: {entry}. '
+                    'Each Dockerfile must be in its own folder (e.g., "env_name/Dockerfile")'
+                )
 
     def permission(self, user: User, req: Permission) -> bool:
         """
