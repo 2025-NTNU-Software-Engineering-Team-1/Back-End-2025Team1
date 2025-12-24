@@ -46,14 +46,28 @@ class AiModel(MongoBase, engine=engine.AiModel):
             'rpm_limit': 5,
             'tpm_limit': 250000,
             'rpd_limit': 20,
-            'description': 'Google Gemini 2.5 Flash',
+            'description': 'Google Gemini 2.5 Flash (Stable)',
             'is_active': True
         }, {
-            'name': 'gemini-2.5-flash-lite',
+            'name': 'gemini-flash-lite-latest',
             'rpm_limit': 10,
             'tpm_limit': 250000,
             'rpd_limit': 20,
-            'description': 'Google Gemini 2.5 Flash Lite',
+            'description': 'Google Gemini Flash Lite (Latest)',
+            'is_active': True
+        }, {
+            'name': 'gemini-flash-latest',
+            'rpm_limit': 5,
+            'tpm_limit': 250000,
+            'rpd_limit': 20,
+            'description': 'Google Gemini Flash (Latest)',
+            'is_active': True
+        }, {
+            'name': 'gemini-3-flash-preview',
+            'rpm_limit': 5,
+            'tpm_limit': 250000,
+            'rpd_limit': 20,
+            'description': 'Google Gemini 3.0 Flash (Preview)',
             'is_active': True
         }]
 

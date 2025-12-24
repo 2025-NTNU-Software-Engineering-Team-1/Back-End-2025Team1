@@ -580,7 +580,7 @@ class TestAiFeatures(BaseAiTest):
         assert flash.rpd_limit == 20
 
         # Check Flash Lite
-        lite = engine.AiModel.objects(name='gemini-2.5-flash-lite').first()
+        lite = engine.AiModel.objects(name='gemini-flash-lite-latest').first()
         assert lite is not None
         assert lite.rpm_limit == 10
 
@@ -666,7 +666,7 @@ class TestAiFeatures(BaseAiTest):
         # 3. Verify Course
         raw_course.reload()
         assert raw_course.is_ai_vt_enabled is True
-        assert raw_course.ai_model.name == 'gemini-2.5-flash-lite'
+        assert raw_course.ai_model.name == 'gemini-flash-lite-latest'
 
         # 4. Verify Key
         raw_key.reload()

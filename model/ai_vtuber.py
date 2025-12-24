@@ -1,11 +1,23 @@
+"""
+AI Vtuber API Routes.
+
+This module provides the Flask Blueprint for AI Vtuber endpoints.
+"""
+
 from flask import Blueprint, current_app
 
-from mongo import *
+from mongo import AiApiLog
 from model.auth import login_required
-from .utils import *
+from .utils import Request, HTTPError, HTTPResponse
 
-# AI Helper must be explicitly imported
-from .utils.ai import *
+# Import from new AI module
+from .ai import (
+    RateLimitExceededError,
+    ContextNotFoundError,
+    AIError,
+)
+from .ai.vtuber import process_vtuber_request
+from .ai.conversation import get_conversation_history, reset_conversation_history
 
 __all__ = ['ai_api']
 
@@ -31,21 +43,22 @@ def ask(user=None,
     if not course_name:
         return HTTPError('Missing course_name', 400)
 
-    # 2. Call AI Processing Helper
+    # 2. Call AI Processing
     try:
-        response_data = process_ai_request(user=user,
-                                           course_name=course_name,
-                                           problem_id=problem_id,
-                                           message=message,
-                                           current_code=current_code)
+        response_data = process_vtuber_request(user=user,
+                                               course_name=course_name,
+                                               problem_id=problem_id,
+                                               message=message,
+                                               current_code=current_code)
         current_app.logger.debug(f"AI Response Data: {response_data}")
         return HTTPResponse(data=response_data)
 
-    except PermissionError as e:
+    except RateLimitExceededError as e:
         return HTTPError(str(e), 403)
-    except ValueError as e:
-        return HTTPError(str(e), 404)  # Context not found
-    except RuntimeError as e:
+    except ContextNotFoundError as e:
+        return HTTPError(str(e), 404)
+    except AIError as e:
+        current_app.logger.error(f"AI Error: {e}")
         return HTTPError(str(e), 500)
     except Exception as e:
         current_app.logger.error(f"Unexpected error: {e}")
@@ -63,21 +76,25 @@ def history(user, course_name):
     if not course_name:
         return HTTPError('Missing course_name', 400)
 
-    # Query Logs via wrapper (use course_name)
-    logs = AiApiLog.get_history(course_name, user.username) or []
-
-    # Format output
-    result = []
-    for log in logs:
-        role = log.get('role')
-        parts = log.get('parts', [])
-
-        # Merge text from multiple parts
-        content = ""
-        for part in parts:
-            if isinstance(part, dict):
-                content += part.get('text', "")
-
-        result.append({"role": role, "text": content})
-
+    result = get_conversation_history(course_name, user.username)
     return HTTPResponse(data=result)
+
+
+@ai_api.route('/chatbot/history', methods=['DELETE'])
+@login_required
+@Request.args('course_name')
+def reset_history(user, course_name):
+    """
+    Clear conversation history for the current user.
+    DELETE /api/chatbot/history?course_name=...
+    """
+    if not course_name:
+        return HTTPError('Missing course_name', 400)
+
+    success = reset_conversation_history(course_name, user.username)
+
+    if success:
+        current_app.logger.info(f"History cleared for user {user.username}")
+        return HTTPResponse(message="History cleared successfully")
+    else:
+        return HTTPError("Failed to clear history", 500)
