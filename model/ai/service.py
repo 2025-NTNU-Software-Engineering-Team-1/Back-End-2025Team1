@@ -10,6 +10,7 @@ from typing import Tuple, List, Optional
 from .exceptions import AIServiceError
 from .prompts import get_vtuber_response_schema
 from .logging import get_logger
+from mongo.engine import DEFAULT_AI_MODEL
 
 logger = get_logger('service')
 
@@ -18,7 +19,7 @@ __all__ = [
     'DEFAULT_MODEL',
 ]
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = DEFAULT_AI_MODEL
 DEFAULT_TIMEOUT = 60
 
 
@@ -40,7 +41,7 @@ def call_ai_service(
         history_messages: Previous conversation messages.
         user_message: Current user message.
         current_code: Optional code submitted by student.
-        model_name: Model to use (default: gemini-2.5-flash).
+        model_name: Model to use (default: DEFAULT_AI_MODEL).
         use_structured_output: Whether to use response_schema for JSON output.
         
     Returns:
