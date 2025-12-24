@@ -241,7 +241,18 @@ def upload_problem_assets(user: User, problem: Problem):
         # 如果之前已經有 asset，可以只更新 meta，不強制上傳檔案
         has_existing_assets = bool((problem.config or {}).get('assetPaths'))
         if not valid_files and not has_existing_assets:
-            return HTTPError('No files provided', 400)
+            # These are for debugging
+            current_file_msg = ''
+            if (problem.config or {}).get('assetPaths'):
+                current_file_msg = 'Current assets: ' + str(
+                    (problem.config or {}).get('assetPaths'))
+            if (problem.config or {}).get('meta'):
+                current_file_msg += ' Current meta: ' + str(
+                    (problem.config or {}).get('meta'))
+            if (problem.config or {}).get('pipeline'):
+                current_file_msg += ' Current pipeline: ' + str(
+                    (problem.config or {}).get('pipeline'))
+            return HTTPError('No files provided. ' + current_file_msg, 400)
         meta_raw = request.form.get('meta')
         try:
             meta = json.loads(meta_raw) if meta_raw else {}
