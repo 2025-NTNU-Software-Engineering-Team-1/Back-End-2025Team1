@@ -4,7 +4,7 @@ from logging.config import dictConfig
 from flask import Flask
 from model import *
 from mongo import *
-from mongo.ai_vtuber import migrate_ai_data
+from mongo.ai import migrate_ai_data
 from config import LOGGING_CONFIG, LOG_DIR
 
 

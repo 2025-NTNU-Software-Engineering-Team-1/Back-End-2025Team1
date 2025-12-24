@@ -1,6 +1,15 @@
+"""
+Mongo AI Models - Data layer for AI features.
+
+This module contains all MongoDB document wrappers for AI-related features:
+- AiModel: AI model configuration
+- AiApiKey: API key management
+- AiApiLog: Conversation history
+- AiTokenUsage: Token usage tracking
+"""
 from datetime import datetime
-from . import engine
-from .base import MongoBase
+from mongo import engine
+from mongo.base import MongoBase
 
 __all__ = [
     'AiModel',
@@ -23,7 +32,8 @@ class AiModel(MongoBase, engine=engine.AiModel):
 
     @property
     def rpm_limit(self):
-        if self.obj: return self.obj.rpm_limit
+        if self.obj:
+            return self.obj.rpm_limit
         return 5
 
     @classmethod
@@ -84,8 +94,6 @@ class AiModel(MongoBase, engine=engine.AiModel):
     @classmethod
     def get_rpm_limit(cls, name: str, default: int = 5):
         """Get RPM limit for a specific model"""
-        # If not found use default (Gemini Flash free tier usually 5 RPM)
-        # But it is highly possible that Google changes their limits
         try:
             model = cls.get_by_name(name)
             return model.rpm_limit
@@ -100,8 +108,6 @@ class AiApiKey(MongoBase, engine=engine.AiApiKey):
     """
 
     def __init__(self, key_id):
-        # MongoBase.__new__ handles setting self.obj if key_id is a document or valid PK
-        # We only need to manual query if self.obj wasn't set or is an empty/new doc
         if not getattr(self, 'obj', None) or not self.obj.id:
             self.obj = self.engine.objects(id=key_id).first()
 
@@ -112,26 +118,18 @@ class AiApiKey(MongoBase, engine=engine.AiApiKey):
     def get_active_keys_by_course_name(cls, course_name: str):
         """Get all active API keys for a specific course by course_name (string)"""
         try:
-            # 先取得 Course engine document
             course_obj = engine.Course.objects(course_name=course_name).first()
             if not course_obj:
                 return []
 
-            # 用 Course document reference 查詢 keys
             keys = cls.engine.objects(course_name=course_obj, is_active=True)
 
             wrappers = []
             for k in keys:
-                # 建立 Wrapper，並手動注入 obj 以避免重新查詢
                 wrapper = cls(k.id)
                 wrapper.obj = k
-
-                # Check for RPD reset
                 wrapper.check_reset()
-
                 wrappers.append(wrapper)
-            # Fix: The original code had an indentation error (return inside loop)
-            # Assuming we want to return ALL wrappers
             return wrappers
         except Exception:
             return []
@@ -146,7 +144,6 @@ class AiApiKey(MongoBase, engine=engine.AiApiKey):
         now = datetime.now()
         last_reset = self.obj.last_reset_date
 
-        # Lazy check using memory first
         if now >= last_reset + engine.RPD_RESET_INTERVAL:
             try:
                 self.obj.update(set__rpd=0, set__last_reset_date=now)
@@ -171,7 +168,6 @@ class AiApiKey(MongoBase, engine=engine.AiApiKey):
             return []
 
         keys = cls.engine.objects(course_name=course_obj)
-
         result_list = []
 
         for key in keys:
@@ -200,18 +196,15 @@ class AiApiKey(MongoBase, engine=engine.AiApiKey):
                 p_id = stat['_id']
                 total = stat.get('totalInput', 0) + stat.get('totalOutput', 0)
                 if p_id:
-
                     prob = engine.Problem.objects(
                         pk=p_id).only('problem_name').first()
                     p_name = prob.problem_name if prob else f"Problem {p_id}"
-
                     problem_usages.append({
                         "problem_id": str(p_id),
                         "problem_name": p_name,
                         "total_token": total
                     })
 
-            # Masked Value of API Key
             raw_key = key.key_value or ""
             masked = f"{raw_key[:4]}****{raw_key[-4:]}" if len(
                 raw_key) > 8 else "****"
@@ -241,9 +234,7 @@ class AiApiKey(MongoBase, engine=engine.AiApiKey):
 
     @classmethod
     def get_list_by_course(cls, course_name: str):
-        """
-        To get all API Keys for a specific course by course_name (string)
-        """
+        """Get all API Keys for a specific course by course_name (string)"""
         course_obj = engine.Course.objects(course_name=course_name).first()
         if not course_obj:
             return []
@@ -252,7 +243,6 @@ class AiApiKey(MongoBase, engine=engine.AiApiKey):
         result_list = []
 
         for key in keys:
-            # Mask Key Value
             raw_key = key.key_value or ""
             masked = f"{raw_key[:4]}****{raw_key[-4:]}" if len(
                 raw_key) > 8 else "****"
@@ -272,7 +262,6 @@ class AiApiKey(MongoBase, engine=engine.AiApiKey):
                 key.output_token,
                 "request_count":
                 key.request_count,
-                # If created_by is None, show "System"
                 "created_by":
                 key.created_by.username if key.created_by else "System"
             })
@@ -286,13 +275,7 @@ class AiApiKey(MongoBase, engine=engine.AiApiKey):
                 key_value,
                 created_by,
                 is_active=True):
-        """
-        [新增] 建立新的 API Key
-        """
-        # 修正查詢條件，使用 course_name=course_id
-        # The argument name 'course_id' in add_key is an ObjectId.
-        # 'course_name' field in AiApiKey is ReferenceField('Course').
-        # So we should find the course by ID first.
+        """建立新的 API Key"""
         real_course_doc = engine.Course.objects(id=course_id).first()
         if not real_course_doc:
             raise ValueError("Course not found")
@@ -302,29 +285,24 @@ class AiApiKey(MongoBase, engine=engine.AiApiKey):
             raise ValueError(
                 f"Key name '{key_name}' already exists in this course.")
 
-        # Unwrap created_by if it is a wrapper (MongoBase)
         real_created_by = created_by.obj if hasattr(created_by,
                                                     'obj') else created_by
 
-        new_key = cls.engine(
-            course_name=real_course_doc,  # 對應 ReferenceField
-            key_name=key_name,
-            key_value=key_value,
-            created_by=real_created_by,
-            is_active=is_active,
-            created_at=datetime.now(),
-            updated_at=datetime.now())
+        new_key = cls.engine(course_name=real_course_doc,
+                             key_name=key_name,
+                             key_value=key_value,
+                             created_by=real_created_by,
+                             is_active=is_active,
+                             created_at=datetime.now(),
+                             updated_at=datetime.now())
         new_key.save()
         return new_key
 
     @classmethod
     def update_key(cls, key_id, **kwargs):
-        """
-        [新增] 更新 Key (支援改名、狀態、甚至數值)
-        """
+        """更新 Key (支援改名、狀態、甚至數值)"""
         kwargs['updated_at'] = datetime.now()
         update_data = {f"set__{k}": v for k, v in kwargs.items()}
-
         result = cls.engine.objects(id=key_id).update_one(**update_data)
         return result > 0
 
@@ -353,7 +331,6 @@ class AiApiLog(MongoBase, engine=engine.AiApiLog):
                     emotion: str = None):
         """Add a message to conversation history"""
         try:
-            # 先取得 Course engine document
             course_doc = engine.Course.objects(course_name=course_name).first()
             if not course_doc:
                 return False
@@ -362,7 +339,6 @@ class AiApiLog(MongoBase, engine=engine.AiApiLog):
             if emotion:
                 message_obj['parts'][0]['emotion'] = emotion
 
-            # Find or create log entry
             log = cls.engine.objects(course_name=course_doc,
                                      username=username).first()
             if not log:
@@ -373,14 +349,13 @@ class AiApiLog(MongoBase, engine=engine.AiApiLog):
 
             log.update(push__history=message_obj)
             return True
-        except Exception as e:
+        except Exception:
             return False
 
     @classmethod
     def get_history(cls, course_name: str, username: str):
         """Get conversation history for a student in a course"""
         try:
-            # 先取得 Course engine document
             course_doc = engine.Course.objects(course_name=course_name).first()
             if not course_doc:
                 return []
@@ -388,14 +363,13 @@ class AiApiLog(MongoBase, engine=engine.AiApiLog):
             log = cls.engine.objects(course_name=course_doc,
                                      username=username).first()
             return log.history if log else []
-        except Exception as e:
+        except Exception:
             return []
 
     @classmethod
     def update_tokens(cls, course_name: str, username: str, total_tokens: int):
         """Update total tokens used"""
         try:
-            # 先取得 Course engine document
             course_doc = engine.Course.objects(course_name=course_name).first()
             if not course_doc:
                 return False
@@ -428,9 +402,7 @@ class AiApiLog(MongoBase, engine=engine.AiApiLog):
 
 
 class AiTokenUsage(MongoBase, engine=engine.AiTokenUsage):
-    """
-    Token usage tracking document.
-    """
+    """Token usage tracking document."""
 
     @classmethod
     def add_usage(cls,
@@ -439,10 +411,7 @@ class AiTokenUsage(MongoBase, engine=engine.AiTokenUsage):
                   input_tokens: int,
                   output_tokens: int,
                   problem_id=None):
-        """
-        Add a token usage record.
-        Returns: True if successful, False otherwise.
-        """
+        """Add a token usage record."""
         try:
             if isinstance(course_name, str):
                 course_doc = engine.Course.objects(
@@ -453,19 +422,16 @@ class AiTokenUsage(MongoBase, engine=engine.AiTokenUsage):
             if hasattr(course_doc, 'obj'):
                 course_doc = course_doc.obj
 
-            # 確保 problem_id 是 Document (ReferenceField)
             problem_doc = None
             if problem_id:
-                # 嘗試查找 Problem Document
                 problem_doc = engine.Problem.objects(pk=problem_id).first()
 
-            usage = cls.engine(
-                api_key=api_key_obj,
-                course_name=course_doc,  # We must use the engine document here
-                problem_id=problem_doc,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                timestamp=datetime.now())
+            usage = cls.engine(api_key=api_key_obj,
+                               course_name=course_doc,
+                               problem_id=problem_doc,
+                               input_tokens=input_tokens,
+                               output_tokens=output_tokens,
+                               timestamp=datetime.now())
             usage.save()
             return True
         except Exception as e:
