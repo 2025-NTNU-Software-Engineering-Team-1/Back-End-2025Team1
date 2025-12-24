@@ -791,11 +791,11 @@ def get_public_testdata(token: str, problem_id: int):
         return HTTPError(f'Problem {problem_id} not found', 404)
 
     # Check if trial mode is enabled
-    if not getattr(problem.obj, 'trial_mode_enabled', False):
+    if not problem.trial_mode_enabled:
         return HTTPError('Trial mode is not enabled for this problem', 403)
 
-    # Try MinIO path first
-    minio_path = getattr(problem.obj, 'public_cases_zip_minio_path', None)
+    # Try MinIO path first (via standardized property)
+    minio_path = problem.public_cases_zip_minio_path
     if minio_path:
         minio_client = MinioClient()
         try:
@@ -841,11 +841,11 @@ def get_public_checksum(token: str, problem_id: int):
     if not problem:
         return HTTPError(f'Problem {problem_id} not found', 404)
 
-    if not getattr(problem.obj, 'trial_mode_enabled', False):
+    if not problem.trial_mode_enabled:
         return HTTPError('Trial mode is not enabled for this problem', 403)
 
-    # Try MinIO path first
-    minio_path = getattr(problem.obj, 'public_cases_zip_minio_path', None)
+    # Try MinIO path first (via standardized property)
+    minio_path = problem.public_cases_zip_minio_path
     if minio_path:
         minio_client = MinioClient()
         try:
@@ -1440,8 +1440,8 @@ def get_public_testcases(user, problem_id: int):
                 f"Cache hit but failed to parse for {cache_key}: {e}")
             # If fails: continue to fetch from MinIO
 
-    # Cache miss or fail: Fetch from MinIO
-    zip_path = getattr(problem, "public_cases_zip_minio_path", None)
+    # Cache miss or fail: Fetch from MinIO (via standardized property)
+    zip_path = problem.public_cases_zip_minio_path
     if not zip_path:
         return HTTPError("No public testcases.", 404)
 
@@ -1560,63 +1560,24 @@ def request_trial_submission(user,
     Create a trial submission request
     
     Returns:
-        Trial_Submission_Id if successful
+        trial_submission_id if successful
     """
-    import json
-    import os
-    log_data = {
-        'location': 'problem.py:1514',
-        'message': 'request_trial_submission entry',
-        'data': {
-            'problem_id': problem_id,
-            'username': user.username,
-            'language_type': language_type,
-            'use_default_test_cases': use_default_test_cases
-        },
-        'timestamp': int(datetime.now().timestamp() * 1000),
-        'sessionId': 'debug-session',
-        'runId': 'run1',
-        'hypothesisId': 'A'
-    }
-    try:
-        log_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-            '.cursor', 'debug.log')
-        os.makedirs(os.path.dirname(log_path), exist_ok=True)
-        with open(log_path, 'a', encoding='utf-8') as f:
-            f.write(json.dumps(log_data) + '\n')
-    except Exception as e:
-        current_app.logger.error(f"Failed to write debug log: {e}")
     current_app.logger.info(
         f"Requesting trial submission for problem id-{problem_id} by user {user.username}"
     )
+    current_app.logger.debug(
+        f"[TRIAL] Entry params: problem_id={problem_id}, language_type={language_type}, "
+        f"use_default_test_cases={use_default_test_cases}")
+
     # Load problem
     problem_proxy = Problem(problem_id)
     if not problem_proxy or not getattr(problem_proxy, "obj", None):
-        import os
-        log_data = {
-            'location': 'problem.py:1520',
-            'message': 'Problem not found',
-            'data': {
-                'problem_id': problem_id
-            },
-            'timestamp': int(datetime.now().timestamp() * 1000),
-            'sessionId': 'debug-session',
-            'runId': 'run1',
-            'hypothesisId': 'B'
-        }
-        try:
-            log_path = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                '.cursor', 'debug.log')
-            with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(json.dumps(log_data) + '\n')
-        except Exception:
-            pass
-        current_app.logger.error(f"Problem {problem_id} not found")
+        current_app.logger.error(f"[TRIAL] Problem {problem_id} not found")
         return HTTPError("Problem not found.", 404)
 
     problem = problem_proxy
+    current_app.logger.debug(f"[TRIAL] Problem loaded: {problem.problem_name}")
+
     # Backward compatibility for clients sending legacy key casing.
     data = request.get_json(silent=True) or {}
     if "Use_Default_Test_Cases" in data:
@@ -1626,120 +1587,42 @@ def request_trial_submission(user,
 
     # Validate language type (0: C, 1: C++, 2: Python)
     if language_type not in [0, 1, 2]:
-        import os
-        log_data = {
-            'location': 'problem.py:1532',
-            'message': 'Invalid language type',
-            'data': {
-                'language_type': language_type
-            },
-            'timestamp': int(datetime.now().timestamp() * 1000),
-            'sessionId': 'debug-session',
-            'runId': 'run1',
-            'hypothesisId': 'C'
-        }
-        try:
-            log_path = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                '.cursor', 'debug.log')
-            with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(json.dumps(log_data) + '\n')
-        except Exception:
-            pass
-        current_app.logger.error(f"Invalid language type: {language_type}")
+        current_app.logger.error(
+            f"[TRIAL] Invalid language type: {language_type}")
         return HTTPError(
             "Invalid language type. Must be 0 (C), 1: C++, 2: Python).", 400)
 
     # Check if user has permission to submit
     has_permission = problem.permission(user, Problem.Permission.ONLINE)
-    import os
-    log_data = {
-        'location': 'problem.py:1538',
-        'message': 'Permission check',
-        'data': {
-            'has_permission': has_permission,
-            'problem_id': problem_id,
-            'username': user.username
-        },
-        'timestamp': int(datetime.now().timestamp() * 1000),
-        'sessionId': 'debug-session',
-        'runId': 'run1',
-        'hypothesisId': 'D'
-    }
-    try:
-        log_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-            '.cursor', 'debug.log')
-        with open(log_path, 'a', encoding='utf-8') as f:
-            f.write(json.dumps(log_data) + '\n')
-    except Exception:
-        pass
+    current_app.logger.debug(
+        f"[TRIAL] Permission check: has_permission={has_permission}, user={user.username}"
+    )
     if not has_permission:
+        current_app.logger.warning(
+            f"[TRIAL] User {user.username} denied permission to problem {problem_id}"
+        )
         return HTTPError(
             "You don't have permission to submit to this problem.", 403)
 
     # Check if trial mode is enabled
     trial_enabled = problem.trial_mode_enabled
-    import os
-    log_data = {
-        'location': 'problem.py:1543',
-        'message': 'Trial mode check',
-        'data': {
-            'trial_enabled':
-            trial_enabled,
-            'problem_id':
-            problem_id,
-            'hasattr_trial_mode_enabled':
-            hasattr(problem.obj, 'trial_mode_enabled'),
-            'hasattr_trialModeEnabled':
-            hasattr(problem.obj, 'trialModeEnabled'),
-            'trial_mode_enabled_value':
-            getattr(problem.obj, 'trial_mode_enabled', None),
-            'trialModeEnabled_value':
-            getattr(problem.obj, 'trialModeEnabled', None)
-        },
-        'timestamp': int(datetime.now().timestamp() * 1000),
-        'sessionId': 'debug-session',
-        'runId': 'run1',
-        'hypothesisId': 'E'
-    }
-    try:
-        log_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-            '.cursor', 'debug.log')
-        with open(log_path, 'a', encoding='utf-8') as f:
-            f.write(json.dumps(log_data) + '\n')
-    except Exception:
-        pass
+    config = getattr(problem.obj, 'config', {}) or {}
+    trial_mode_db = getattr(problem.obj, 'trial_mode_enabled', None)
+    current_app.logger.debug(
+        f"[TRIAL] Trial mode check: trial_enabled={trial_enabled}, "
+        f"config.trialMode={config.get('trialMode')}, "
+        f"db.trial_mode_enabled={trial_mode_db}")
     if not trial_enabled:
+        current_app.logger.warning(
+            f"[TRIAL] Trial mode not enabled for problem {problem_id}")
         return HTTPError("Trial mode is not enabled for this problem.", 403)
 
     # Use TrialSubmission.add() instead of creating engine object directly
     try:
-        import json
-        import os
-        log_data = {
-            'location': 'problem.py:1547',
-            'message': 'Before TrialSubmission.add',
-            'data': {
-                'problem_id': problem_id,
-                'username': user.username,
-                'lang': language_type,
-                'use_default_case': use_default_test_cases
-            },
-            'timestamp': int(datetime.now().timestamp() * 1000),
-            'sessionId': 'debug-session',
-            'runId': 'run1',
-            'hypothesisId': 'F'
-        }
-        try:
-            log_path = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                '.cursor', 'debug.log')
-            with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(json.dumps(log_data) + '\n')
-        except Exception:
-            pass
+        current_app.logger.debug(
+            f"[TRIAL] Calling TrialSubmission.add: problem_id={problem_id}, "
+            f"username={user.username}, lang={language_type}, use_default={use_default_test_cases}"
+        )
         trial_submission = TrialSubmission.add(
             problem_id=problem_id,
             username=user.username,
@@ -1747,80 +1630,22 @@ def request_trial_submission(user,
             timestamp=datetime.now(),
             ip_addr=request.remote_addr,
             use_default_case=use_default_test_cases)
-        import os
-        log_data = {
-            'location': 'problem.py:1556',
-            'message': 'After TrialSubmission.add success',
-            'data': {
-                'trial_submission_id': str(trial_submission.id)
-            },
-            'timestamp': int(datetime.now().timestamp() * 1000),
-            'sessionId': 'debug-session',
-            'runId': 'run1',
-            'hypothesisId': 'F'
-        }
-        try:
-            log_path = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                '.cursor', 'debug.log')
-            with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(json.dumps(log_data) + '\n')
-        except Exception:
-            pass
+        current_app.logger.info(
+            f"[TRIAL] Successfully created trial submission: {trial_submission.id}"
+        )
         return HTTPResponse(
             "Trial submission created successfully.",
             data={"trial_submission_id": str(trial_submission.id)})
     except PermissionError as e:
-        import json
-        import os
-        log_data = {
-            'location': 'problem.py:1560',
-            'message': 'PermissionError in TrialSubmission.add',
-            'data': {
-                'error': str(e),
-                'problem_id': problem_id,
-                'username': user.username
-            },
-            'timestamp': int(datetime.now().timestamp() * 1000),
-            'sessionId': 'debug-session',
-            'runId': 'run1',
-            'hypothesisId': 'F'
-        }
-        try:
-            log_path = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                '.cursor', 'debug.log')
-            with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(json.dumps(log_data) + '\n')
-        except Exception:
-            pass
-        current_app.logger.info(
-            f"Permission error for trial submission by user {user.username} on problem id-{problem_id}: {str(e)}"
+        current_app.logger.warning(
+            f"[TRIAL] PermissionError for user {user.username} on problem {problem_id}: {e}"
         )
         return HTTPError(str(e), 403)
     except Exception as e:
-        import json
-        import os
-        log_data = {
-            'location': 'problem.py:1565',
-            'message': 'Exception in TrialSubmission.add',
-            'data': {
-                'error': str(e),
-                'error_type': type(e).__name__,
-                'problem_id': problem_id
-            },
-            'timestamp': int(datetime.now().timestamp() * 1000),
-            'sessionId': 'debug-session',
-            'runId': 'run1',
-            'hypothesisId': 'F'
-        }
-        try:
-            log_path = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                '.cursor', 'debug.log')
-            with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(json.dumps(log_data) + '\n')
-        except Exception:
-            pass
-        current_app.logger.error(f"Error creating trial submission: {str(e)}")
+        current_app.logger.error(
+            f"[TRIAL] Exception in TrialSubmission.add: {type(e).__name__}: {e}"
+        )
+        import traceback
+        current_app.logger.debug(
+            f"[TRIAL] Traceback: {traceback.format_exc()}")
         return HTTPError(f"Failed to create trial submission: {str(e)}", 500)

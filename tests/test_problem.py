@@ -1533,6 +1533,10 @@ class TestTrialSubmissionAPI(BaseTester):
         try:
             problem.obj.problem_status = 0  # Visible
             problem.obj.trial_mode_enabled = True
+            # Update config for new trial mode logic
+            if not problem.obj.config:
+                problem.obj.config = {}
+            problem.obj.config['trialMode'] = True
         except Exception:
             pass
         try:
@@ -1735,8 +1739,8 @@ class TestTrialSubmissionAPI(BaseTester):
         assert rv.status_code == 200
         data = rv.get_json()
         assert data['status'] == 'ok'
-        assert 'Trial_Submission_Id' in data['data']
-        trial_id = data['data']['Trial_Submission_Id']
+        assert 'trial_submission_id' in data['data']
+        trial_id = data['data']['trial_submission_id']
 
         # Verify record
         from mongo.submission import TrialSubmission
@@ -1794,5 +1798,5 @@ class TestTrialSubmissionAPI(BaseTester):
             })
         assert rv.status_code == 200
         from mongo.submission import TrialSubmission
-        ts = TrialSubmission(rv.get_json()['data']['Trial_Submission_Id'])
+        ts = TrialSubmission(rv.get_json()['data']['trial_submission_id'])
         assert ts.use_default_case is False

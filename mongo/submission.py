@@ -1581,6 +1581,8 @@ class TrialSubmission(MongoBase, BaseSubmission,
         # Validate test case availability
         if self.use_default_case:
             if not problem.public_cases_zip_minio_path:
+                self.logger.error(
+                    f"Missing public testdata for problem {self.problem_id}.")
                 raise TestCaseNotFound(self.problem_id)
         else:
             if not self.custom_input_minio_path:
@@ -1884,13 +1886,19 @@ class TrialSubmission(MongoBase, BaseSubmission,
                     status_str = 'Pending'
 
                 history_list.append({
-                    "trial_submission_id": str(sub.id),
-                    "problem_Id": str(sub.problem_id),
-                    "status": status_str,
-                    "score": sub.score,
-                    "language_type": sub.language,  # 0: C, 1: C++, 2: Python
+                    "trial_submission_id":
+                    str(sub.id),
+                    "problem_Id":
+                    str(sub.problem_id),
+                    "status":
+                    status_str,
+                    "score":
+                    sub.score,
+                    "language_type":
+                    sub.language,  # 0: C, 1: C++, 2: Python
                     "timestamp":
-                    sub.timestamp.timestamp()  # 回傳 Unix Timestamp 方便前端處理
+                    int(sub.timestamp.timestamp() *
+                        1000)  # 回傳毫秒級 Unix Timestamp 方便前端處理
                 })
 
             return {"total_count": total_count, "history": history_list}
@@ -1947,7 +1955,7 @@ class TrialSubmission(MongoBase, BaseSubmission,
 
         return {
             "trial_submission_id": str(self.id),
-            "timestamp": self.timestamp.timestamp(),
+            "timestamp": int(self.timestamp.timestamp() * 1000),
             "status": status_str,
             "score": self.score,
             "tasks": tasks_data

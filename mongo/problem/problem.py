@@ -101,43 +101,62 @@ class Problem(MongoBase, engine=engine.Problem):
     @property
     def trial_mode_enabled(self) -> bool:
         """Check if trial mode is enabled for this problem.
-        Checks config.trialMode first, then database fields for backward compatibility.
+        Checks config.trialMode first (since frontend writes there),
+        then database fields for backward compatibility.
         """
-        # Check config.trialMode first (current way)
+        # Check config.trialMode first (this is where frontend writes)
         config = self.obj.config or {}
         if 'trialMode' in config:
             return bool(config['trialMode'])
         # Also check testMode for backward compatibility
         if 'testMode' in config:
             return bool(config['testMode'])
-        # Try database field name (backward compatibility)
+        # Check database field (legacy)
         if hasattr(self.obj, 'trial_mode_enabled'):
-            value = getattr(self.obj, 'trial_mode_enabled', False)
+            value = getattr(self.obj, 'trial_mode_enabled', None)
             if value is not None:
                 return bool(value)
-        # Try database field name directly
+        # Try database field name directly (alias)
         if hasattr(self.obj, 'trialModeEnabled'):
-            value = getattr(self.obj, 'trialModeEnabled', False)
+            value = getattr(self.obj, 'trialModeEnabled', None)
             if value is not None:
                 return bool(value)
-        # Backward compatibility: try old field names and migrate
+        # Backward compatibility: try old field names
         if hasattr(self.obj, 'test_mode_enabled'):
-            value = getattr(self.obj, 'test_mode_enabled', False)
+            value = getattr(self.obj, 'test_mode_enabled', None)
             if value is not None:
-                # Migrate old field to new field
-                if value:
-                    self.obj.trial_mode_enabled = True
-                    self.obj.save()
                 return bool(value)
         if hasattr(self.obj, 'testModeEnabled'):
-            value = getattr(self.obj, 'testModeEnabled', False)
+            value = getattr(self.obj, 'testModeEnabled', None)
             if value is not None:
-                # Migrate old field to new field
-                if value:
-                    self.obj.trial_mode_enabled = True
-                    self.obj.save()
                 return bool(value)
         return False
+
+    @property
+    def public_cases_zip_minio_path(self) -> Optional[str]:
+        """Get public testcases zip path (MinIO).
+        Prioritize config.assetPaths['public_testdata'], then legacy field.
+        """
+        config = self.obj.config or {}
+        asset_paths = config.get('assetPaths') or {}
+        # 1. New Config Path
+        if 'public_testdata' in asset_paths:
+            return asset_paths['public_testdata']
+        # 2. Legacy Field (engine field)
+        return getattr(self.obj, 'public_cases_zip_minio_path', None)
+
+    @property
+    def ac_code_minio_path(self) -> Optional[str]:
+        """Get AC code path (MinIO).
+        Prioritize config.assetPaths['ac_code'], then legacy field.
+        """
+        config = self.obj.config or {}
+        asset_paths = config.get('assetPaths') or {}
+        # 1. New Config Path
+        if 'ac_code' in asset_paths:
+            return asset_paths['ac_code']
+        # 2. Legacy Field (engine field)
+        return getattr(self.obj, 'ac_code_minio_path', None)
 
     @property
     def trial_submission_quota(self) -> int:

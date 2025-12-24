@@ -46,6 +46,10 @@ def setup_problem_with_testcases():
     try:
         problem.obj.problem_status = 0
         problem.obj.trial_mode_enabled = True
+        # Update config for new trial mode logic
+        if not problem.obj.config:
+            problem.obj.config = {}
+        problem.obj.config['trialMode'] = True
     except Exception:
         pass
     try:
@@ -87,7 +91,7 @@ class TestTrialSubmissionAPI(BaseTester):
                              'use_default_test_cases': True
                          })
         assert rv.status_code == 200
-        trial_id = rv.get_json()['data']['Trial_Submission_Id']
+        trial_id = rv.get_json()['data']['trial_submission_id']
 
         # Create code zip
         code_buffer = io.BytesIO()
@@ -102,7 +106,7 @@ class TestTrialSubmissionAPI(BaseTester):
         assert rv.status_code == 200
         data = rv.get_json()
         assert data['status'] == 'ok'
-        assert data['data']['Trial_Submission_Id'] == trial_id
+        assert data['data']['trial_submission_id'] == trial_id
         assert data['data']['Code_Path'] is not None
         assert data['data']['Custom_Testcases_Path'] is None
 
@@ -124,7 +128,7 @@ class TestTrialSubmissionAPI(BaseTester):
                              'use_default_test_cases': False
                          })
         assert rv.status_code == 200
-        trial_id = rv.get_json()['data']['Trial_Submission_Id']
+        trial_id = rv.get_json()['data']['trial_submission_id']
 
         # Create code zip
         code_buffer = io.BytesIO()
@@ -169,7 +173,7 @@ class TestTrialSubmissionAPI(BaseTester):
                              'languageType': 2,
                              'use_default_test_cases': True
                          })
-        trial_id = rv.get_json()['data']['Trial_Submission_Id']
+        trial_id = rv.get_json()['data']['trial_submission_id']
 
         rv = client.put(f'/trial-submission/{trial_id}/files',
                         data={},
@@ -204,7 +208,7 @@ class TestTrialSubmissionAPI(BaseTester):
                 'languageType': 2,
                 'use_default_test_cases': True
             })
-        trial_id = rv.get_json()['data']['Trial_Submission_Id']
+        trial_id = rv.get_json()['data']['trial_submission_id']
 
         # Try upload as different user
         other_client = forge_client('teacher')  # Different user
@@ -230,7 +234,7 @@ class TestTrialSubmissionAPI(BaseTester):
                              'languageType': 2,
                              'use_default_test_cases': True
                          })
-        trial_id = rv.get_json()['data']['Trial_Submission_Id']
+        trial_id = rv.get_json()['data']['trial_submission_id']
 
         # Send non-zip file
         fake_zip = io.BytesIO(b'This is not a zip file')
@@ -252,7 +256,7 @@ class TestTrialSubmissionAPI(BaseTester):
                              'languageType': 2,
                              'use_default_test_cases': True
                          })
-        trial_id = rv.get_json()['data']['Trial_Submission_Id']
+        trial_id = rv.get_json()['data']['trial_submission_id']
 
         # Create >10MB zip
         large_buffer = io.BytesIO()
@@ -277,7 +281,7 @@ class TestTrialSubmissionAPI(BaseTester):
                              'languageType': 2,
                              'use_default_test_cases': False
                          })
-        trial_id = rv.get_json()['data']['Trial_Submission_Id']
+        trial_id = rv.get_json()['data']['trial_submission_id']
 
         # Valid code
         code_buffer = io.BytesIO()
@@ -311,7 +315,7 @@ class TestTrialSubmissionAPI(BaseTester):
                              'languageType': 2,
                              'use_default_test_cases': False
                          })
-        trial_id = rv.get_json()['data']['Trial_Submission_Id']
+        trial_id = rv.get_json()['data']['trial_submission_id']
 
         # Valid code
         code_buffer = io.BytesIO()

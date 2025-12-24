@@ -244,7 +244,7 @@ def upload_trial_files(user, trial_id: str):
         f"Successfully uploaded files for trial_id: {trial_id}")
     return HTTPResponse("Files received.",
                         data={
-                            "Trial_Submission_Id": str(ts.id),
+                            "trial_submission_id": str(ts.id),
                             "Code_Path": code_path,
                             "Custom_Testcases_Path": custom_path,
                         })
