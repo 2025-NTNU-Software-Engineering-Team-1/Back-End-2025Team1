@@ -97,8 +97,8 @@ class TestSignup:
                     })
         client = forge_client('test2')
         rv = client.get('/auth/me')
-        assert rv.status_code == 403, rv.get_json()
-        assert rv.get_json()['message'] == 'Inactive User'
+        assert rv.status_code == 200, rv.get_json()
+        assert rv.get_json()['data']['username'] == 'guest'
 
     def test_used_username(self, client):
         # Signup with used username
@@ -600,7 +600,8 @@ class TestLogout:
 
 def test_get_self_data(client):
     rv = client.get('/auth/me')
-    assert rv.status_code == 403
+    assert rv.status_code == 200
+    assert rv.get_json()['data']['username'] == 'guest'
     try:
         utils.user.create_user(username='test', email='test@test.test')
     except engine.NotUniqueError:
@@ -671,8 +672,8 @@ class TestChangePassword:
         assert rv.get_json()['message'] == 'Password Has Been Changed'
         client.set_cookie('piann', old_secret, domain='test.test')
         rv = client.get('/auth/me')
-        assert rv.status_code == 403, rv.get_json()
-        assert rv.get_json()['message'] == 'Authorization Expired'
+        assert rv.status_code == 200, rv.get_json()
+        assert rv.get_json()['data']['username'] == 'guest'
 
     def test_change_password_with_wrong_password(self, forge_client):
         client = forge_client('first_admin')
@@ -1000,8 +1001,9 @@ class TestJWTSecurity:
         client.set_cookie('piann', attack_token, domain='test.test')
         rv = client.get('/auth/me')
 
-        assert rv.status_code == 403, rv.get_json()
-        assert rv.get_json()['message'] == 'Invalid Token'
+        assert rv.status_code == 200, rv.get_json()
+        # Should fall back to guest instead of erroring out
+        assert rv.get_json()['data']['username'] == 'guest'
 
     def test_invalid_algorithm_rejection(self, client):
         '''Verify that tokens with unauthorized algorithms are rejected
@@ -1020,8 +1022,9 @@ class TestJWTSecurity:
         client.set_cookie('piann', invalid_token, domain='test.test')
         rv = client.get('/auth/me')
 
-        assert rv.status_code == 403, rv.get_json()
-        assert rv.get_json()['message'] == 'Invalid Token'
+        assert rv.status_code == 200, rv.get_json()
+        # Should fall back to guest
+        assert rv.get_json()['data']['username'] == 'guest'
 
     def test_valid_hs256_token(self, client):
         '''Verify that standard HS256 tokens still work

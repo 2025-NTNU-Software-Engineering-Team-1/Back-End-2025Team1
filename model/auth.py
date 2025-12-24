@@ -429,25 +429,63 @@ def batch_signup(
     return HTTPResponse()
 
 
-@auth_api.route('/me', methods=['GET'])
-@Request.args('fields')
-@login_required
-def get_me(user: User, fields: Optional[str]):
-    default = [
-        'username',
-        'email',
-        'md5',
-        'active',
-        'role',
-        'editorConfig',
-        'displayedName',
-        'bio',
-    ]
-    if fields is None:
-        fields = default
-    else:
-        fields = fields.split(',')
+def _get_user_from_token(token: Optional[str]) -> Optional[User]:
+    if not token:
+        return None
+
+    json = jwt_decode(token)
+    if not json or not json.get('secret'):
+        return None
+
     try:
-        return HTTPResponse(data=user.properties(*fields))
-    except ValueError as e:
-        return HTTPError(str(e), 400)
+        user = User(json['data']['username'])
+        # Check for ID mismatch
+        if json['data'].get('userId') != user.user_id:
+            return None
+        # Check active status
+        if not user.active:
+            return None
+        return user
+    except Exception:
+        return None
+
+
+@auth_api.route('/me', methods=['GET'])
+@Request.values('fields')
+@Request.cookies(vars_dict={'token': 'piann'})
+def get_me(token: Optional[str], fields: Optional[str]):
+    user = _get_user_from_token(token)
+
+    if user:
+        default = [
+            'username',
+            'email',
+            'md5',
+            'active',
+            'role',
+            'editorConfig',
+            'displayedName',
+            'bio',
+        ]
+        if fields is None:
+            fields = default
+        else:
+            fields = fields.split(',')
+        try:
+            return HTTPResponse(data=user.properties(*fields))
+        except ValueError as e:
+            return HTTPError(str(e), 400)
+
+    # Return Mock Guest User
+    return HTTPResponse(
+        data={
+            'username': 'guest',
+            'role': -1,
+            'active': False,
+            'email': '',
+            'displayedName': 'Guest',
+            'bio': '',
+            'editorConfig': {},
+            'userId': '',
+            'md5': '',
+        })
