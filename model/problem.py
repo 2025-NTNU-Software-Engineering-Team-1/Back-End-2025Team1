@@ -882,21 +882,27 @@ def get_public_checksum(token: str, problem_id: int):
 @problem_api.route('/<int:problem_id>/ac-code', methods=['GET'])
 @Request.args('token: str')
 def get_ac_code(token: str, problem_id: int):
-    """Download AC Code for Trial Mode (sandbox only). Returns ZIP with language info."""
+    """Download AC Code for Trial Mode (sandbox only). Returns ZIP with language info.
+    
+    Note: AC code may be stored as a single file (e.g., main.py) or as a ZIP.
+    This endpoint always returns a ZIP file, wrapping single files if necessary.
+    """
+    from pathlib import Path as PathLib
+
     if sandbox.find_by_token(token) is None:
         return HTTPError('Invalid sandbox token', 401)
     problem = Problem(problem_id)
     if not problem:
         return HTTPError(f'Problem {problem_id} not found', 404)
 
-    if not getattr(problem.obj, 'trial_mode_enabled', False):
+    if not problem.trial_mode_enabled:
         return HTTPError('Trial mode is not enabled for this problem', 403)
 
-    # Get AC code language
-    ac_code_language = getattr(problem.obj, 'ac_code_language', None)
+    # Get AC code language from config.assetPaths or database field
+    ac_code_language = problem.ac_code_language
 
-    # Try MinIO path first
-    minio_path = getattr(problem.obj, 'ac_code_minio_path', None)
+    # Try MinIO path first (via standardized property)
+    minio_path = problem.ac_code_minio_path
     if minio_path:
         minio_client = MinioClient()
         try:
@@ -904,8 +910,26 @@ def get_ac_code(token: str, problem_id: int):
                 minio_client.bucket,
                 minio_path,
             )
+            file_content = resp.read()
+            filename = PathLib(minio_path).name
+
+            # Check if already a ZIP file (ZIP magic bytes: PK\x03\x04)
+            is_zip = len(
+                file_content) >= 4 and file_content[:4] == b'PK\x03\x04'
+
+            if is_zip:
+                # Already a ZIP, return as-is
+                zip_buffer = BytesIO(file_content)
+            else:
+                # Wrap single file in ZIP
+                zip_buffer = BytesIO()
+                with zipfile.ZipFile(zip_buffer, 'w',
+                                     zipfile.ZIP_DEFLATED) as zf:
+                    zf.writestr(filename, file_content)
+                zip_buffer.seek(0)
+
             response = send_file(
-                BytesIO(resp.read()),
+                zip_buffer,
                 mimetype='application/zip',
                 as_attachment=True,
                 download_name=f'ac-code-{problem_id}.zip',
@@ -926,8 +950,23 @@ def get_ac_code(token: str, problem_id: int):
     # Fallback to GridFS
     ac_code = getattr(problem.obj, 'ac_code', None)
     if ac_code and ac_code.grid_id:
+        file_content = ac_code.read()
+        ac_code.seek(0)
+        filename = getattr(ac_code, 'filename', None) or 'ac_code.py'
+
+        # Check if already a ZIP file
+        is_zip = len(file_content) >= 4 and file_content[:4] == b'PK\x03\x04'
+
+        if is_zip:
+            zip_buffer = BytesIO(file_content)
+        else:
+            zip_buffer = BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr(filename, file_content)
+            zip_buffer.seek(0)
+
         response = send_file(
-            ac_code,
+            zip_buffer,
             mimetype='application/zip',
             as_attachment=True,
             download_name=f'ac-code-{problem_id}.zip',

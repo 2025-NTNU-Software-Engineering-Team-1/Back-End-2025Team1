@@ -1953,10 +1953,23 @@ class TrialSubmission(MongoBase, BaseSubmission,
                 "stderr": stderr_text
             })
 
+        # Get source code
+        code_content = ""
+        try:
+            code_content = self.get_main_code()
+            if code_content is None:
+                code_content = ""
+        except Exception as e:
+            current_app.logger.warning(
+                f"Failed to get trial submission code: {e}")
+            code_content = ""
+
         return {
             "trial_submission_id": str(self.id),
             "timestamp": int(self.timestamp.timestamp() * 1000),
             "status": status_str,
             "score": self.score,
+            "language_type": self.language,
+            "code": code_content,
             "tasks": tasks_data
         }

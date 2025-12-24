@@ -19,6 +19,7 @@ from mongo.utils import (
     MinioClient,
 )
 from .utils import *
+from .utils.submission_utils import clear_submission_list_cache_for_submission
 from .auth import *
 
 __all__ = ['submission_api']
@@ -496,6 +497,10 @@ def on_submission_complete(submission: Submission, tasks, token):
             f'{type(e).__name__}: {e}',
             400,
         )
+
+    # Clear submission list cache for this submission only
+    clear_submission_list_cache_for_submission(str(submission.id))
+
     return HTTPResponse(f'{submission} result recieved.')
 
 
@@ -609,7 +614,123 @@ def rejudge(user, submission: Submission):
     # Check explicit False (not None or other falsy values)
     if success is False:
         return HTTPError('Some error occurred, please contact the admin', 500)
+
+    # Clear submission list cache for this submission only
+    clear_submission_list_cache_for_submission(str(submission.id))
+
     return HTTPResponse('', data={'ok': True})
+
+
+@submission_api.route('/<submission>', methods=['DELETE'])
+@login_required
+@Request.doc('submission', Submission)
+def delete_submission(user, submission: Submission):
+    """
+    Delete a submission. Only admin can delete submissions.
+    Protection: Cannot delete if currently being judged.
+    """
+    # Only admin can delete submissions
+    if not User(user.username).role == 0:  # Role.ADMIN
+        return HTTPError('Only admin can delete submissions.', 403)
+
+    # Protection: Cannot delete if currently being judged
+    if submission.status == -1:
+        last_send = getattr(submission, 'last_send', None)
+        if last_send:
+            seconds_since_send = (datetime.now() - last_send).total_seconds()
+            if seconds_since_send < 600:  # 10 minutes
+                minutes_remaining = int((600 - seconds_since_send) / 60) + 1
+                return HTTPError(
+                    f"Cannot delete: submission is currently being judged. "
+                    f"Please wait {minutes_remaining} minutes or until judging completes.",
+                    409  # Conflict
+                )
+
+    try:
+        # Delete code from MinIO if exists
+        if submission.code_minio_path:
+            try:
+                minio_client = MinioClient()
+                minio_client.client.remove_object(minio_client.bucket,
+                                                  submission.code_minio_path)
+            except Exception as e:
+                current_app.logger.warning(
+                    f"Failed to delete code from MinIO: {e}")
+
+        # Delete the submission document
+        submission.delete()
+        return HTTPResponse('Submission deleted successfully.',
+                            data={'ok': True})
+    except Exception as e:
+        current_app.logger.error(f"Error deleting submission: {e}")
+        return HTTPError(f'Failed to delete submission: {str(e)}', 500)
+
+
+@submission_api.route('/rejudge-all', methods=['POST'])
+@login_required
+@Request.json('problem_id: int')
+def rejudge_all_submissions(user, problem_id: int):
+    """
+    Rejudge all submissions for a specific problem.
+    Only admin/teacher/TA with course permissions can use this.
+    """
+    # Check permission
+    req_user = User(user.username)
+    if req_user.role not in (0, 1, 2):  # Admin, Teacher, TA
+        return HTTPError('Forbidden.', 403)
+
+    try:
+        problem = Problem(problem_id)
+    except engine.DoesNotExist:
+        return HTTPError('Problem not found.', 404)
+
+    # For non-admin, check course permission
+    if req_user.role != 0:
+        has_permission = False
+        for course in problem.courses:
+            if Course(course.course_name).permission(req_user,
+                                                     Course.Permission.GRADE):
+                has_permission = True
+                break
+        if not has_permission:
+            return HTTPError(
+                'You do not have permission to rejudge for this problem.', 403)
+
+    # Get all submissions for this problem
+    submissions = Submission.filter(problem=problem_id)
+
+    success_count = 0
+    failed_count = 0
+    skipped_count = 0
+
+    for sub in submissions:
+        try:
+            # Skip if never judged or recently sent
+            if sub.status == -2:
+                skipped_count += 1
+                continue
+            if sub.status == -1:
+                last_send = getattr(sub, 'last_send', None)
+                if last_send and (datetime.now() -
+                                  last_send).total_seconds() < 60:
+                    skipped_count += 1
+                    continue
+
+            sub.rejudge()
+            success_count += 1
+        except Exception as e:
+            current_app.logger.warning(
+                f"Failed to rejudge submission {sub.id}: {e}")
+            failed_count += 1
+
+    return HTTPResponse(
+        f'Rejudge completed. Success: {success_count}, Failed: {failed_count}, Skipped: {skipped_count}',
+        data={
+            'ok': True,
+            'success': success_count,
+            'failed': failed_count,
+            'skipped': skipped_count
+        })
 
 
 @submission_api.route('/config', methods=['GET', 'PUT'])

@@ -159,6 +159,26 @@ class Problem(MongoBase, engine=engine.Problem):
         return getattr(self.obj, 'ac_code_minio_path', None)
 
     @property
+    def ac_code_language(self):
+        """Get AC code language (0: C, 1: C++, 2: Python).
+        Determined from file extension or database field.
+        """
+        # Check database field first
+        lang = getattr(self.obj, 'ac_code_language', None)
+        if lang is not None:
+            return lang
+        # Infer from file extension
+        path = self.ac_code_minio_path
+        if path:
+            if path.endswith('.py'):
+                return 2  # Python
+            elif path.endswith('.cpp') or path.endswith('.cc'):
+                return 1  # C++
+            elif path.endswith('.c'):
+                return 0  # C
+        return None
+
+    @property
     def trial_submission_quota(self) -> int:
         """Get trial submission quota for this problem."""
         return getattr(self.obj, 'trial_submission_quota', -1)

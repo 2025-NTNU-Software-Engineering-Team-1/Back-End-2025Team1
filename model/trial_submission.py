@@ -28,6 +28,41 @@ def test_endpoint():
                         data={"status": "ok"})
 
 
+@trial_submission_api.route("/check-rejudge-permission/<int:problem_id>",
+                            methods=["GET"])
+@login_required
+def check_rejudge_permission(user, problem_id: int):
+    """
+    Check if the current user has permission to rejudge trial submissions for a problem.
+    Returns True if:
+    - User is Admin, OR
+    - User has GRADE permission in any course containing this problem
+    """
+    from mongo.problem import Problem
+    from mongo.user import Role
+
+    # Admin can always rejudge
+    if user.role == Role.ADMIN:
+        return HTTPResponse("", data={"can_rejudge": True})
+
+    # Check if user has GRADE permission in any course containing this problem
+    try:
+        problem = Problem(problem_id)
+        if not problem:
+            return HTTPError(f"Problem {problem_id} not found.", 404)
+
+        from mongo.course import Course
+        problem_courses = map(Course, problem.courses)
+        has_permission = any(
+            c.own_permission(user) & Course.Permission.GRADE
+            for c in problem_courses)
+
+        return HTTPResponse("", data={"can_rejudge": has_permission})
+    except Exception as e:
+        current_app.logger.error(f"Error checking rejudge permission: {e}")
+        return HTTPError("Permission check failed.", 500)
+
+
 @trial_submission_api.route("/download-testcases", methods=["GET"])
 def download_custom_testcases():
     """
@@ -444,3 +479,229 @@ def on_trial_result(trial_id: str, tasks: list, token: str):
         current_app.logger.error(
             f"Error processing trial result for {trial_id}: {e}")
         return HTTPError(f"Failed to process result: {e}", 500)
+
+
+# === Rejudge APIs ===
+
+
+@trial_submission_api.route("/<trial_id>/rejudge", methods=["GET"])
+@login_required
+def rejudge_trial(user, trial_id: str):
+    """
+    Rejudge a single trial submission.
+    Uses the same permission check as regular submission rejudge:
+    checks if user has GRADE permission in the problem's courses.
+    """
+    # Load trial submission
+    try:
+        ts = TrialSubmission(trial_id)
+    except engine.DoesNotExist:
+        return HTTPError("Trial submission not found.", 404)
+    except Exception as e:
+        current_app.logger.error(f"Error loading trial submission: {e}")
+        return HTTPError("Invalid trial submission ID.", 400)
+
+    # Check permission using the same logic as regular submission
+    if not ts.permission(user, TrialSubmission.Permission.REJUDGE):
+        return HTTPError("forbidden.", 403)
+
+    # Check if already pending or recently sent (same as regular submission)
+    if ts.status == -2:
+        return HTTPError(f"{ts} haven't be judged", 403)
+    if ts.status == -1 and hasattr(ts, 'last_send'):
+        from datetime import datetime
+        if (datetime.now() - ts.last_send).seconds < 60:
+            return HTTPError(f"{ts} haven't be judged", 403)
+
+    # Perform rejudge
+    try:
+        success = ts.rejudge()
+        if success is False:
+            return HTTPError("Some error occurred, please contact the admin",
+                             500)
+        current_app.logger.info(f"Rejudged trial submission {trial_id}")
+        return HTTPResponse("", data={"ok": True})
+    except ValueError as e:
+        return HTTPError(str(e), 400)
+    except Exception as e:
+        current_app.logger.error(
+            f"Error rejudging trial submission {trial_id}: {e}")
+        return HTTPError(f"Rejudge failed: {e}", 500)
+
+
+@trial_submission_api.route("/<trial_id>", methods=["DELETE"])
+@login_required
+def delete_trial(user, trial_id: str):
+    """
+    Delete a single trial submission.
+    Uses the same permission check as rejudge:
+    checks if user has GRADE permission in the problem's courses.
+    
+    Protection:
+    - Cannot delete if status == -1 (judging in progress) and last_send < 10 minutes
+    - Status -2 (never judged) is safe to delete
+    - Status >= 0 (already judged) is safe to delete
+    """
+    # Load trial submission
+    try:
+        ts = TrialSubmission(trial_id)
+    except engine.DoesNotExist:
+        return HTTPError("Trial submission not found.", 404)
+    except Exception as e:
+        current_app.logger.error(f"Error loading trial submission: {e}")
+        return HTTPError("Invalid trial submission ID.", 400)
+
+    # Check permission using the same logic as rejudge
+    if not ts.permission(user, TrialSubmission.Permission.REJUDGE):
+        return HTTPError("forbidden.", 403)
+
+    # Protection: Cannot delete if currently being judged
+    # Status -1 means "judging in progress" - sandbox is processing
+    if ts.status == -1:
+        last_send = getattr(ts, 'last_send', None)
+        if last_send:
+            seconds_since_send = (datetime.now() - last_send).total_seconds()
+            # If sent within last 10 minutes, it might still be processing
+            if seconds_since_send < 600:  # 10 minutes
+                minutes_remaining = int((600 - seconds_since_send) / 60) + 1
+                return HTTPError(
+                    f"Cannot delete: submission is currently being judged. "
+                    f"Please wait {minutes_remaining} minutes or until judging completes.",
+                    409  # Conflict
+                )
+            else:
+                # Judging for more than 10 minutes - likely stuck, allow deletion
+                current_app.logger.warning(
+                    f"Allowing deletion of stuck trial submission {trial_id} "
+                    f"(status=-1 for {int(seconds_since_send)}s)")
+        else:
+            # No last_send but status is -1 - inconsistent state, allow deletion
+            current_app.logger.warning(
+                f"Deleting trial submission {trial_id} with status=-1 but no last_send"
+            )
+
+    # Perform deletion
+    try:
+        problem_id = ts.problem_id
+        submission_id = str(ts.id)
+        status = ts.status
+
+        # Delete code from MinIO if exists
+        code_path = getattr(ts, 'code_minio_path', None)
+        if code_path:
+            try:
+                minio_client = MinioClient()
+                minio_client.client.remove_object(minio_client.bucket,
+                                                  code_path)
+                current_app.logger.info(
+                    f"Deleted code from MinIO: {code_path}")
+            except Exception as e:
+                current_app.logger.warning(
+                    f"Failed to delete code from MinIO: {e}")
+
+        # Delete custom input from MinIO if exists
+        custom_input_path = getattr(ts, 'custom_input_minio_path', None)
+        if custom_input_path:
+            try:
+                minio_client = MinioClient()
+                minio_client.client.remove_object(minio_client.bucket,
+                                                  custom_input_path)
+                current_app.logger.info(
+                    f"Deleted custom input from MinIO: {custom_input_path}")
+            except Exception as e:
+                current_app.logger.warning(
+                    f"Failed to delete custom input from MinIO: {e}")
+
+        # Delete the document from MongoDB
+        ts.obj.delete()
+
+        current_app.logger.info(
+            f"Deleted trial submission {submission_id} for problem {problem_id} "
+            f"(status was {status})")
+        return HTTPResponse("Trial submission deleted.", data={"ok": True})
+    except Exception as e:
+        current_app.logger.error(
+            f"Error deleting trial submission {trial_id}: {e}")
+        return HTTPError(f"Delete failed: {e}", 500)
+
+
+@trial_submission_api.route("/rejudge-all/<int:problem_id>", methods=["POST"])
+@login_required
+def rejudge_all_trials(user, problem_id: int):
+    """
+    Rejudge all trial submissions for a problem.
+    Uses the same permission check as regular submission rejudge:
+    checks if user has GRADE permission in the problem's courses.
+    """
+    from mongo.problem import Problem
+
+    # Check if user has permission to rejudge submissions for this problem
+    # We check by creating a dummy submission check - if user has GRADE permission
+    # in any course that contains this problem, they can rejudge
+    try:
+        problem = Problem(problem_id)
+        if not problem:
+            return HTTPError(f"Problem {problem_id} not found.", 404)
+
+        # Check if user has GRADE permission in any course containing this problem
+        from mongo.course import Course
+        problem_courses = map(Course, problem.courses)
+        has_permission = any(
+            c.own_permission(user) & Course.Permission.GRADE
+            for c in problem_courses)
+
+        if not has_permission:
+            return HTTPError("forbidden.", 403)
+    except Exception as e:
+        current_app.logger.error(
+            f"Error checking permission for rejudge-all: {e}")
+        return HTTPError("Permission check failed.", 500)
+
+    # Get all trial submissions for this problem
+    try:
+        submissions = engine.TrialSubmission.objects(problem=problem_id)
+        if not submissions:
+            return HTTPError("No trial submissions found for this problem.",
+                             404)
+
+        success_count = 0
+        fail_count = 0
+        skipped_count = 0
+
+        for sub_doc in submissions:
+            try:
+                ts = TrialSubmission(sub_doc.id)
+                # Skip if pending or recently sent (same logic as single rejudge)
+                if ts.status == -2:
+                    skipped_count += 1
+                    continue
+                if ts.status == -1 and hasattr(ts, 'last_send'):
+                    from datetime import datetime
+                    if (datetime.now() - ts.last_send).seconds < 60:
+                        skipped_count += 1
+                        continue
+
+                result = ts.rejudge()
+                if result:
+                    success_count += 1
+                else:
+                    fail_count += 1
+            except Exception as e:
+                current_app.logger.warning(
+                    f"Failed to rejudge {sub_doc.id}: {e}")
+                fail_count += 1
+
+        current_app.logger.info(
+            f"Rejudge all for problem {problem_id}: success={success_count}, fail={fail_count}, skipped={skipped_count}"
+        )
+        return HTTPResponse(
+            f"Rejudge completed: {success_count} success, {fail_count} failed, {skipped_count} skipped.",
+            data={
+                "success": success_count,
+                "failed": fail_count,
+                "skipped": skipped_count
+            })
+    except Exception as e:
+        current_app.logger.error(
+            f"Error rejudging all trials for problem {problem_id}: {e}")
+        return HTTPError(f"Rejudge all failed: {e}", 500)
