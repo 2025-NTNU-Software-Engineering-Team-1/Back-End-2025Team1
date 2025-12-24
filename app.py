@@ -95,14 +95,29 @@ def setup_smtp(app: Flask):
             "'SMTP_SERVER' is not set. email-related function will be disabled"
         )
         return
-    if os.getenv('SMTP_NOREPLY') is None:
-        raise RuntimeError("missing required configuration 'SMTP_NOREPLY'")
+
+    # Check for required SMTP settings with fallback
+    smtp_noreply = os.getenv('SMTP_NOREPLY')
+    server_name = os.getenv('SERVER_NAME')
+
+    if smtp_noreply is None:
+        app.logger.warning(
+            "'SMTP_SERVER' is set but 'SMTP_NOREPLY' is missing. "
+            "Email functionality will be disabled.")
+        return
+
+    if server_name is None:
+        app.logger.warning(
+            "'SMTP_SERVER' is set but 'SERVER_NAME' is missing. "
+            "Email functionality will be disabled.")
+        return
+
     if os.getenv('SMTP_NOREPLY_PASSWORD') is None:
         app.logger.info("'SMTP_NOREPLY' set but 'SMTP_NOREPLY_PASSWORD' not")
-    # config for external URLs
-    server_name = os.getenv('SERVER_NAME')
-    if server_name is None:
-        raise RuntimeError('missing required configuration \'SERVER_NAME\'')
+
+    # All required settings present, configure SMTP
     app.config['SERVER_NAME'] = server_name
     if (application_root := os.getenv('APPLICATION_ROOT')) is not None:
         app.config['APPLICATION_ROOT'] = application_root
+
+    app.logger.info(f"SMTP configured: server={os.getenv('SMTP_SERVER')}")
