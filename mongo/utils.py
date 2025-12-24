@@ -197,12 +197,26 @@ def generate_ulid() -> str:
 class MinioClient:
 
     def __init__(self):
-        self.client = Minio(
-            config.MINIO_HOST,
-            access_key=config.MINIO_ACCESS_KEY,
-            secret_key=config.MINIO_SECRET_KEY,
-            secure=not config.FLASK_DEBUG,
-        )
+        if not config.MINIO_HOST:
+            raise ValueError(
+                'MINIO_HOST environment variable is not set. '
+                'Please ensure MinIO service is configured and running.')
+        if not config.MINIO_ACCESS_KEY or not config.MINIO_SECRET_KEY:
+            raise ValueError(
+                'MINIO_ACCESS_KEY or MINIO_SECRET_KEY environment variable is not set. '
+                'Please configure MinIO credentials.')
+        try:
+            self.client = Minio(
+                config.MINIO_HOST,
+                access_key=config.MINIO_ACCESS_KEY,
+                secret_key=config.MINIO_SECRET_KEY,
+                secure=not config.FLASK_DEBUG,
+            )
+        except Exception as e:
+            raise ValueError(
+                f'Failed to initialize MinIO client: {str(e)}. '
+                f'Please check MINIO_HOST ({config.MINIO_HOST}) and ensure MinIO service is running.'
+            ) from e
         self.bucket = config.MINIO_BUCKET
 
     def upload_file_object(
