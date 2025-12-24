@@ -45,8 +45,8 @@ def format_discussion_post(post):
 
 @discussion_api.route('/posts', methods=['GET'])
 @login_required
-@Request.args('Limit', 'Page', 'Problem_Id', 'Mode')
-def list_discussion_posts(user, Limit, Page, Problem_Id, Mode):
+@Request.args('Limit', 'Page', 'Problem_Id', 'Mode', 'Course_Id')
+def list_discussion_posts(user, Limit, Page, Problem_Id, Mode, Course_Id):
     # 手動處理型別與預設值，避免裝飾器拋出 400
     try:
         limit = max(1, min(int(Limit or 20), 50))
@@ -59,7 +59,8 @@ def list_discussion_posts(user, Limit, Page, Problem_Id, Mode):
         return _err('Invalid Mode. Available values: New, Hot.', 400)
 
     try:
-        data = Discussion.get_feed(user, mode, limit, page, Problem_Id)
+        data = Discussion.get_feed(user, mode, limit, page, Problem_Id,
+                                   Course_Id)
     except ValueError:
         return _err('Invalid parameter.', 400)
 
@@ -84,8 +85,8 @@ def list_discussion_posts(user, Limit, Page, Problem_Id, Mode):
 
 @discussion_api.route('/problems', methods=['GET'])
 @login_required
-@Request.args('Limit', 'Page', 'Mode')
-def list_discussion_problems(user, Limit, Page, Mode):
+@Request.args('Limit', 'Page', 'Mode', 'Course_Id')
+def list_discussion_problems(user, Limit, Page, Mode, Course_Id):
     try:
         limit = max(1, min(int(Limit or 20), 50))
         page = max(1, min(int(Page or 1), 1000))
@@ -96,7 +97,7 @@ def list_discussion_problems(user, Limit, Page, Mode):
     if mode.lower() != 'all':
         return _err('Invalid Mode. Available values: All.', 400)
 
-    data = Discussion.get_problems(user, 'All', limit, page)
+    data = Discussion.get_problems(user, 'All', limit, page, Course_Id)
     return HTTPResponse('Success.',
                         data={
                             'Status': 'OK',
@@ -109,8 +110,8 @@ def list_discussion_problems(user, Limit, Page, Mode):
 
 @discussion_api.route('/search', methods=['GET'])
 @login_required
-@Request.args('Words', 'Limit', 'Page')
-def search_discussion_posts(user, Words, Limit, Page):
+@Request.args('Words', 'Limit', 'Page', 'Course_Id')
+def search_discussion_posts(user, Words, Limit, Page, Course_Id):
     if Words is None: return _err('Words parameter is required.', 400)
     words = Words.strip()
     if not words:
@@ -122,7 +123,7 @@ def search_discussion_posts(user, Words, Limit, Page):
     except (ValueError, TypeError):
         return _err('Limit and Page must be integers.', 400)
 
-    posts = Discussion.search_posts(user, words, limit, page)
+    posts = Discussion.search_posts(user, words, limit, page, Course_Id)
     return HTTPResponse('Success.', data={'Status': 'OK', 'Post': posts})
 
 

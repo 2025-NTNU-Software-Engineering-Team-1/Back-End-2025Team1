@@ -106,10 +106,24 @@ class Discussion:
                  mode: str,
                  limit: int,
                  page: int,
-                 problem_id: str = None) -> Dict:
+                 problem_id: str = None,
+                 course_id: str = None) -> Dict:
         allowed_ids = cls._get_viewable_problem_ids(user)
         if cls._role_can_bypass_acl(user):
             allowed_ids = None
+
+        if course_id:
+            course = engine.Course.objects(course_name=course_id).first()
+            if not course:
+                return {'Total': 0, 'Posts': []}
+            # 找出該課程下的所有題目 ID
+            course_problems = engine.Problem.objects(courses=course)
+            course_pids = {str(p.problem_id) for p in course_problems}
+
+            if allowed_ids is None:
+                allowed_ids = course_pids
+            else:
+                allowed_ids &= course_pids
 
         allow_public_problem = False
         if problem_id is not None:
@@ -178,21 +192,37 @@ class Discussion:
         }
 
     @classmethod
-    def get_problems(cls, user, mode: str, limit: int, page: int) -> Dict:
+    def get_problems(cls,
+                     user,
+                     mode: str,
+                     limit: int,
+                     page: int,
+                     course_id: str = None) -> Dict:
         # 目前需求 mode 只有 All，未來可擴充
-        if user.role == engine.User.Role.ADMIN:
-            queryset = engine.Problem.objects(
-                problem_status=engine.Problem.Visibility.SHOW)
-        else:
+        criteria = {'problem_status': engine.Problem.Visibility.SHOW}
+
+        if course_id:
+            course = engine.Course.objects(course_name=course_id).first()
+            if not course:
+                return {'Total': 0, 'Problems': []}
+            criteria['courses'] = course
+
+        if user.role != engine.User.Role.ADMIN:
             course_refs = [
                 course for course in getattr(user, 'courses', []) if course
             ]
             if not course_refs:
                 return {'Total': 0, 'Problems': []}
-            queryset = engine.Problem.objects(
-                problem_status=engine.Problem.Visibility.SHOW,
-                courses__in=course_refs,
-            )
+
+            if course_id:
+                # 若指定課程，需檢查使用者是否在該課程中
+                # course 變數在上面已取得
+                if course not in course_refs:
+                    return {'Total': 0, 'Problems': []}
+            else:
+                criteria['courses__in'] = course_refs
+
+        queryset = engine.Problem.objects(**criteria)
 
         total = queryset.count()
         skip = (page - 1) * limit
@@ -342,8 +372,23 @@ class Discussion:
         return {'Post_ID': post.post_id}, None
 
     @classmethod
-    def search_posts(cls, user, words, limit, page):
+    def search_posts(cls, user, words, limit, page, course_id=None):
         allowed_ids = cls._get_viewable_problem_ids(user)
+        if cls._role_can_bypass_acl(user):
+            allowed_ids = None
+
+        if course_id:
+            course = engine.Course.objects(course_name=course_id).first()
+            if not course:
+                return []
+            course_problems = engine.Problem.objects(courses=course)
+            course_pids = {str(p.problem_id) for p in course_problems}
+
+            if allowed_ids is None:
+                allowed_ids = course_pids
+            else:
+                allowed_ids &= course_pids
+
         if allowed_ids is not None and not allowed_ids:
             return []
 
