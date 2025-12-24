@@ -325,6 +325,35 @@ def get_submission_output(
     return HTTPResponse('ok', data=output)
 
 
+@submission_api.get('/<submission>/artifact/case/<int:task_no>/<int:case_no>')
+@login_required(pat_scope=['read:submissions'])
+@Request.doc('submission', Submission)
+def get_case_artifact_files(
+    user,
+    submission: Submission,
+    task_no: int,
+    case_no: int,
+):
+    '''
+    Get all files from case artifact zip including stdout, stderr, and other files.
+    Returns files with appropriate encoding (text as string, images as base64).
+    Only available when artifact collection is enabled for this task.
+    '''
+    if not submission.permission(user, Submission.Permission.VIEW_OUTPUT):
+        return HTTPError('permission denied', 403)
+    if not submission.is_artifact_enabled(task_no):
+        return HTTPError('artifact collection not enabled for this task', 404)
+    try:
+        artifact_files = submission.get_case_artifact_files(task_no, case_no)
+    except FileNotFoundError as e:
+        return HTTPError(str(e), 400)
+    except AttributeError as e:
+        return HTTPError(str(e), 102)
+    except Exception as e:
+        return HTTPError(f'Failed to read artifact files: {str(e)}', 500)
+    return HTTPResponse('ok', data=artifact_files)
+
+
 @submission_api.get('/<submission>/artifact/zip/<int:task_index>')
 @login_required
 @Request.doc('submission', Submission)
@@ -570,6 +599,245 @@ def grade_submission(user: User, submission: Submission, score: int):
     submission.update(score=score, status=(0 if score == 100 else 1))
     submission.finish_judging()
     return HTTPResponse(f'{submission} score recieved.')
+
+
+@submission_api.route('/<submission>/manual-grade', methods=['PUT'])
+@login_required
+@Request.json('score: int', 'reason')
+@Request.doc('submission', Submission)
+def manual_grade_submission(user: User,
+                            submission: Submission,
+                            score: int,
+                            reason: str = None):
+    """
+    Manually modify submission total score via frontend UI.
+    This is separate from the PAT-based /grade endpoint.
+    Records modification history for audit trail.
+    """
+    try:
+        if not submission.permission(user, Submission.Permission.GRADE):
+            return HTTPError('forbidden.', 403)
+
+        if score is None:
+            return HTTPError('score is required.', 400)
+
+        if score < 0 or score > 100:
+            return HTTPError('score must be between 0 and 100.', 400)
+
+        # Record the modification
+        before_score = submission.score
+        modification_record = engine.ScoreModificationRecord(
+            modifier=user.username,
+            timestamp=datetime.now(),
+            before_score=before_score,
+            after_score=score,
+            task_index=None,  # None means total score
+            reason=reason,
+        )
+
+        # Update submission score only (do NOT change status)
+        # Status should remain unchanged when manually modifying score
+        # Append modification record to the list
+        if not hasattr(submission, 'score_modifications'
+                       ) or submission.score_modifications is None:
+            submission.score_modifications = []
+        submission.score_modifications.append(modification_record)
+
+        submission.update(
+            score=score,
+            score_modifications=submission.score_modifications,
+        )
+        submission.reload()
+
+        # Sync homework grades
+        try:
+            submission.finish_judging()
+        except Exception as e:
+            current_app.logger.error(
+                f'Failed to sync homework grades for {submission}: {e}',
+                exc_info=True)
+            # Continue even if homework sync fails
+
+        # Clear submission list cache
+        try:
+            clear_submission_list_cache_for_submission(str(submission.id))
+        except Exception as e:
+            current_app.logger.warning(
+                f'Failed to clear cache for submission {submission.id}: {e}')
+
+        return HTTPResponse(
+            f'{submission} score manually updated from {before_score} to {score}.',
+            data={
+                'ok': True,
+                'beforeScore': before_score,
+                'afterScore': score,
+            })
+    except Exception as e:
+        # HTTPError is not an Exception, it's a return value, so we don't catch it
+        # Only catch actual exceptions
+        current_app.logger.error(
+            f'Error in manual_grade_submission for submission {submission.id}: {e}',
+            exc_info=True)
+        return HTTPError(f'Failed to update score: {str(e)}', 500)
+
+
+@submission_api.route('/<submission>/manual-grade/task/<int:task_index>',
+                      methods=['PUT'])
+@login_required
+@Request.json('score: int', 'reason')
+@Request.doc('submission', Submission)
+def manual_grade_task(user: User,
+                      submission: Submission,
+                      task_index: int,
+                      score: int,
+                      reason: str = None):
+    """
+    Manually modify a specific task's score via frontend UI.
+    Recalculates total score as sum of all task scores.
+    Records modification history for audit trail.
+    """
+    try:
+        if not submission.permission(user, Submission.Permission.GRADE):
+            return HTTPError('forbidden.', 403)
+
+        if score is None:
+            return HTTPError('score is required.', 400)
+
+        # Validate task_index
+        if task_index < 0 or task_index >= len(submission.tasks):
+            return HTTPError(
+                f'Invalid task index. Submission has {len(submission.tasks)} tasks.',
+                400)
+
+        # Get the task
+        task = submission.tasks[task_index]
+        before_score = task.score
+
+        # Validate score range based on problem's task configuration
+        if score < 0:
+            return HTTPError('score must be non-negative.', 400)
+
+        # Get max score for this task from problem config
+        problem = submission.problem
+        max_task_score = None
+        try:
+            if problem and problem.test_case and problem.test_case.tasks:
+                if task_index < len(problem.test_case.tasks):
+                    max_task_score = problem.test_case.tasks[
+                        task_index].task_score
+        except (AttributeError, IndexError) as e:
+            current_app.logger.warning(
+                f'Could not get max task score for task {task_index}: {e}')
+
+        if max_task_score is not None and score > max_task_score:
+            return HTTPError(
+                f'score must be between 0 and {max_task_score} for this task.',
+                400)
+
+        # Record the modification
+        modification_record = engine.ScoreModificationRecord(
+            modifier=user.username,
+            timestamp=datetime.now(),
+            before_score=before_score,
+            after_score=score,
+            task_index=task_index,
+            reason=reason,
+        )
+
+        # Calculate new total score (sum of all task scores, with updated score for target task)
+        new_total_score = 0
+        for i, t in enumerate(submission.tasks):
+            if i == task_index:
+                new_total_score += score
+            else:
+                new_total_score += t.score
+
+        # Use MongoDB's raw update through collection to update just the score field
+        # This avoids ValidationError when recreating EmbeddedDocument with CaseResult
+        engine.Submission._get_collection().update_one(
+            {'_id': submission.obj.id}, {
+                '$set': {
+                    f'tasks.{task_index}.score': score,
+                    'score': new_total_score,
+                },
+                '$push': {
+                    'scoreModifications': modification_record.to_mongo(),
+                }
+            })
+        submission.reload()
+
+        # Sync homework grades
+        try:
+            submission.finish_judging()
+        except Exception as e:
+            current_app.logger.error(
+                f'Failed to sync homework grades for {submission}: {e}',
+                exc_info=True)
+            # Continue even if homework sync fails
+
+        # Clear submission list cache
+        try:
+            clear_submission_list_cache_for_submission(str(submission.id))
+        except Exception as e:
+            current_app.logger.warning(
+                f'Failed to clear cache for submission {submission.id}: {e}')
+
+        return HTTPResponse(
+            f'{submission} task {task_index} score manually updated from {before_score} to {score}.',
+            data={
+                'ok': True,
+                'taskIndex': task_index,
+                'beforeScore': before_score,
+                'afterScore': score,
+                'newTotalScore': new_total_score,
+            })
+    except Exception as e:
+        # HTTPError is not an Exception, it's a return value, so we don't catch it
+        # Only catch actual exceptions
+        current_app.logger.error(
+            f'Error in manual_grade_task for submission {submission.id}, task {task_index}: {e}',
+            exc_info=True)
+        return HTTPError(f'Failed to update task score: {str(e)}', 500)
+
+
+@submission_api.route('/<submission>/score-history', methods=['GET'])
+@login_required
+@Request.doc('submission', Submission)
+def get_score_history(user: User, submission: Submission):
+    """
+    Get the score modification history for a submission.
+    Only users with GRADE permission can view this.
+    """
+    if not submission.permission(user, Submission.Permission.GRADE):
+        return HTTPError('forbidden.', 403)
+
+    # Get the score_modifications list
+    modifications = getattr(submission, 'score_modifications', []) or []
+
+    history = []
+    for mod in modifications:
+        history.append({
+            'modifier':
+            mod.modifier,
+            # Return timestamp in seconds (formatTime will multiply by 1000)
+            'timestamp':
+            mod.timestamp.timestamp() if mod.timestamp else None,
+            'beforeScore':
+            mod.before_score,
+            'afterScore':
+            mod.after_score,
+            'taskIndex':
+            mod.task_index,  # None means total score
+            'reason':
+            mod.reason,
+        })
+
+    return HTTPResponse('Score modification history retrieved.',
+                        data={
+                            'ok': True,
+                            'history': history,
+                            'count': len(history),
+                        })
 
 
 @submission_api.route('/<submission>/comment', methods=['PUT'])

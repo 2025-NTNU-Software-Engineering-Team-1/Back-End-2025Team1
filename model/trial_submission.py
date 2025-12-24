@@ -349,6 +349,12 @@ def download_trial_case(user, trial_id: str):
     if not (is_owner or is_staff):
         return HTTPError("Forbidden.", 403)
 
+    # Check trialResultDownloadable for students
+    if is_owner and not is_staff:
+        problem = Problem(ts.problem_id)
+        if (problem.config or {}).get('trialResultDownloadable') is False:
+            return HTTPError("Trial result download is disabled.", 403)
+
     # 取得 Raw Output (Zip file bytes)
     # 假設每個 Task 只有一個 Case (idx=0)
     try:
@@ -373,6 +379,50 @@ def download_trial_case(user, trial_id: str):
                      download_name=filename)
 
 
+@trial_submission_api.route(
+    "/<trial_id>/artifact/case/<int:task_no>/<int:case_no>", methods=["GET"])
+@login_required
+def get_trial_case_artifact_files(user, trial_id: str, task_no: int,
+                                  case_no: int):
+    """
+    Get all files from case artifact zip including stdout, stderr, and other files.
+    Returns files with appropriate encoding (text as string, images as base64).
+    """
+    try:
+        ts = TrialSubmission(trial_id)
+    except engine.DoesNotExist:
+        return HTTPError("Trial submission not found.", 404)
+
+    # Permission check (Reference: download_trial_case)
+    req_user = User(user.username)
+    ts_owner_username = getattr(ts.obj, 'user', None)
+    if hasattr(ts_owner_username, 'username'):
+        ts_owner_username = ts_owner_username.username
+
+    is_owner = (req_user.username == ts_owner_username)
+    is_staff = req_user.role in (Role.ADMIN, Role.TEACHER, Role.TA)
+
+    if not (is_owner or is_staff):
+        return HTTPError("Forbidden.", 403)
+
+    # Check trialResultVisible for students
+    if is_owner and not is_staff:
+        problem = Problem(ts.problem_id)
+        if (problem.config or {}).get('trialResultVisible') is False:
+            return HTTPError("Trial result is not visible.", 403)
+
+    try:
+        artifact_files = ts.get_case_artifact_files(task_no, case_no)
+    except FileNotFoundError as e:
+        return HTTPError(str(e), 400)
+    except AttributeError as e:
+        return HTTPError(str(e), 102)  # Processing?
+    except Exception as e:
+        return HTTPError(f'Failed to read artifact files: {str(e)}', 500)
+
+    return HTTPResponse('ok', data=artifact_files)
+
+
 @trial_submission_api.route("/<trial_id>/download", methods=["GET"])
 @login_required
 def download_trial_all(user, trial_id: str):
@@ -395,6 +445,12 @@ def download_trial_all(user, trial_id: str):
 
     if not (is_owner or is_staff):
         return HTTPError("Forbidden.", 403)
+
+    # Check trialResultDownloadable for students
+    if is_owner and not is_staff:
+        problem = Problem(ts.problem_id)
+        if (problem.config or {}).get('trialResultDownloadable') is False:
+            return HTTPError("Trial result download is disabled.", 403)
 
     # Generator
     def file_iterator():

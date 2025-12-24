@@ -24,6 +24,7 @@ from datetime import date, datetime, timedelta
 from zipfile import ZipFile, is_zipfile, BadZipFile
 from ulid import ULID
 import abc
+import base64
 
 from . import engine
 from .base import MongoBase
@@ -258,12 +259,181 @@ class BaseSubmission(abc.ABC):
         ret = {}
         try:
             with ZipFile(self._get_output_raw(case)) as zf:
-                ret = {k: zf.read(k) for k in ('stdout', 'stderr')}
+                # Handle case where stdout/stderr files may not exist in zip
+                for k in ('stdout', 'stderr'):
+                    try:
+                        ret[k] = zf.read(k)
+                    except KeyError:
+                        # File doesn't exist in zip, use empty bytes
+                        ret[k] = b''
                 if text:
-                    ret = {k: v.decode('utf-8') for k, v in ret.items()}
+                    ret = {
+                        k: v.decode('utf-8', errors='replace')
+                        for k, v in ret.items()
+                    }
         except AttributeError:
             raise AttributeError('The submission is still in pending')
         return ret
+
+    def get_case_artifact_files(
+        self,
+        task_no: int,
+        case_no: int,
+    ) -> dict:
+        '''
+        Get all files from case artifact zip including stdout, stderr, and other files.
+        
+        Each case has its own output_minio_path pointing to a zip file that contains:
+        - stdout: standard output of this case
+        - stderr: standard error of this case
+        - Other artifact files (images, text files, etc.) if artifact collection is enabled
+        
+        Returns a dict with file names as keys and file contents as values.
+        For text files, content is decoded as string.
+        For binary files (images, etc.), content is base64 encoded string.
+        
+        Args:
+            task_no: Task index
+            case_no: Case index within the task
+            
+        Returns:
+            dict with keys: 'stdout', 'stderr', 'files'
+            - stdout/stderr: None if file doesn't exist, '' if empty, otherwise content string
+            - files: dict mapping filename to file info dict
+        '''
+        try:
+            # Get the specific case object
+            case = self.tasks[task_no].cases[case_no]
+        except IndexError:
+            raise FileNotFoundError('task not exist')
+
+        result = {
+            'stdout':
+            None,  # None means file doesn't exist, '' means empty file
+            'stderr': None,
+            'files': {}
+        }
+
+        try:
+            # Get the zip file for this specific case
+            # Each case has its own output_minio_path pointing to its artifact zip
+            output_raw = self._get_output_raw(case)
+            if output_raw is None:
+                # Case has no output/artifact zip
+                return result
+
+            # Image extensions
+            image_extensions = {
+                '.bmp', '.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg'
+            }
+            # Text file extensions
+            text_extensions = {
+                '.txt', '.md', '.log', '.csv', '.json', '.xml', '.html',
+                '.css', '.js', '.py', '.cpp', '.c', '.java'
+            }
+
+            # This zip contains files for this specific case only
+            # Files are directly in the root of the zip (stdout, stderr, and other artifact files)
+            with ZipFile(output_raw) as zf:
+                for name in zf.namelist():
+                    try:
+                        content = zf.read(name)
+                        # Get base name (filename without directory path)
+                        # Handle cases where zip might have paths like "stdout" or "some/path/stdout"
+                        base_name = name.split(
+                            '/')[-1] if '/' in name else name
+                        base_name = base_name.strip('/')
+                        ext = '.' + base_name.split(
+                            '.')[-1].lower() if '.' in base_name else ''
+
+                        # Handle stdout and stderr specially - these are case-specific outputs
+                        if base_name == 'stdout':
+                            # File exists, decode content (could be empty string)
+                            result['stdout'] = content.decode('utf-8',
+                                                              errors='replace')
+                            continue  # Don't add to files dict
+                        elif base_name == 'stderr':
+                            # File exists, decode content (could be empty string)
+                            result['stderr'] = content.decode('utf-8',
+                                                              errors='replace')
+                            continue  # Don't add to files dict
+
+                        # For other files, determine if it's text or binary
+                        is_text = ext in text_extensions
+                        is_image = ext in image_extensions
+
+                        if is_text:
+                            # Try to decode as text
+                            try:
+                                file_content = content.decode('utf-8',
+                                                              errors='replace')
+                                result['files'][name] = {
+                                    'type': 'text',
+                                    'content': file_content,
+                                    'extension': ext
+                                }
+                            except Exception:
+                                # If decode fails, treat as binary
+                                result['files'][name] = {
+                                    'type':
+                                    'binary',
+                                    'content':
+                                    base64.b64encode(content).decode('ascii'),
+                                    'extension':
+                                    ext
+                                }
+                        elif is_image:
+                            # Encode images as base64
+                            mime_map = {
+                                '.png': 'image/png',
+                                '.jpg': 'image/jpeg',
+                                '.jpeg': 'image/jpeg',
+                                '.gif': 'image/gif',
+                                '.webp': 'image/webp',
+                                '.bmp': 'image/bmp',
+                                '.svg': 'image/svg+xml'
+                            }
+                            result['files'][name] = {
+                                'type':
+                                'image',
+                                'content':
+                                base64.b64encode(content).decode('ascii'),
+                                'extension':
+                                ext,
+                                'mimeType':
+                                mime_map.get(ext, 'image/png')
+                            }
+                        else:
+                            # For unknown types, try text first, fallback to binary
+                            try:
+                                file_content = content.decode('utf-8',
+                                                              errors='replace')
+                                result['files'][name] = {
+                                    'type': 'text',
+                                    'content': file_content,
+                                    'extension': ext
+                                }
+                            except Exception:
+                                result['files'][name] = {
+                                    'type':
+                                    'binary',
+                                    'content':
+                                    base64.b64encode(content).decode('ascii'),
+                                    'extension':
+                                    ext
+                                }
+                    except Exception as e:
+                        # Skip files that can't be read
+                        self.logger.warning(
+                            f'Failed to read file {name} from artifact: {e}')
+                        continue
+        except AttributeError:
+            raise AttributeError('The submission is still in pending')
+        except Exception as e:
+            self.logger.error(f'Error reading case artifact: {e}')
+            raise
+
+        return result
 
     def _get_output_raw(self, case: engine.CaseResult) -> io.BytesIO:
         '''
@@ -837,6 +1007,7 @@ class BaseSubmission(abc.ABC):
             # 'comment', # 'comment' is not in BaseSubmissionDocument
             'tasks',
             'ip_addr',
+            'scoreModifications',  # Exclude score_modifications from list API
         ]
         # delete old keys
         for o in old:
@@ -846,6 +1017,10 @@ class BaseSubmission(abc.ABC):
         # 'comment' is specific to Submission, not BaseSubmission
         if 'comment' in ret:
             del ret['comment']
+
+        # Also remove score_modifications if present (using Python field name)
+        if 'score_modifications' in ret:
+            del ret['score_modifications']
 
         # insert new keys
         ret.update(**_ret)

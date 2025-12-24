@@ -498,6 +498,21 @@ class TaskResult(EmbeddedDocument):
     cases = EmbeddedDocumentListField(CaseResult, default=list)
 
 
+class ScoreModificationRecord(EmbeddedDocument):
+    """
+    Record of a manual score modification by a teacher/TA/admin.
+    Used for audit trail of grade changes.
+    """
+    modifier = StringField(
+        required=True)  # username of the person who modified
+    timestamp = DateTimeField(required=True, default=datetime.now)
+    before_score = IntField(required=True, db_field='beforeScore')
+    after_score = IntField(required=True, db_field='afterScore')
+    task_index = IntField(null=True,
+                          db_field='taskIndex')  # None = total score
+    reason = StringField(max_length=512, null=True)
+
+
 class BaseSubmissionDocument(Document):
     meta = {
         'abstract': True,
@@ -559,6 +574,11 @@ class BaseSubmissionDocument(Document):
 class Submission(BaseSubmissionDocument):
     meta = {'indexes': [('problem', 'user'), ('problem', '-score')]}
     comment = FileField(default=None, null=True)
+    score_modifications = EmbeddedDocumentListField(
+        ScoreModificationRecord,
+        default=list,
+        db_field='scoreModifications',
+    )
 
 
 class TrialSubmission(BaseSubmissionDocument):
