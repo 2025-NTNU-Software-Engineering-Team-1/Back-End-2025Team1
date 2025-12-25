@@ -1667,6 +1667,26 @@ class TrialSubmission(MongoBase, BaseSubmission,
         '''
         return 0
 
+    def _generate_output_minio_path(self, task_no: int, case_no: int) -> str:
+        '''
+        generate a output file path for minio (Trial)
+        '''
+        return f'trial_submissions/task{task_no:02d}_case{case_no:02d}_{generate_ulid()}.zip'
+
+    def set_compiled_binary(self, binary_data: bytes) -> None:
+        try:
+            minio_client = MinioClient()
+            object_name = f'trial_compiled_binaries/{self.id}'
+            minio_client.upload_file_object(
+                io.BytesIO(binary_data),
+                object_name,
+                len(binary_data),
+            )
+            self.update(compiled_binary_minio_path=object_name)
+        except Exception as e:
+            self.logger.error(f'Failed to set compiled binary: {e}')
+            raise
+
     def finish_judging(self):
         '''
         Update problem-level test submission stats.

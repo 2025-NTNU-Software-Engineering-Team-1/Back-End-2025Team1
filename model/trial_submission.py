@@ -8,6 +8,7 @@ from mongo.submission import TrialSubmission
 from mongo.user import User, Role
 from mongo.utils import MinioClient
 from mongo import engine
+from mongo import sandbox
 from werkzeug.datastructures import FileStorage
 import zipfile
 
@@ -761,3 +762,56 @@ def rejudge_all_trials(user, problem_id: int):
         current_app.logger.error(
             f"Error rejudging all trials for problem {problem_id}: {e}")
         return HTTPError(f"Rejudge all failed: {e}", 500)
+
+
+@trial_submission_api.put('/<trial_id>/artifact/upload/case')
+@Request.args('task', 'case', 'token')
+def upload_trial_submission_case_artifact(trial_id: str, task, case,
+                                          token: str):
+    try:
+        ts = TrialSubmission(trial_id)
+    except engine.DoesNotExist:
+        return HTTPError("Trial submission not found.", 404)
+
+    try:
+        task_no = int(task)
+        case_no = int(case)
+    except (TypeError, ValueError):
+        return HTTPError('invalid task/case', 400)
+
+    if sandbox.find_by_token(token) is None:
+        return HTTPError('Invalid sandbox token', 401)
+
+    data = request.get_data()
+    if not data:
+        return HTTPError('no data', 400)
+
+    try:
+        ts.set_case_artifact(task_no, case_no, data)
+    except FileNotFoundError as e:
+        return HTTPError(str(e), 404)
+    except Exception as e:
+        return HTTPError(f'failed to upload artifact: {e}', 500)
+    return HTTPResponse('artifact uploaded', data={'ok': True})
+
+
+@trial_submission_api.put('/<trial_id>/artifact/upload/binary')
+@Request.args('token')
+def upload_trial_submission_compiled_binary(trial_id: str, token: str):
+    try:
+        ts = TrialSubmission(trial_id)
+    except engine.DoesNotExist:
+        return HTTPError("Trial submission not found.", 404)
+
+    if sandbox.find_by_token(token) is None:
+        return HTTPError('Invalid sandbox token', 401)
+
+    data = request.get_data()
+    if not data:
+        return HTTPError('no data', 400)
+
+    try:
+        ts.set_compiled_binary(data)
+    except Exception as e:
+        return HTTPError(f'failed to upload compiled binary: {e}', 500)
+    return HTTPResponse('binary uploaded', data={'ok': True})

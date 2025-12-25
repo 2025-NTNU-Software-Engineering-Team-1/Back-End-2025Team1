@@ -100,83 +100,48 @@ class Problem(MongoBase, engine=engine.Problem):
 
     @property
     def trial_mode_enabled(self) -> bool:
-        """Check if trial mode is enabled for this problem.
-        Checks config.trialMode first (since frontend writes there),
-        then database fields for backward compatibility.
-        """
-        # Check config.trialMode first (this is where frontend writes)
-        config = self.obj.config or {}
-        if 'trialMode' in config:
-            return bool(config['trialMode'])
-        # Also check testMode for backward compatibility
-        if 'testMode' in config:
-            return bool(config['testMode'])
-        # Check database field (legacy)
+        """Check if trial mode is enabled for this problem."""
+        # First, check database field directly (most reliable)
+        # This handles cases where the field exists in DB but not as Python attribute
+        if hasattr(self.obj, '_data'):
+            db_data = self.obj._data
+            if 'trial_mode_enabled' in db_data:
+                value = db_data.get('trial_mode_enabled', False)
+                # Sync to Python attribute if not already set
+                if value and not hasattr(self.obj, 'trial_mode_enabled'):
+                    self.obj.trial_mode_enabled = True
+                    self.obj.save()
+                return bool(value)
+            # Backward compatibility: check old DB field
+            if 'test_mode_enabled' in db_data:
+                old_value = db_data.get('test_mode_enabled', False)
+                # Migrate old field to new field
+                if old_value:
+                    self.obj.trial_mode_enabled = True
+                    self.obj.save()
+                return bool(old_value)
+
+        # Check Python attribute (may not exist if field was set directly in DB)
         if hasattr(self.obj, 'trial_mode_enabled'):
-            value = getattr(self.obj, 'trial_mode_enabled', None)
-            if value is not None:
-                return bool(value)
-        # Try database field name directly (alias)
-        if hasattr(self.obj, 'trialModeEnabled'):
-            value = getattr(self.obj, 'trialModeEnabled', None)
-            if value is not None:
-                return bool(value)
-        # Backward compatibility: try old field names
+            value = getattr(self.obj, 'trial_mode_enabled', False)
+            return bool(value)
+        # Backward compatibility: check old field name
         if hasattr(self.obj, 'test_mode_enabled'):
-            value = getattr(self.obj, 'test_mode_enabled', None)
-            if value is not None:
-                return bool(value)
-        if hasattr(self.obj, 'testModeEnabled'):
-            value = getattr(self.obj, 'testModeEnabled', None)
-            if value is not None:
-                return bool(value)
+            old_value = getattr(self.obj, 'test_mode_enabled', False)
+            # Migrate old field to new field
+            if old_value:
+                self.obj.trial_mode_enabled = True
+                self.obj.save()
+            return bool(old_value)
+
+        # Fallback: check config.trialMode (frontend sets this)
+        # This ensures compatibility even if DB field is not synced
+        config = getattr(self.obj, 'config', None) or {}
+        trial_val = config.get('trialMode') or config.get('testMode')
+        if trial_val:
+            return True
+
         return False
-
-    @property
-    def public_cases_zip_minio_path(self) -> Optional[str]:
-        """Get public testcases zip path (MinIO).
-        Prioritize config.assetPaths['public_testdata'], then legacy field.
-        """
-        config = self.obj.config or {}
-        asset_paths = config.get('assetPaths') or {}
-        # 1. New Config Path
-        if 'public_testdata' in asset_paths:
-            return asset_paths['public_testdata']
-        # 2. Legacy Field (engine field)
-        return getattr(self.obj, 'public_cases_zip_minio_path', None)
-
-    @property
-    def ac_code_minio_path(self) -> Optional[str]:
-        """Get AC code path (MinIO).
-        Prioritize config.assetPaths['ac_code'], then legacy field.
-        """
-        config = self.obj.config or {}
-        asset_paths = config.get('assetPaths') or {}
-        # 1. New Config Path
-        if 'ac_code' in asset_paths:
-            return asset_paths['ac_code']
-        # 2. Legacy Field (engine field)
-        return getattr(self.obj, 'ac_code_minio_path', None)
-
-    @property
-    def ac_code_language(self):
-        """Get AC code language (0: C, 1: C++, 2: Python).
-        Determined from file extension or database field.
-        """
-        # Check database field first
-        lang = getattr(self.obj, 'ac_code_language', None)
-        if lang is not None:
-            return lang
-        # Infer from file extension
-        path = self.ac_code_minio_path
-        if path:
-            if path.endswith('.py'):
-                return 2  # Python
-            elif path.endswith('.cpp') or path.endswith('.cc'):
-                return 1  # C++
-            elif path.endswith('.c'):
-                return 0  # C
-        return None
 
     @property
     def trial_submission_quota(self) -> int:
@@ -330,11 +295,6 @@ class Problem(MongoBase, engine=engine.Problem):
                 'resource_data_teacher.zip':
                 ('resource_data_teacher', 'resource_data_teacher.zip'),
                 'dockerfiles.zip': ('network_dockerfile', 'Dockerfiles.zip'),
-                'public_testdata.zip':
-                ('public_testdata', 'public_testdata.zip'),
-                'ac_code.c': ('ac_code', 'ac_code.c'),
-                'ac_code.cpp': ('ac_code', 'ac_code.cpp'),
-                'ac_code.py': ('ac_code', 'ac_code.py'),
             }
 
             meta = meta or {}
@@ -421,18 +381,7 @@ class Problem(MongoBase, engine=engine.Problem):
             try:
                 from zipfile import ZipFile
                 file_obj.seek(0)
-                with ZipFile(file_obj, 'r') as zf:
-                    zf.testzip()
-                    # Special validation for dockerfiles.zip
-                    if asset_type == 'network_dockerfile' or filename.lower(
-                    ) == 'dockerfiles.zip':
-                        self._validate_dockerfile_zip(zf)
-                file_obj.seek(0)
-            except BadZipFile as e:
-                raise BadZipFile(f'Invalid zip file {filename}: {str(e)}')
-            except ValueError:
-                # Re-raise ValueError from _validate_dockerfile_zip
-                raise
+                ZipFile(file_obj).testzip()
             except Exception as e:
                 raise BadZipFile(f'Invalid zip file {filename}: {str(e)}')
 
@@ -451,40 +400,6 @@ class Problem(MongoBase, engine=engine.Problem):
             part_size=5 * 1024 * 1024,
         )
         return path
-
-    def _validate_dockerfile_zip(self, zf):
-        """
-        Validate dockerfiles.zip structure:
-        - Maximum 5 Dockerfiles allowed
-        - Each Dockerfile must be in a folder (e.g., folder/Dockerfile)
-        """
-        dockerfile_entries = []
-        for name in zf.namelist():
-            # Skip directories
-            if name.endswith('/'):
-                continue
-            # Find Dockerfile files
-            if name.endswith('Dockerfile') or '/Dockerfile' in name:
-                dockerfile_entries.append(name)
-
-        if len(dockerfile_entries) == 0:
-            raise ValueError(
-                'dockerfiles.zip must contain at least one Dockerfile')
-
-        if len(dockerfile_entries) > 5:
-            raise ValueError(
-                f'Maximum 5 Dockerfiles allowed, found {len(dockerfile_entries)}'
-            )
-
-        # Validate structure: must be "folder/Dockerfile" format
-        for entry in dockerfile_entries:
-            parts = entry.split('/')
-            # Valid formats: "folder/Dockerfile" (2 parts)
-            if len(parts) != 2:
-                raise ValueError(
-                    f'Invalid Dockerfile structure: {entry}. '
-                    'Each Dockerfile must be in its own folder (e.g., "env_name/Dockerfile")'
-                )
 
     def permission(self, user: User, req: Permission) -> bool:
         """
@@ -575,40 +490,20 @@ class Problem(MongoBase, engine=engine.Problem):
                 config['networkAccessRestriction'],
             )
         full_config = {
-            'compilation':
-            config.get('compilation', False),
-            'trialMode':
-            trial_mode.get('Enabled', False)
-            or trial_mode.get('trialMode', False),
-            'aiVTuber':
-            config.get('aiVTuber', False),
-            'acceptedFormat':
-            config.get('acceptedFormat', 'code'),
-            'staticAnalys':
-            static_analysis_cfg,
-            'staticAnalysis':
-            static_analysis_cfg,
-            'artifactCollection':
-            config.get('artifactCollection', []),
-            'allowRead':
-            pipeline.get('allowRead', False),
-            'allowWrite':
-            pipeline.get('allowWrite', False),
-            'executionMode':
-            pipeline.get('executionMode', 'general'),
-            'customChecker':
-            pipeline.get('customChecker', False),
-            'teacherFirst':
-            pipeline.get('teacherFirst', False),
-            'scoringScript':
-            pipeline.get('scoringScrip', {'custom': False}),
-            'maxNumberOfTrial':
-            trial_mode.get('Quota_Per_Student', 0)
-            or trial_mode.get('maxNumberOfTrial', 0),
-            'trialResultVisible':
-            trial_mode.get('trialResultVisible', False),
-            'trialResultDownloadable':
-            trial_mode.get('trialResultDownloadable', False),
+            'compilation': config.get('compilation', False),
+            'testMode': trial_mode.get('Enabled', False),
+            'aiVTuber': config.get('aiVTuber', False),
+            'acceptedFormat': config.get('acceptedFormat', 'code'),
+            'staticAnalys': static_analysis_cfg,
+            'staticAnalysis': static_analysis_cfg,
+            'artifactCollection': config.get('artifactCollection', []),
+            'allowRead': pipeline.get('allowRead', False),
+            'allowWrite': pipeline.get('allowWrite', False),
+            'executionMode': pipeline.get('executionMode', 'general'),
+            'customChecker': pipeline.get('customChecker', False),
+            'teacherFirst': pipeline.get('teacherFirst', False),
+            'scoringScript': pipeline.get('scoringScrip', {'custom': False}),
+            'testModeQuotaPerStudent': trial_mode.get('Quota_Per_Student', 0),
         }
         for key in (
                 'aiVTuberMaxToken',
@@ -729,9 +624,11 @@ class Problem(MongoBase, engine=engine.Problem):
                 # Sync trial_mode_enabled from config.trialMode (frontend sends this)
                 if 'trialMode' in config_update:
                     trial_mode_enabled = config_update['trialMode']
-                    full_config['trialMode'] = trial_mode_enabled
+                    full_config['testMode'] = trial_mode_enabled
                     # Sync trial_mode_enabled database field
                     problem.obj.trial_mode_enabled = trial_mode_enabled
+                    # Ensure it's saved by adding to kwargs
+                    kwargs['trial_mode_enabled'] = trial_mode_enabled
 
             if 'pipeline' in kwargs and kwargs.get('pipeline') is not None:
                 pipeline = kwargs.pop('pipeline')
@@ -757,26 +654,14 @@ class Problem(MongoBase, engine=engine.Problem):
             if 'Trial_Mode' in kwargs and kwargs.get('Trial_Mode') is not None:
                 trial_mode = kwargs.pop('Trial_Mode')
                 if 'Enabled' in trial_mode:
-                    full_config['trialMode'] = trial_mode['Enabled']
+                    full_config['testMode'] = trial_mode['Enabled']
                     # Sync trial_mode_enabled database field
                     problem.obj.trial_mode_enabled = trial_mode['Enabled']
-                elif 'trialMode' in trial_mode:
-                    full_config['trialMode'] = trial_mode['trialMode']
-                    problem.obj.trial_mode_enabled = trial_mode['trialMode']
+                    # Ensure it's saved by adding to kwargs
+                    kwargs['trial_mode_enabled'] = trial_mode['Enabled']
                 if 'Quota_Per_Student' in trial_mode:
-                    full_config['maxNumberOfTrial'] = trial_mode[
+                    full_config['testModeQuotaPerStudent'] = trial_mode[
                         'Quota_Per_Student']
-
-                # Merge stashed logic for aliasing and new fields using trial_mode dict
-                if 'maxNumberOfTrial' in trial_mode:
-                    full_config['maxNumberOfTrial'] = trial_mode[
-                        'maxNumberOfTrial']
-                if 'trialResultVisible' in trial_mode:
-                    full_config['trialResultVisible'] = trial_mode[
-                        'trialResultVisible']
-                if 'trialResultDownloadable' in trial_mode:
-                    full_config['trialResultDownloadable'] = trial_mode[
-                        'trialResultDownloadable']
 
             kwargs['config'] = full_config
             _sync_config_aliases(kwargs['config'])
