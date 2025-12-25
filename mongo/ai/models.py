@@ -167,9 +167,11 @@ class AiApiKey(MongoBase, engine=engine.AiApiKey):
         if not course_obj:
             return []
 
+        # Collect all keys for the course
         keys = cls.engine.objects(course_name=course_obj)
-        result_list = []
 
+        # Build initial map from key id -> key info (including usages from token usage aggregation)
+        key_map = {}
         for key in keys:
             pipeline = [{
                 '$match': {
@@ -193,7 +195,7 @@ class AiApiKey(MongoBase, engine=engine.AiApiKey):
 
             problem_usages = []
             for stat in usage_stats:
-                p_id = stat['_id']
+                p_id = stat.get('_id')
                 total = stat.get('totalInput', 0) + stat.get('totalOutput', 0)
                 if p_id:
                     prob = engine.Problem.objects(
@@ -209,28 +211,82 @@ class AiApiKey(MongoBase, engine=engine.AiApiKey):
             masked = f"{raw_key[:4]}****{raw_key[-4:]}" if len(
                 raw_key) > 8 else "****"
 
-            result_list.append({
-                "id":
-                str(key.id),
-                "key_name":
-                key.key_name,
-                "masked_value":
-                masked,
-                "is_active":
-                key.is_active,
-                "input_token":
-                key.input_token,
-                "output_token":
-                key.output_token,
-                "request_count":
-                key.request_count,
+            kid = str(key.id)
+            key_map[kid] = {
+                "id": kid,
+                "key_name": key.key_name,
+                "masked_value": masked,
+                "is_active": key.is_active,
+                "input_token": key.input_token,
+                "output_token": key.output_token,
+                "request_count": key.request_count,
                 "created_by":
                 key.created_by.username if key.created_by else "System",
-                "problem_usages":
-                problem_usages
-            })
+                "problem_usages": problem_usages,
+            }
 
-        return result_list
+        # For keys that are assigned to problems but have zero usage,
+        # find those problems via DB queries and add them with total_token=0.
+        # This follows the repo's DB-operation style (per-key queries).
+        check_fields = [
+            'config.api_key',
+            'config.apiKey',
+            'config.ai_key',
+            'config.aiKey',
+            'config.api_key_id',
+            'config.ai_key_id',
+            'config.key_id',
+        ]
+
+        for key in keys:
+            kid = str(key.id)
+            existing_pids = {
+                u.get('problem_id')
+                for u in key_map.get(kid, {}).get('problem_usages', [])
+            }
+
+            for field in check_fields:
+                # Try matching both ObjectId and string forms
+                for match_val in (key.id, str(key.id)):
+                    try:
+                        qs = engine.Problem.objects(__raw__={
+                            field: match_val,
+                            'courses': course_obj.id
+                        })
+                    except Exception:
+                        qs = []
+
+                    for prob in qs:
+                        pid = getattr(prob, 'problem_id', None) or getattr(
+                            prob, 'pk', None)
+                        pname = getattr(prob, 'problem_name', None) or getattr(
+                            prob, 'problemName', None) or None
+                        pid_s = str(pid) if pid is not None else None
+                        if pid_s in existing_pids:
+                            continue
+                        # ensure key_map entry exists
+                        if kid not in key_map:
+                            key_map[kid] = {
+                                "id": kid,
+                                "key_name": None,
+                                "masked_value": "****",
+                                "is_active": False,
+                                "input_token": 0,
+                                "output_token": 0,
+                                "request_count": 0,
+                                "created_by": "System",
+                                "problem_usages": [],
+                            }
+                        key_map[kid].setdefault('problem_usages', []).append({
+                            'problem_id':
+                            pid_s,
+                            'problem_name':
+                            pname or f"Problem {pid}",
+                            'total_token':
+                            0
+                        })
+
+        return list(key_map.values())
 
     @classmethod
     def get_list_by_course(cls, course_name: str):
