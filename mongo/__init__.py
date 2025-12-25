@@ -9,6 +9,7 @@ from . import post
 from . import ip_filter
 from . import ai
 from . import pat
+from . import login_records
 
 from .course import *
 from .engine import *
@@ -21,6 +22,7 @@ from .post import *
 from .ip_filter import *
 from .ai import *
 from .pat import *
+from .login_records import *
 
 __all__ = [
     *course.__all__,
@@ -34,4 +36,5 @@ __all__ = [
     *ip_filter.__all__,
     *ai.__all__,
     *pat.__all__,
+    *login_records.__all__,
 ]

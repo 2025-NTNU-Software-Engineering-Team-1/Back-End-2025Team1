@@ -15,6 +15,7 @@ from . import user
 from . import pat
 from . import trial_submission
 from . import ai_vtuber
+from . import login_records
 
 from .auth import *
 from .profile import *
@@ -33,6 +34,7 @@ from .user import *
 from .pat import *
 from .trial_submission import *
 from .ai_vtuber import *
+from .login_records import *
 
 __all__ = [
     *auth.__all__,
@@ -52,4 +54,5 @@ __all__ = [
     *pat.__all__,
     *trial_submission.__all__,
     *ai_vtuber.__all__,
+    *login_records.__all__,
 ]
