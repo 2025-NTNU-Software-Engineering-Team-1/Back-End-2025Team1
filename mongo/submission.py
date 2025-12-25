@@ -753,7 +753,16 @@ class BaseSubmission(abc.ABC):
         scoring_updates = {}
         scoring_score_override = None
         scoring_status_code = None
-        if static_analysis:
+        # Handle SA skipped case: when static_analysis is None, SA was not configured
+        # Explicitly clear SA fields to prevent legacy values from persisting
+        if static_analysis is None:
+            sa_updates.update(
+                sa_status=None,
+                sa_message=None,
+                sa_report=None,
+                sa_report_path=None,
+            )
+        elif static_analysis:
             sa_status = static_analysis.get('status', '').lower()
             if sa_status == 'skip':
                 sa_updates.update(
