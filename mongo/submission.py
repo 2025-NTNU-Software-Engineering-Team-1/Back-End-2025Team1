@@ -157,6 +157,7 @@ class BaseSubmission(abc.ABC):
             'RE': 5,
             'JE': 6,
             'OLE': 7,
+            'AE': 8,
         }
 
     @property
