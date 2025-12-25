@@ -29,6 +29,13 @@ def setup_security(app):
         if request.method in {'GET', 'HEAD', 'OPTIONS'}:
             return
 
+        # Allow requests with valid sandbox token (internal service calls)
+        token = request.args.get('token')
+        if token:
+            from mongo import sandbox
+            if sandbox.find_by_token(token) is not None:
+                return  # Valid sandbox token, skip CSRF check
+
         # CSRF Protection via Origin/Referer Verification
         server_name = app.config.get('SERVER_NAME')
         target_origin = server_name.split(':')[0] if server_name else None
