@@ -157,7 +157,6 @@ class BaseSubmission(abc.ABC):
             'RE': 5,
             'JE': 6,
             'OLE': 7,
-            'AE': 8,
         }
 
     @property
@@ -205,12 +204,7 @@ class BaseSubmission(abc.ABC):
 
     @property
     def is_zip_mode(self) -> bool:
-        # Check both test_case.submission_mode and config.acceptedFormat
-        # to ensure consistency between frontend and backend
-        if self.submission_mode == 1:
-            return True
-        config = getattr(self.problem, 'config', {}) or {}
-        return config.get('acceptedFormat') == 'zip'
+        return self.submission_mode == 1
 
     @property
     def execution_mode(self) -> str:
@@ -753,16 +747,7 @@ class BaseSubmission(abc.ABC):
         scoring_updates = {}
         scoring_score_override = None
         scoring_status_code = None
-        # Handle SA skipped case: when static_analysis is None, SA was not configured
-        # Explicitly clear SA fields to prevent legacy values from persisting
-        if static_analysis is None:
-            sa_updates.update(
-                sa_status=None,
-                sa_message=None,
-                sa_report=None,
-                sa_report_path=None,
-            )
-        elif static_analysis:
+        if static_analysis:
             sa_status = static_analysis.get('status', '').lower()
             if sa_status == 'skip':
                 sa_updates.update(
@@ -1725,8 +1710,12 @@ class TrialSubmission(MongoBase, BaseSubmission,
         problem = Problem(self.problem)
         if problem:
             username = self.user.username
-            count_key = f"trial_submission_counts.{username}"
-            problem.obj.update(**{f'inc__{count_key}': 1})
+            # Use MongoDB's $inc operator for DictField nested key
+            # MongoEngine's inc__ doesn't support DictField nested keys directly
+            problem.obj.update(
+                __raw__={'$inc': {
+                    f'trialSubmissionCounts.{username}': 1
+                }})
 
         # No User.add_submission()
         # No Homework.student_status update
@@ -2188,12 +2177,13 @@ class TrialSubmission(MongoBase, BaseSubmission,
             for j, case in enumerate(task.cases):
                 # Get Stdout/Stderr and input/answer from artifact
                 try:
-                    output_content = self.get_single_output(i, j, text=True)
-                    stdout_text = output_content.get('stdout', '')
-                    stderr_text = output_content.get('stderr', '')
-                    # Get input/answer from artifact first (set by sandbox)
-                    input_text = output_content.get('input', '')
-                    answer_text = output_content.get('answer', '')
+                    # Use get_case_artifact_files to get all fields including input and answer
+                    output_content = self.get_case_artifact_files(i, j)
+                    stdout_text = output_content.get('stdout', '') or ''
+                    stderr_text = output_content.get('stderr', '') or ''
+                    # Get input/answer from artifact (set by sandbox)
+                    input_text = output_content.get('input', '') or ''
+                    answer_text = output_content.get('answer', '') or ''
                 except (FileNotFoundError, AttributeError):
                     stdout_text = ''
                     stderr_text = ''
