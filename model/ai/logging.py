@@ -6,17 +6,39 @@ Provides a dedicated logger that writes to logs/ai.log.
 
 import logging
 import os
+import tempfile
 from logging.handlers import RotatingFileHandler
 
 # Create logs directory if it doesn't exist
 LOGS_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'logs')
-os.makedirs(LOGS_DIR, exist_ok=True)
+try:
+    os.makedirs(LOGS_DIR, exist_ok=True)
+except PermissionError:
+    LOGS_DIR = tempfile.gettempdir()
 
 AI_LOG_FILE = os.path.join(LOGS_DIR, 'ai.log')
 
 # Create the AI logger
 _ai_logger = None
+
+
+def _select_log_file() -> str:
+    env_path = os.getenv('AI_LOG_FILE') or os.getenv('AI_LOG_PATH')
+    if env_path:
+        return env_path
+
+    default = AI_LOG_FILE
+    if os.path.exists(default) and not os.access(default, os.W_OK):
+        suffix = str(os.getuid()) if hasattr(os, 'getuid') else str(
+            os.getpid())
+        if os.access(LOGS_DIR, os.W_OK):
+            return os.path.join(LOGS_DIR, f'ai.{suffix}.log')
+        return os.path.join(tempfile.gettempdir(), f'noj-ai.{suffix}.log')
+
+    if os.access(LOGS_DIR, os.W_OK):
+        return default
+    return os.path.join(tempfile.gettempdir(), 'noj-ai.log')
 
 
 def get_ai_logger() -> logging.Logger:
@@ -37,12 +59,16 @@ def get_ai_logger() -> logging.Logger:
         # Only add handler if not already added
         if not _ai_logger.handlers:
             # File handler with rotation (10MB max, keep 5 backups)
-            file_handler = RotatingFileHandler(
-                AI_LOG_FILE,
-                maxBytes=10 * 1024 * 1024,  # 10MB
-                backupCount=5,
-                encoding='utf-8')
-            file_handler.setLevel(logging.DEBUG)
+            log_file = _select_log_file()
+            try:
+                file_handler = RotatingFileHandler(
+                    log_file,
+                    maxBytes=10 * 1024 * 1024,  # 10MB
+                    backupCount=5,
+                    encoding='utf-8')
+                file_handler.setLevel(logging.DEBUG)
+            except OSError:
+                file_handler = logging.NullHandler()
 
             # Formatter
             formatter = logging.Formatter(

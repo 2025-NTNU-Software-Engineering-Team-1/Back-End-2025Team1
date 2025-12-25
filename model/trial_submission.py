@@ -321,24 +321,20 @@ def get_trial_record(user, trial_id: str):
         return HTTPError("Internal Server Error", 500)
 
 
-@trial_submission_api.route("/<trial_id>/download/case", methods=["GET"])
+@trial_submission_api.route("/<trial_id>/download/task/<int:task_index>",
+                            methods=["GET"])
 @login_required
-def download_trial_case(user, trial_id: str):
+def download_trial_task_artifact(user, trial_id: str, task_index: int):
     """
-    Download the output zip for a specific task/case.
-    Query Param: task_index (int)
+    Download all case artifacts for a specific task as a combined zip.
+    Similar to /submission/<id>/artifact/zip/<task_index> for regular submissions.
     """
-    try:
-        task_index = int(request.args.get('task_index'))
-    except (TypeError, ValueError):
-        return HTTPError("Invalid task_index.", 400)
-
     try:
         ts = TrialSubmission(trial_id)
     except engine.DoesNotExist:
         return HTTPError("Trial submission not found.", 404)
 
-    # 權限檢查
+    # Permission check
     req_user = User(user.username)
     ts_owner_username = getattr(ts.obj, 'user', None)
     if hasattr(ts_owner_username, 'username'):
@@ -356,23 +352,118 @@ def download_trial_case(user, trial_id: str):
         if (problem.config or {}).get('trialResultDownloadable') is False:
             return HTTPError("Trial result download is disabled.", 403)
 
-    # 取得 Raw Output (Zip file bytes)
-    # 假設每個 Task 只有一個 Case (idx=0)
+    # Build task artifact zip (combine all cases)
     try:
         if task_index < 0 or task_index >= len(ts.tasks):
             return HTTPError("Task index out of range.", 404)
 
-        case_result = ts.tasks[task_index].cases[0]
+        task = ts.tasks[task_index]
+        if not task.cases:
+            return HTTPError("No cases found for this task.", 404)
+
+        from mongo.utils import MinioClient
+        from zipfile import ZipFile, BadZipFile
+        minio_client = MinioClient()
+        artifact_buf = io.BytesIO()
+        wrote_any_file = False
+
+        with ZipFile(artifact_buf, 'w') as artifact_zip:
+            for case_index, case in enumerate(task.cases):
+                output_path = getattr(case, 'output_minio_path', None)
+                if not output_path:
+                    continue
+                try:
+                    data = minio_client.download_file(output_path)
+                    with ZipFile(io.BytesIO(data)) as case_zip:
+                        for name in case_zip.namelist():
+                            arcname = f'case_{case_index:02d}/{name}'
+                            artifact_zip.writestr(arcname, case_zip.read(name))
+                            wrote_any_file = True
+                except BadZipFile:
+                    current_app.logger.warning(
+                        f"Invalid zip for trial {trial_id} task {task_index} case {case_index}"
+                    )
+                    continue
+                except Exception as e:
+                    current_app.logger.warning(
+                        f"Error reading case artifact: {e}")
+                    continue
+
+        if not wrote_any_file:
+            return HTTPError("No artifacts available for this task.", 404)
+
+        artifact_buf.seek(0)
+
+    except Exception as e:
+        current_app.logger.error(f"Error building task artifact: {e}")
+        return HTTPError("Internal Error", 500)
+
+    filename = f"trial-{trial_id}-task{task_index}-artifact.zip"
+
+    return send_file(artifact_buf,
+                     mimetype='application/zip',
+                     as_attachment=True,
+                     download_name=filename)
+
+
+@trial_submission_api.route("/<trial_id>/download/case", methods=["GET"])
+@login_required
+def download_trial_case_artifact(user, trial_id: str):
+    """
+    Download the artifact zip for a specific case.
+    Query Params: 
+        task_index (int): Task index (required)
+        case_index (int): Case index within the task (required)
+    """
+    try:
+        task_index = int(request.args.get('task_index'))
+        case_index = int(request.args.get('case_index', 0))
+    except (TypeError, ValueError):
+        return HTTPError("Invalid task_index or case_index.", 400)
+
+    try:
+        ts = TrialSubmission(trial_id)
+    except engine.DoesNotExist:
+        return HTTPError("Trial submission not found.", 404)
+
+    # Permission check
+    req_user = User(user.username)
+    ts_owner_username = getattr(ts.obj, 'user', None)
+    if hasattr(ts_owner_username, 'username'):
+        ts_owner_username = ts_owner_username.username
+
+    is_owner = (req_user.username == ts_owner_username)
+    is_staff = req_user.role in (Role.ADMIN, Role.TEACHER, Role.TA)
+
+    if not (is_owner or is_staff):
+        return HTTPError("Forbidden.", 403)
+
+    # Check trialResultDownloadable for students
+    if is_owner and not is_staff:
+        problem = Problem(ts.problem_id)
+        if (problem.config or {}).get('trialResultDownloadable') is False:
+            return HTTPError("Trial result download is disabled.", 403)
+
+    # Get case artifact zip
+    try:
+        if task_index < 0 or task_index >= len(ts.tasks):
+            return HTTPError("Task index out of range.", 404)
+
+        task = ts.tasks[task_index]
+        if case_index < 0 or case_index >= len(task.cases):
+            return HTTPError("Case index out of range.", 404)
+
+        case_result = task.cases[case_index]
         # _get_output_raw 是 BaseSubmission 的方法，回傳 BytesIO
         output_io = ts._get_output_raw(case_result)
         output_io.seek(0)
-    except (IndexError, AttributeError):
+    except (IndexError, AttributeError) as e:
         return HTTPError("Output not found (pending or error).", 404)
     except Exception as e:
         current_app.logger.error(f"Error downloading case: {e}")
         return HTTPError("Internal Error", 500)
 
-    filename = f"trial-{trial_id}-task{task_index}.zip"
+    filename = f"trial-{trial_id}-task{task_index}-case{case_index}.zip"
 
     return send_file(output_io,
                      mimetype='application/zip',
@@ -453,24 +544,47 @@ def download_trial_all(user, trial_id: str):
         if (problem.config or {}).get('trialResultDownloadable') is False:
             return HTTPError("Trial result download is disabled.", 403)
 
-    # Generator
+    # Generator - yields each task's complete artifact zip (similar to download_trial_task_artifact)
     def file_iterator():
-        for i, task in enumerate(ts.tasks):
+        from zipfile import ZipFile, BadZipFile
+        minio_client = MinioClient()
+
+        for task_index, task in enumerate(ts.tasks):
             if not task.cases:
                 continue
 
             try:
-                case_result = task.cases[0]
-                # 讀取 Raw Zip Bytes
-                case_io = ts._get_output_raw(case_result)
-                case_data = case_io.read()
+                # Build a zip for this task containing all cases
+                task_buf = io.BytesIO()
+                wrote_any_file = False
 
-                # Yield (檔名, 資料)
-                yield (f"task_{i}.zip", case_data)
+                with ZipFile(task_buf, 'w') as task_zip:
+                    for case_index, case in enumerate(task.cases):
+                        output_path = getattr(case, 'output_minio_path', None)
+                        if not output_path:
+                            continue
+                        try:
+                            data = minio_client.download_file(output_path)
+                            with ZipFile(io.BytesIO(data)) as case_zip:
+                                for name in case_zip.namelist():
+                                    arcname = f'case_{case_index:02d}/{name}'
+                                    task_zip.writestr(arcname,
+                                                      case_zip.read(name))
+                                    wrote_any_file = True
+                        except BadZipFile:
+                            continue
+                        except Exception:
+                            continue
+
+                if wrote_any_file:
+                    task_buf.seek(0)
+                    yield (f"task_{task_index}.zip", task_buf.read())
+                else:
+                    yield (f"task_{task_index}_error.txt",
+                           b"No artifacts available")
 
             except Exception:
-                # 錯誤時寫入一個錯誤訊息檔
-                yield (f"task_{i}_error.txt", b"Output not found")
+                yield (f"task_{task_index}_error.txt", b"Output not found")
 
     return stream_zip_response(file_iterator, f"trial-{trial_id}.zip")
 

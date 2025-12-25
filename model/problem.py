@@ -788,6 +788,38 @@ def get_checksum(token: str, problem_id: int):
     return HTTPResponse(data=digest)
 
 
+@problem_api.route('/<int:problem_id>/checker-api-key', methods=['GET'])
+@Request.args('token: str')
+def get_checker_api_key(token: str, problem_id: int):
+    """Get AI API key for custom checker (sandbox only)."""
+    from mongo.ai.models import AiApiKey
+
+    if sandbox.find_by_token(token) is None:
+        return HTTPError('Invalid sandbox token', 401)
+    problem = Problem(problem_id)
+    if not problem:
+        return HTTPError(f'Problem {problem_id} not found', 404)
+
+    # Get aiChecker config from problem
+    config = problem.config or {}
+    ai_checker_cfg = config.get('aiChecker', {})
+    if not ai_checker_cfg.get('enabled'):
+        return HTTPError('AI Checker not enabled for this problem', 404)
+
+    api_key_id = ai_checker_cfg.get('apiKeyId')
+    if not api_key_id:
+        return HTTPError('API Key not configured for AI Checker', 404)
+
+    # Get actual key value using AiApiKey.get_key_by_id
+    key_doc = AiApiKey.get_key_by_id(api_key_id)
+    if not key_doc:
+        return HTTPError('API Key not found', 404)
+    if not key_doc.is_active:
+        return HTTPError('API Key is inactive', 404)
+
+    return HTTPResponse(data={'apiKey': key_doc.key_value})
+
+
 # === Trial Mode APIs for Sandbox ===
 
 
@@ -1083,6 +1115,13 @@ def get_meta(token: str, problem_id: int):
         'artifactCollection':
         config_payload.get('artifactCollection', []),
     })
+    # AI Checker settings
+    ai_checker_cfg = config_payload.get('aiChecker', {})
+    if ai_checker_cfg.get('enabled'):
+        meta['aiChecker'] = {
+            'enabled': True,
+            'model': ai_checker_cfg.get('model', 'gemini-2.5-flash'),
+        }
     network_cfg = config_payload.get('networkAccessRestriction')
     if network_cfg:
         meta['networkAccessRestriction'] = network_cfg

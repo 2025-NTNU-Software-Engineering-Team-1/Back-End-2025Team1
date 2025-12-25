@@ -311,6 +311,8 @@ class BaseSubmission(abc.ABC):
             'stdout':
             None,  # None means file doesn't exist, '' means empty file
             'stderr': None,
+            'input': None,  # Test case input (from artifact)
+            'answer': None,  # Expected output (from artifact)
             'files': {}
         }
 
@@ -355,6 +357,16 @@ class BaseSubmission(abc.ABC):
                         elif base_name == 'stderr':
                             # File exists, decode content (could be empty string)
                             result['stderr'] = content.decode('utf-8',
+                                                              errors='replace')
+                            continue  # Don't add to files dict
+                        elif base_name == 'input':
+                            # Test case input (from artifact)
+                            result['input'] = content.decode('utf-8',
+                                                             errors='replace')
+                            continue  # Don't add to files dict
+                        elif base_name == 'answer':
+                            # Expected output from AC code (from artifact)
+                            result['answer'] = content.decode('utf-8',
                                                               errors='replace')
                             continue  # Don't add to files dict
 
@@ -2105,47 +2117,128 @@ class TrialSubmission(MongoBase, BaseSubmission,
     def get_trial_api_info(self) -> Dict[str, Any]:
         """
             Format the trial submission data for API response.
-            Includes Truncated Stdout/Stderr text for each task.
+            Returns proper task-case hierarchy: each task contains an array of cases.
+            Includes Truncated Stdout/Stderr text for each case.
+            Also includes input and expected output from custom testcases if available.
             """
         # Convert status code
         status_str = self.code2status.get(self.status, 'Judging')
         if self.status < 0:
             status_str = 'Judging' if self.status == -1 else 'Pending'
 
+        # Load custom testcases (input/answer) if available
+        # Format: TTCC.in and TTCC.out where TT=task index, CC=case index
+        testcase_data = {
+        }  # {(task_idx, case_idx): {'input': ..., 'answer': ...}}
+        custom_path = getattr(self.obj, 'custom_input_minio_path', None)
+        if custom_path:
+            try:
+                minio_client = MinioClient()
+                data = minio_client.download_file(custom_path)
+                with ZipFile(io.BytesIO(data)) as zf:
+                    for name in zf.namelist():
+                        # Parse filename like "0000.in" or "0000.out" or "0100.in"
+                        base = name.split('/')[-1]  # Handle nested paths
+                        if len(base) >= 7 and base[4] == '.':
+                            try:
+                                task_idx = int(base[0:2])
+                                case_idx = int(base[2:4])
+                                ext = base[5:]  # 'in' or 'out'
+                                key = (task_idx, case_idx)
+                                if key not in testcase_data:
+                                    testcase_data[key] = {
+                                        'input': None,
+                                        'answer': None
+                                    }
+                                content = zf.read(name).decode(
+                                    'utf-8', errors='replace')
+                                if ext == 'in':
+                                    testcase_data[key]['input'] = content
+                                elif ext == 'out':
+                                    testcase_data[key]['answer'] = content
+                            except (ValueError, IndexError):
+                                continue
+            except Exception as e:
+                current_app.logger.warning(
+                    f"Failed to read custom testcases for trial {self.id}: {e}"
+                )
+
         tasks_data = []
         for i, task in enumerate(self.tasks):
-            # One task for one case only
             if not task.cases:
                 continue
 
-            case = task.cases[0]
+            # Build cases array for this task
+            cases_data = []
+            for j, case in enumerate(task.cases):
+                # Get Stdout/Stderr and input/answer from artifact
+                try:
+                    output_content = self.get_single_output(i, j, text=True)
+                    stdout_text = output_content.get('stdout', '')
+                    stderr_text = output_content.get('stderr', '')
+                    # Get input/answer from artifact first (set by sandbox)
+                    input_text = output_content.get('input', '')
+                    answer_text = output_content.get('answer', '')
+                except (FileNotFoundError, AttributeError):
+                    stdout_text = ''
+                    stderr_text = ''
+                    input_text = ''
+                    answer_text = ''
 
-            # Get Stdout/Stderr
-            try:
-                output_content = self.get_single_output(i, 0, text=True)
-                stdout_text = output_content.get('stdout', '')
-                stderr_text = output_content.get('stderr', '')
-            except (FileNotFoundError, AttributeError):
-                stdout_text = ''
-                stderr_text = ''
+                # Fallback to custom testcases if artifact didn't have input/answer
+                if not input_text or not answer_text:
+                    tc_data = testcase_data.get((i, j), {})
+                    if not input_text:
+                        input_text = tc_data.get('input', '') or ''
+                    if not answer_text:
+                        answer_text = tc_data.get('answer', '') or ''
 
-            # === Apply Truncate Logic ===
-            # Truncate if exceeds OUTPUT_TRUNCATE_SIZE
-            if len(stdout_text) > OUTPUT_TRUNCATE_SIZE:
-                stdout_text = stdout_text[:OUTPUT_TRUNCATE_SIZE] + OUTPUT_TRUNCATE_MSG
+                # === Apply Truncate Logic ===
+                # Truncate if exceeds OUTPUT_TRUNCATE_SIZE
+                if len(stdout_text) > OUTPUT_TRUNCATE_SIZE:
+                    stdout_text = stdout_text[:OUTPUT_TRUNCATE_SIZE] + OUTPUT_TRUNCATE_MSG
 
-            if len(stderr_text) > OUTPUT_TRUNCATE_SIZE:
-                stderr_text = stderr_text[:OUTPUT_TRUNCATE_SIZE] + OUTPUT_TRUNCATE_MSG
+                if len(stderr_text) > OUTPUT_TRUNCATE_SIZE:
+                    stderr_text = stderr_text[:OUTPUT_TRUNCATE_SIZE] + OUTPUT_TRUNCATE_MSG
 
-            task_status_str = self.code2status.get(case.status, 'Unknown')
+                if input_text and len(input_text) > OUTPUT_TRUNCATE_SIZE:
+                    input_text = input_text[:OUTPUT_TRUNCATE_SIZE] + OUTPUT_TRUNCATE_MSG
 
+                if answer_text and len(answer_text) > OUTPUT_TRUNCATE_SIZE:
+                    answer_text = answer_text[:OUTPUT_TRUNCATE_SIZE] + OUTPUT_TRUNCATE_MSG
+
+                case_status_str = self.code2status.get(case.status, 'Unknown')
+
+                cases_data.append({
+                    "status": case_status_str,
+                    "exec_time": case.exec_time,
+                    "memory_usage": case.memory_usage,
+                    "stdout": stdout_text,
+                    "stderr": stderr_text,
+                    "input": input_text,
+                    "answer": answer_text
+                })
+
+            # Calculate task-level status (worst case status)
+            task_status = task.cases[0].status if task.cases else 0
+            for case in task.cases:
+                if case.status != 0:  # If any case is not AC
+                    task_status = case.status
+                    break
+            task_status_str = self.code2status.get(task_status, 'Unknown')
+
+            # Add task with all its cases
             tasks_data.append({
-                "status": task_status_str,
-                "exec_time": case.exec_time,
-                "memory_usage": case.memory_usage,
-                "score": task.score,
-                "stdout": stdout_text,
-                "stderr": stderr_text
+                "status":
+                task_status_str,
+                "exec_time":
+                max((c.exec_time for c in task.cases), default=0),
+                "memory_usage":
+                max((c.memory_usage for c in task.cases), default=0),
+                "score":
+                task.score,
+                "cases":
+                cases_data
             })
 
         # Get source code

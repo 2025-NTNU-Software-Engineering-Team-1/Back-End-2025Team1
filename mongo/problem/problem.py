@@ -489,9 +489,40 @@ class Problem(MongoBase, engine=engine.Problem):
                 'networkAccessRestriction',
                 config['networkAccessRestriction'],
             )
+        if 'Enabled' in trial_mode:
+            trial_mode_enabled = trial_mode.get('Enabled')
+        elif 'trialMode' in trial_mode:
+            trial_mode_enabled = trial_mode.get('trialMode')
+        else:
+            trial_mode_enabled = config.get('trialMode',
+                                            config.get('testMode', False))
+        trial_mode_enabled = bool(trial_mode_enabled)
+
+        max_number_of_trial = trial_mode.get('maxNumberOfTrial')
+        if max_number_of_trial is None:
+            max_number_of_trial = config.get('maxNumberOfTrial', 0)
+
+        trial_result_visible = trial_mode.get('trialResultVisible')
+        if trial_result_visible is None:
+            trial_result_visible = config.get('trialResultVisible', False)
+
+        trial_result_downloadable = trial_mode.get('trialResultDownloadable')
+        if trial_result_downloadable is None:
+            trial_result_downloadable = config.get('trialResultDownloadable',
+                                                   False)
+
+        quota_per_student = trial_mode.get('Quota_Per_Student')
+        if quota_per_student is None:
+            quota_per_student = trial_mode.get('trialModeQuotaPerStudent')
+        if quota_per_student is None:
+            quota_per_student = config.get(
+                'trialModeQuotaPerStudent',
+                config.get('testModeQuotaPerStudent', 0),
+            )
         full_config = {
             'compilation': config.get('compilation', False),
-            'testMode': trial_mode.get('Enabled', False),
+            'testMode': trial_mode_enabled,
+            'trialMode': trial_mode_enabled,
             'aiVTuber': config.get('aiVTuber', False),
             'acceptedFormat': config.get('acceptedFormat', 'code'),
             'staticAnalys': static_analysis_cfg,
@@ -503,7 +534,11 @@ class Problem(MongoBase, engine=engine.Problem):
             'customChecker': pipeline.get('customChecker', False),
             'teacherFirst': pipeline.get('teacherFirst', False),
             'scoringScript': pipeline.get('scoringScrip', {'custom': False}),
-            'testModeQuotaPerStudent': trial_mode.get('Quota_Per_Student', 0),
+            'maxNumberOfTrial': max_number_of_trial,
+            'trialResultVisible': bool(trial_result_visible),
+            'trialResultDownloadable': bool(trial_result_downloadable),
+            'testModeQuotaPerStudent': quota_per_student,
+            'trialModeQuotaPerStudent': quota_per_student,
         }
         for key in (
                 'aiVTuberMaxToken',
@@ -653,15 +688,37 @@ class Problem(MongoBase, engine=engine.Problem):
 
             if 'Trial_Mode' in kwargs and kwargs.get('Trial_Mode') is not None:
                 trial_mode = kwargs.pop('Trial_Mode')
+                trial_mode_enabled = None
                 if 'Enabled' in trial_mode:
-                    full_config['testMode'] = trial_mode['Enabled']
+                    trial_mode_enabled = trial_mode.get('Enabled')
+                elif 'trialMode' in trial_mode:
+                    trial_mode_enabled = trial_mode.get('trialMode')
+                if trial_mode_enabled is not None:
+                    trial_mode_enabled = bool(trial_mode_enabled)
+                    full_config['testMode'] = trial_mode_enabled
+                    full_config['trialMode'] = trial_mode_enabled
                     # Sync trial_mode_enabled database field
-                    problem.obj.trial_mode_enabled = trial_mode['Enabled']
+                    problem.obj.trial_mode_enabled = trial_mode_enabled
                     # Ensure it's saved by adding to kwargs
-                    kwargs['trial_mode_enabled'] = trial_mode['Enabled']
-                if 'Quota_Per_Student' in trial_mode:
-                    full_config['testModeQuotaPerStudent'] = trial_mode[
-                        'Quota_Per_Student']
+                    kwargs['trial_mode_enabled'] = trial_mode_enabled
+
+                quota_per_student = trial_mode.get('Quota_Per_Student')
+                if quota_per_student is None:
+                    quota_per_student = trial_mode.get(
+                        'trialModeQuotaPerStudent')
+                if quota_per_student is not None:
+                    full_config['testModeQuotaPerStudent'] = quota_per_student
+                    full_config['trialModeQuotaPerStudent'] = quota_per_student
+
+                if trial_mode.get('maxNumberOfTrial') is not None:
+                    full_config['maxNumberOfTrial'] = trial_mode.get(
+                        'maxNumberOfTrial')
+                if trial_mode.get('trialResultVisible') is not None:
+                    full_config['trialResultVisible'] = trial_mode.get(
+                        'trialResultVisible')
+                if trial_mode.get('trialResultDownloadable') is not None:
+                    full_config['trialResultDownloadable'] = trial_mode.get(
+                        'trialResultDownloadable')
 
             kwargs['config'] = full_config
             _sync_config_aliases(kwargs['config'])
