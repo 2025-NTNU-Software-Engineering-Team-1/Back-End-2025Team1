@@ -96,6 +96,8 @@ def view_problem_list(
         'type': p.problem_type,
         'quota': p.quota,
         'submitCount': Problem(p.problem_id).submit_count(user),
+        'trialMode': (p.config or {}).get('trialMode', False),
+        'aiVTuber': (p.config or {}).get('aiVTuber', False),
     } for p in data]
     return HTTPResponse('Success.', data=data)
 
@@ -776,6 +778,10 @@ def get_checksum(token: str, problem_id: int):
     if not problem:
         return HTTPError(f'{problem} not found', 404)
     submission_mode = getattr(problem.test_case, 'submission_mode', 0) or 0
+    # Also check config.acceptedFormat for zip mode (frontend uses this)
+    config = problem.config or {}
+    if config.get('acceptedFormat') == 'zip':
+        submission_mode = 1
     meta = json.dumps({
         'tasks':
         [json.loads(task.to_json()) for task in problem.test_case.tasks],
@@ -1067,6 +1073,9 @@ def get_meta(token: str, problem_id: int):
         return HTTPError(f'{problem} not found', 404)
     submission_mode = getattr(problem.test_case, 'submission_mode', 0) or 0
     config_payload, pipeline_payload = _build_config_and_pipeline(problem)
+    # Also check config.acceptedFormat for zip mode (frontend uses this)
+    if config_payload.get('acceptedFormat') == 'zip':
+        submission_mode = 1
     meta = {
         'tasks':
         [json.loads(task.to_json()) for task in problem.test_case.tasks],

@@ -205,7 +205,12 @@ class BaseSubmission(abc.ABC):
 
     @property
     def is_zip_mode(self) -> bool:
-        return self.submission_mode == 1
+        # Check both test_case.submission_mode and config.acceptedFormat
+        # to ensure consistency between frontend and backend
+        if self.submission_mode == 1:
+            return True
+        config = getattr(self.problem, 'config', {}) or {}
+        return config.get('acceptedFormat') == 'zip'
 
     @property
     def execution_mode(self) -> str:
