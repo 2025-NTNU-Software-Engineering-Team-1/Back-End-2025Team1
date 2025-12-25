@@ -30,7 +30,16 @@ def setup_security(app):
             return
 
         # Allow requests with valid sandbox token (internal service calls)
+        # Check query string first, then JSON body
         token = request.args.get('token')
+        if not token:
+            # Try to get token from JSON body (for PUT/POST requests)
+            try:
+                json_data = request.get_json(silent=True)
+                if json_data and isinstance(json_data, dict):
+                    token = json_data.get('token')
+            except Exception:
+                pass
         if token:
             from mongo import sandbox
             if sandbox.find_by_token(token) is not None:
