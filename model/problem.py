@@ -1508,6 +1508,35 @@ def get_static_analysis_options():
         return HTTPError(str(e), 400)
 
 
+@problem_api.get('/syntax-options')
+def get_syntax_options():
+    """
+    Return categorized syntax options for static analysis.
+
+    Returns Python (130+) and C/C++ (66+) syntax types with:
+    - common: Frequently used types for UI buttons
+    - all: Complete list for validation
+    - categories: Grouped by functionality
+
+    Response format:
+    {
+        "python": { "common": [...], "all": [...], "categories": {...} },
+        "cpp": { "common": [...], "all": [...], "categories": {...} }
+    }
+    """
+    try:
+        from model.utils.syntax_options import (get_python_syntax_options,
+                                                get_cpp_syntax_options)
+
+        return HTTPResponse('Success.',
+                            data={
+                                'python': get_python_syntax_options(),
+                                'cpp': get_cpp_syntax_options()
+                            })
+    except Exception as e:
+        return HTTPError(str(e), 400)
+
+
 @problem_api.get("/<int:problem_id>/public-testcases")
 @login_required
 def get_public_testcases(user, problem_id: int):

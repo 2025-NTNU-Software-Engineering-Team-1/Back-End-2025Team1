@@ -488,7 +488,7 @@ class CaseResult(EmbeddedDocument):
     exec_time = IntField(required=True, db_field='execTime')
     memory_usage = IntField(required=True, db_field='memoryUsage')
     output = ZipField(
-        required=True,
+        required=False,
         null=True,
         max_size=11**9,
     )
@@ -546,6 +546,8 @@ class BaseSubmissionDocument(Document):
     tasks = EmbeddedDocumentListField(TaskResult, default=list)
     exec_time = IntField(default=-1, db_field='runTime')
     memory_usage = IntField(default=-1, db_field='memoryUsage')
+    output_fields_initialized = BooleanField(
+        db_field='outputFieldsInitialized', default=False)
     code = ZipField(null=True, max_size=10**7)
     code_minio_path = StringField(
         null=True,

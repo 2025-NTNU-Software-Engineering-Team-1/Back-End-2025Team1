@@ -3,6 +3,7 @@ import zipfile
 import pytest
 from mongo import *
 from tests.base_tester import BaseTester, random_string
+from tests.utils import problem_result
 
 
 @pytest.fixture(scope='function')
@@ -334,3 +335,65 @@ class TestTrialSubmissionAPI(BaseTester):
                         content_type='multipart/form-data')
         assert rv.status_code == 400
         assert 'valid zip' in rv.get_json()['message'].lower()
+
+    def test_trial_send_failure_marks_je(self, setup_problem_with_testcases,
+                                         monkeypatch):
+        problem, _ = setup_problem_with_testcases
+        problem.obj.public_cases_zip_minio_path = 'test/public.zip'
+        problem.obj.save()
+
+        ts = TrialSubmission.add(problem_id=problem.problem_id,
+                                 username='student',
+                                 lang=2,
+                                 use_default_case=True)
+
+        code_buffer = io.BytesIO()
+        with zipfile.ZipFile(code_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr('main.py', 'print("hello")')
+        code_buffer.seek(0)
+
+        ts.update(code_minio_path=ts._put_code(code_buffer),
+                  use_default_case=True)
+        ts.reload()
+
+        monkeypatch.setattr(TrialSubmission, "target_sandbox",
+                            lambda self: None)
+
+        with pytest.raises(ValueError):
+            ts.send()
+
+        ts.reload()
+        assert ts.status == ts.status2code['JE']
+        output = ts.get_single_output(0, 0)
+        assert 'No available sandbox' in output['stderr']
+
+    def test_rejudge_only_updates_status_on_success(
+        self,
+        app,
+        setup_problem_with_testcases,
+        monkeypatch,
+    ):
+        problem, _ = setup_problem_with_testcases
+        ts = TrialSubmission.add(problem_id=problem.problem_id,
+                                 username='student',
+                                 lang=2,
+                                 use_default_case=True)
+
+        monkeypatch.setattr(TrialSubmission, "finish_judging",
+                            lambda self: None)
+        with app.app_context():
+            ts.process_result(problem_result(problem.problem_id))
+
+        ts.reload()
+        old_status = ts.status
+        old_task_count = len(ts.tasks)
+
+        monkeypatch.setattr(TrialSubmission, "send", lambda self: False)
+
+        with app.app_context():
+            result = ts.rejudge()
+        assert result is False
+
+        ts.reload()
+        assert ts.status == old_status
+        assert len(ts.tasks) == old_task_count

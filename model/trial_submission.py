@@ -150,7 +150,7 @@ def upload_trial_files(user, trial_id: str):
             f"Error retrieving owner for trial_id {trial_id}: {str(e)}")
 
     is_owner = (req_user.username == ts_owner_username)
-    is_staff = req_user.role <= 1  # 0 admin, 1 teacher
+    is_staff = req_user.role in (Role.ADMIN, Role.TEACHER, Role.TA)
 
     if not (is_owner or is_staff):
         current_app.logger.warning(
@@ -247,9 +247,17 @@ def upload_trial_files(user, trial_id: str):
                                     io.BytesIO(custom_bytes),
                                     length=len(custom_bytes))
         except Exception as e:
-            # 系統層級錯誤
+            # 系統層級錯誤 - 回滾：刪除已上傳的 code
             current_app.logger.error(
                 f"MinIO upload failed for trial {trial_id} (custom): {str(e)}")
+            try:
+                minio.client.remove_object(minio.bucket, code_path)
+                current_app.logger.info(
+                    f"Rolled back code upload for trial {trial_id}")
+            except Exception as rollback_err:
+                current_app.logger.warning(
+                    f"Failed to rollback code upload for trial {trial_id}: {rollback_err}"
+                )
             return HTTPError(f"Failed to upload custom testcases: {e}", 500)
 
     # Update submission document
@@ -261,6 +269,15 @@ def upload_trial_files(user, trial_id: str):
             # If custom provided, ensure flag false
             if hasattr(ts.obj, 'use_default_case'):
                 ts.obj.use_default_case = False
+        # Mark as judging now that files are uploaded
+        ts.obj.status = -1
+        ts.obj.last_send = datetime.now()
+        ts.obj.score = -1
+        ts.obj.exec_time = -1
+        ts.obj.memory_usage = -1
+        ts.obj.tasks = []
+        if hasattr(ts.obj, 'output_fields_initialized'):
+            ts.obj.output_fields_initialized = False
         ts.obj.save()
     except Exception as e:
         # 資料庫寫入失敗，嚴重錯誤
@@ -319,6 +336,44 @@ def get_trial_record(user, trial_id: str):
     except Exception as e:
         current_app.logger.error(f"Error retrieval trial info: {e}")
         return HTTPError("Internal Server Error", 500)
+
+
+@trial_submission_api.route("/<trial_id>/output/<int:task_no>/<int:case_no>",
+                            methods=["GET"])
+@login_required
+def get_trial_output(user, trial_id: str, task_no: int, case_no: int):
+    """
+    Get stdout/stderr output for a specific case of a trial submission.
+    Used for displaying CE (Compile Error) messages.
+    """
+    try:
+        ts = TrialSubmission(trial_id)
+    except engine.DoesNotExist:
+        return HTTPError("Trial submission not found.", 404)
+
+    # Permission check
+    req_user = User(user.username)
+    ts_owner_username = getattr(ts.obj, 'user', None)
+    try:
+        if ts_owner_username and hasattr(ts_owner_username, 'username'):
+            ts_owner_username = ts_owner_username.username
+    except Exception:
+        pass
+
+    is_owner = (req_user.username == ts_owner_username)
+    is_staff = req_user.role in (Role.ADMIN, Role.TEACHER, Role.TA)
+
+    if not (is_owner or is_staff):
+        return HTTPError("Forbidden.", 403)
+
+    try:
+        output = ts.get_single_output(task_no, case_no)
+    except FileNotFoundError as e:
+        return HTTPError(str(e), 400)
+    except AttributeError as e:
+        return HTTPError(str(e), 102)
+
+    return HTTPResponse('ok', data=output)
 
 
 @trial_submission_api.route("/<trial_id>/download/task/<int:task_index>",
@@ -663,6 +718,10 @@ def rejudge_trial(user, trial_id: str):
     Uses the same permission check as regular submission rejudge:
     checks if user has GRADE permission in the problem's courses.
     """
+    from datetime import datetime
+    from mongo.submission import JudgeQueueFullError
+    from mongoengine import ValidationError
+
     # Load trial submission
     try:
         ts = TrialSubmission(trial_id)
@@ -672,32 +731,61 @@ def rejudge_trial(user, trial_id: str):
         current_app.logger.error(f"Error loading trial submission: {e}")
         return HTTPError("Invalid trial submission ID.", 400)
 
+    # Check if submission is currently being judged (rate limit protection)
+    # Same logic as normal submission - check status FIRST, then permission
+    if ts.status == -2:
+        pending_since = getattr(ts, 'last_send', None) or getattr(
+            ts, 'timestamp', None)
+        if pending_since is None:
+            return HTTPError(
+                'Trial submission is queued and not yet judged. Please wait.',
+                403)
+        seconds_since_pending = (datetime.now() -
+                                 pending_since).total_seconds()
+        if seconds_since_pending < 300:
+            remaining_seconds = 300 - seconds_since_pending
+            remaining_minutes = (remaining_seconds // 60) + 1
+            return HTTPError(
+                f'Trial submission is queued and not yet judged. '
+                f'Please wait approximately {remaining_minutes} minute(s) before trying again.',
+                403)
+        current_app.logger.warning(
+            f"Allowing rejudge for stale pending trial submission {trial_id} "
+            f"({int(seconds_since_pending)}s since pending)")
+    if ts.status == -1:
+        time_since_send = (datetime.now() - ts.last_send).seconds
+        if time_since_send < 300:  # Same 5 minute rate limit as normal submission
+            remaining_seconds = 300 - time_since_send
+            remaining_minutes = (remaining_seconds // 60) + 1
+            return HTTPError(
+                f'Rejudge rate limit: Trial submission is currently being judged. '
+                f'Please wait approximately {remaining_minutes} minute(s) before trying again.',
+                403)
+
     # Check permission using the same logic as regular submission
     if not ts.permission(user, TrialSubmission.Permission.REJUDGE):
         return HTTPError("forbidden.", 403)
 
-    # Check if already pending or recently sent (same as regular submission)
-    if ts.status == -2:
-        return HTTPError(f"{ts} haven't be judged", 403)
-    if ts.status == -1 and hasattr(ts, 'last_send'):
-        from datetime import datetime
-        if (datetime.now() - ts.last_send).seconds < 60:
-            return HTTPError(f"{ts} haven't be judged", 403)
-
     # Perform rejudge
     try:
         success = ts.rejudge()
-        if success is False:
-            return HTTPError("Some error occurred, please contact the admin",
-                             500)
-        current_app.logger.info(f"Rejudged trial submission {trial_id}")
-        return HTTPResponse("", data={"ok": True})
     except ValueError as e:
         return HTTPError(str(e), 400)
+    except JudgeQueueFullError as e:
+        return HTTPResponse(str(e), 202, data={'ok': False})
+    except ValidationError as e:
+        return HTTPError(str(e), 422, data=e.to_dict())
     except Exception as e:
         current_app.logger.error(
             f"Error rejudging trial submission {trial_id}: {e}")
         return HTTPError(f"Rejudge failed: {e}", 500)
+
+    # Check explicit False (not None or other falsy values)
+    if success is False:
+        return HTTPError("Some error occurred, please contact the admin", 500)
+
+    current_app.logger.info(f"Rejudged trial submission {trial_id}")
+    return HTTPResponse("", data={"ok": True})
 
 
 @trial_submission_api.route("/<trial_id>", methods=["DELETE"])
@@ -844,11 +932,23 @@ def rejudge_all_trials(user, problem_id: int):
                 ts = TrialSubmission(sub_doc.id)
                 # Skip if pending or recently sent (same logic as single rejudge)
                 if ts.status == -2:
-                    skipped_count += 1
-                    continue
+                    from datetime import datetime
+                    pending_since = getattr(ts, 'last_send', None) or getattr(
+                        ts, 'timestamp', None)
+                    if pending_since is None:
+                        skipped_count += 1
+                        continue
+                    seconds_since_pending = (datetime.now() -
+                                             pending_since).total_seconds()
+                    if seconds_since_pending < 300:
+                        skipped_count += 1
+                        continue
+                    current_app.logger.warning(
+                        f"Allowing rejudge for stale pending trial submission {ts.id} "
+                        f"({int(seconds_since_pending)}s since pending)")
                 if ts.status == -1 and hasattr(ts, 'last_send'):
                     from datetime import datetime
-                    if (datetime.now() - ts.last_send).seconds < 60:
+                    if (datetime.now() - ts.last_send).seconds < 300:
                         skipped_count += 1
                         continue
 

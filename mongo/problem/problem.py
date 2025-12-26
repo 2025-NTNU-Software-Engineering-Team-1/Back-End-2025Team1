@@ -347,8 +347,73 @@ class Problem(MongoBase, engine=engine.Problem):
                         'teacherLang') is None:
                     current_asset_paths['teacherLang'] = inferred_teacher_lang
                 current_config['assetPaths'] = current_asset_paths
+
+            # Handle public_testdata.zip for Trial Mode
+            trial_mode_files_uploaded = False
+            public_testdata_file = files_data.get('public_testdata.zip')
+            if public_testdata_file:
+                trial_mode_files_uploaded = True
+                # Validate zip file
+                try:
+                    from zipfile import ZipFile
+                    public_testdata_file.seek(0)
+                    ZipFile(public_testdata_file).testzip()
+                except Exception as e:
+                    raise BadZipFile(
+                        f'Invalid public_testdata.zip file: {str(e)}')
+
+                public_testdata_file.seek(0)
+                file_data = public_testdata_file.read()
+                file_size = len(file_data)
+
+                path = f'problem/{self.problem_id}/public_testdata/public_testdata.zip'
+                minio_client.client.put_object(
+                    minio_client.bucket,
+                    path,
+                    BytesIO(file_data),
+                    file_size,
+                    part_size=5 * 1024 * 1024,
+                )
+                self.update(public_cases_zip_minio_path=path)
+                # Also update assetPaths for frontend detection
+                if 'assetPaths' not in current_config:
+                    current_config['assetPaths'] = {}
+                current_config['assetPaths']['public_testdata'] = path
+
+            # Handle AC code files for Trial Mode (ac_code.c, ac_code.cpp, ac_code.py)
+            ac_code_lang_map = {
+                'ac_code.c': 0,
+                'ac_code.cpp': 1,
+                'ac_code.py': 2,
+            }
+            for ac_filename, lang_code in ac_code_lang_map.items():
+                ac_file = files_data.get(ac_filename)
+                if ac_file:
+                    trial_mode_files_uploaded = True
+                    ac_file.seek(0)
+                    file_data = ac_file.read()
+                    file_size = len(file_data)
+
+                    path = f'problem/{self.problem_id}/ac_code/{ac_filename}'
+                    minio_client.client.put_object(
+                        minio_client.bucket,
+                        path,
+                        BytesIO(file_data),
+                        file_size,
+                        part_size=5 * 1024 * 1024,
+                    )
+                    self.update(
+                        ac_code_minio_path=path,
+                        ac_code_language=lang_code,
+                    )
+                    # Also update assetPaths for frontend detection
+                    if 'assetPaths' not in current_config:
+                        current_config['assetPaths'] = {}
+                    current_config['assetPaths']['ac_code'] = path
+                    break  # Only one AC code file should be uploaded
+
             kwargs_for_edit = {}
-            if meta_config or new_asset_paths:
+            if meta_config or new_asset_paths or trial_mode_files_uploaded:
                 kwargs_for_edit['config'] = current_config
             if pipeline_payload:
                 kwargs_for_edit['pipeline'] = pipeline_payload

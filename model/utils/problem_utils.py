@@ -2,7 +2,7 @@ import copy
 import os
 import json
 import time
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 from mongo.problem import Problem
 
 
@@ -101,3 +101,64 @@ def derive_build_strategy(problem: Problem, accepted_format: str,
     if is_zip:
         return 'makeNormal'
     return 'compile'
+
+
+def validate_static_analysis_syntax(
+        config: Dict,
+        allowed_language: int,
+        auto_filter: bool = True) -> Tuple[List[str], Dict]:
+    """
+    Validate and optionally filter static analysis syntax values.
+
+    Args:
+        config: The staticAnalysis config dict
+        allowed_language: Bitmask (1=C, 2=C++, 4=Python)
+        auto_filter: If True, filter out invalid values; if False, return errors
+
+    Returns:
+        Tuple of (error_messages, filtered_config)
+        - error_messages: List of validation error strings (empty if auto_filter)
+        - filtered_config: Config with invalid syntax values removed
+    """
+    from .syntax_options import filter_invalid_syntax, validate_syntax_values
+
+    errors = []
+    lib_cfg = config.get('libraryRestrictions', {})
+
+    if not lib_cfg or not lib_cfg.get('enabled'):
+        return errors, config
+
+    # Determine which languages to validate against
+    languages = []
+    if allowed_language & 4:  # Python
+        languages.append('python')
+    if allowed_language & 3:  # C or C++
+        languages.append('cpp')
+
+    if not languages:
+        languages = ['python', 'cpp']  # Default to both
+
+    for mode in ('whitelist', 'blacklist'):
+        mode_cfg = lib_cfg.get(mode, {})
+        syntax_list = mode_cfg.get('syntax', [])
+
+        if not syntax_list:
+            continue
+
+        if auto_filter:
+            # Filter out invalid values for each language
+            # Keep values that are valid in ANY of the allowed languages
+            valid_for_any = set()
+            for lang in languages:
+                valid_for_any.update(filter_invalid_syntax(syntax_list, lang))
+            mode_cfg['syntax'] = list(valid_for_any)
+        else:
+            # Report errors for invalid values
+            for lang in languages:
+                invalid = validate_syntax_values(syntax_list, lang)
+                if invalid:
+                    errors.append(
+                        f"Invalid {mode} syntax for {lang}: {', '.join(invalid)}"
+                    )
+
+    return errors, config

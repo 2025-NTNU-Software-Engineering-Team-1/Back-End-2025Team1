@@ -488,7 +488,13 @@ def get_static_analysis(user, submission: Submission):
     report_url = None
     if submission.sa_report_path:
         try:
-            report_url = MinioClient().presign_get(submission.sa_report_path)
+            minio_client = MinioClient()
+            report_url = minio_client.client.get_presigned_url(
+                'GET',
+                minio_client.bucket,
+                submission.sa_report_path,
+                expires=timedelta(minutes=30),
+            )
         except Exception:
             current_app.logger.exception("Failed to presign SA report")
     return HTTPResponse('', data={"report": report, "reportUrl": report_url})
