@@ -577,6 +577,7 @@ class Problem(MongoBase, engine=engine.Problem):
                 sample_output=description_dict.get('sampleOutput', []),
             )
         problem = cls.engine(**problem_args).save()
+
         programming_problem_args = drop_none({
             'test_case':
             test_case_info,

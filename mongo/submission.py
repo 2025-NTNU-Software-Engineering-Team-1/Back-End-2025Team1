@@ -199,12 +199,15 @@ class BaseSubmission(abc.ABC):
         return lang2ext[self.language]
 
     @property
-    def submission_mode(self) -> int:
-        return getattr(self.problem.test_case, 'submission_mode', 0) or 0
+    def accepted_format(self) -> str:
+        """Get accepted format from problem config (single source of truth)."""
+        config = getattr(self.problem, 'config', {}) or {}
+        return config.get('acceptedFormat', 'code')
 
     @property
     def is_zip_mode(self) -> bool:
-        return self.submission_mode == 1
+        """Check if problem accepts zip submissions."""
+        return self.accepted_format == 'zip'
 
     @property
     def execution_mode(self) -> str:

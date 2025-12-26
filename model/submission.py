@@ -864,10 +864,19 @@ def comment_submission(user, submission: Submission, comment):
 @login_required
 @Request.doc('submission', Submission)
 def rejudge(user, submission: Submission):
-    if submission.status == -2 or (submission.status == -1 and
-                                   (datetime.now() -
-                                    submission.last_send).seconds < 300):
-        return HTTPError(f'{submission} haven\'t be judged', 403)
+    # Check if submission is currently being judged (rate limit protection)
+    if submission.status == -2:
+        return HTTPError(
+            'Submission is queued and not yet judged. Please wait.', 403)
+    if submission.status == -1:
+        time_since_send = (datetime.now() - submission.last_send).seconds
+        if time_since_send < 300:
+            remaining_seconds = 300 - time_since_send
+            remaining_minutes = (remaining_seconds // 60) + 1
+            return HTTPError(
+                f'Rejudge rate limit: Submission is currently being judged. '
+                f'Please wait approximately {remaining_minutes} minute(s) before trying again.',
+                403)
     if not submission.permission(user, Submission.Permission.REJUDGE):
         return HTTPError('forbidden.', 403)
     try:

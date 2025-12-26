@@ -1071,15 +1071,13 @@ def get_meta(token: str, problem_id: int):
     problem = Problem(problem_id)
     if not problem:
         return HTTPError(f'{problem} not found', 404)
-    submission_mode = getattr(problem.test_case, 'submission_mode', 0) or 0
     config_payload, pipeline_payload = _build_config_and_pipeline(problem)
-    # Also check config.acceptedFormat for zip mode (frontend uses this)
-    if config_payload.get('acceptedFormat') == 'zip':
-        submission_mode = 1
+    # Use acceptedFormat as single source of truth
+    accepted_format = config_payload.get('acceptedFormat', 'code')
     meta = {
         'tasks':
         [json.loads(task.to_json()) for task in problem.test_case.tasks],
-        'submissionMode': submission_mode,
+        'acceptedFormat': accepted_format,
     }
     execution_mode = pipeline_payload.get('executionMode', 'general')
     custom_checker = pipeline_payload.get(
@@ -1106,7 +1104,7 @@ def get_meta(token: str, problem_id: int):
         'buildStrategy':
         _derive_build_strategy(
             problem=problem,
-            submission_mode=submission_mode,
+            accepted_format=accepted_format,
             execution_mode=execution_mode,
         ),
         'resourceData':

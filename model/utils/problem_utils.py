@@ -88,16 +88,16 @@ def build_static_analysis_rules(problem: Problem):
     }
 
 
-def derive_build_strategy(problem: Problem, submission_mode: int,
+def derive_build_strategy(problem: Problem, accepted_format: str,
                           execution_mode: str) -> str:
-    """Decide build strategy based on submission/testcase mode and executionMode."""
+    """Decide build strategy based on acceptedFormat and executionMode."""
     exec_mode = execution_mode or 'general'
-    is_zip = submission_mode == 1
+    is_zip = accepted_format == 'zip'
     if exec_mode == 'functionOnly':
         return 'makeFunctionOnly'
     if exec_mode == 'interactive':
         return 'makeInteractive'
-    # general (legacy zip -> makeNormal)
+    # general (zip -> makeNormal)
     if is_zip:
         return 'makeNormal'
     return 'compile'
