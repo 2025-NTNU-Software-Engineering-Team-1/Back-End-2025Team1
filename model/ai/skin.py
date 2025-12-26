@@ -35,7 +35,7 @@ def list_skins(user):
 
         result = [{
             'skin_id': 'builtin_hiyori',
-            'name': 'Hiyori (預設)',
+            'name': 'Hiyori (Default)',
             'thumbnail_path': '/live2d/hiyori_avatar.png',
             'is_builtin': True,
             'is_public': True,
@@ -220,7 +220,7 @@ def get_skin(user, skin_id):
             return HTTPResponse(
                 data={
                     'skin_id': 'builtin_hiyori',
-                    'name': 'Hiyori (預設)',
+                    'name': 'Hiyori (Default)',
                     'model_path': '/live2d/hiyori_pro_zh/runtime/',
                     'model_json_name': 'hiyori_pro_t11.model3.json',
                     'thumbnail_path': '/live2d/hiyori_avatar.png',
@@ -270,8 +270,15 @@ def update_skin(user, skin_id):
         if not skin:
             return HTTPError('Skin not found', 404)
 
+        current_app.logger.info(
+            f"[Skin Update] Permission check: user={user.username}, role={user.role}, owner={skin.uploaded_by.username if skin.uploaded_by else 'None'}"
+        )
+
         # Only uploader, teachers, or admins can modify
+        # Role 0=ADMIN, 1=TEACHER, 2=STUDENT
         if user.role > 1 and skin.uploaded_by.username != user.username:
+            current_app.logger.warning(
+                f"[Skin Update] Permission denied for {user.username}")
             return HTTPError('Permission denied', 403)
 
         # Update name if provided
@@ -366,6 +373,10 @@ def update_skin_emotions(user, skin_id, mappings):
         skin = AiVtuberSkin.get_by_id(skin_id)
         if not skin:
             return HTTPError('Skin not found', 404)
+
+        current_app.logger.info(
+            f"[Skin Emotions] Permission check: user={user.username}, role={user.role}, owner={skin.uploaded_by.username if skin.uploaded_by else 'None'}"
+        )
 
         # Only uploader, teachers, or admins can modify
         if user.role > 1 and skin.uploaded_by.username != user.username:
@@ -518,7 +529,7 @@ def set_user_preference(user, skin_id):
 def get_storage_stats(user):
     """Get storage statistics (admin only)."""
     try:
-        if user.role != User.Role.ADMIN:
+        if user.role != 0:  # 0 is ADMIN
             return HTTPError('Permission denied', 403)
 
         stats = AiVtuberSkin.get_storage_stats()

@@ -172,9 +172,10 @@ class ForgeClient(Protocol):
 
 
 @pytest.fixture
-def forge_client(client: FlaskClient):
+def forge_client(app: Flask):
 
     def seted_cookie(username: str) -> FlaskClient:
+        client = app.test_client()
         secret = User(username).secret
         if isinstance(secret, bytes):
             secret = secret.decode()

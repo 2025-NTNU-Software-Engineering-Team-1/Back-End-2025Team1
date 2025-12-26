@@ -776,6 +776,13 @@ class BaseSubmission(abc.ABC):
                     content_type='text/plain',
                 )
                 sa_updates['sa_report_path'] = object_name
+        else:
+            sa_updates.update(
+                sa_status=None,
+                sa_message=None,
+                sa_report=None,
+                sa_report_path=None,
+            )
         if checker:
             messages = checker.get('messages') or []
             summary_parts = []
