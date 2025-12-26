@@ -67,8 +67,8 @@ class SubmissionTester:
 def zip_problem(problem_ids):
     pid = problem_ids('teacher', 1, True)[0]
     prob = Problem(pid)
-    prob.update(test_case__submission_mode=1)
-    prob.reload('test_case')
+    prob.update(config__acceptedFormat='zip')
+    prob.reload('config')
     return pid
 
 
@@ -711,8 +711,8 @@ class TestCreateSubmission(SubmissionTester):
     ):
         pid = problem_ids('teacher', 1, True)[0]
         prob = Problem(pid)
-        prob.update(test_case__submission_mode=1)
-        prob.reload('test_case')
+        prob.update(config__acceptedFormat='zip')
+        prob.reload('config')
         prob.update(config__executionMode='functionOnly')
         client = forge_client('student')
         rv, rv_json, rv_data = BaseTester.request(

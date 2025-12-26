@@ -232,6 +232,9 @@ class TestCopyCat(BaseTester):
                                      'course': course.course_name,
                                      'problemId': pid,
                                      'studentNicknames': student_dict,
+                                 },
+                                 environ_base={
+                                     'HTTP_ORIGIN': 'http://localhost:3000',
                                  })
         assert rv.status_code == 200
         while Problem(pid).moss_status != 2:
