@@ -46,3 +46,13 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = [
+    # Ignore mongoengine's uuidRepresentation warning
+    "ignore:No uuidRepresentation is specified:DeprecationWarning:mongoengine",
+    # Ignore mongoengine's json_options warning
+    "ignore:No 'json_options' are specified:DeprecationWarning:mongoengine",
+    # Ignore mongoengine's aggregate() signature warning
+    "ignore:Calling .aggregate\\(\\) with un unpacked list:DeprecationWarning:mongoengine",
+    # Ignore mongomock's datetime.utcnow() warning
+    "ignore:datetime.datetime.utcnow\\(\\) is deprecated:DeprecationWarning:mongomock",
+]
