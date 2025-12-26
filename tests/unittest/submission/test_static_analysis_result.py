@@ -48,7 +48,7 @@ def _dummy_tasks(problem):
     return tasks
 
 
-def test_sa_skip_uploads_report(app):
+def test_sa_skip_uploads_report(app, setup_minio):
     with app.app_context():
         user = utils.user.create_user()
         problem = _simple_problem()
@@ -76,7 +76,7 @@ def test_sa_skip_uploads_report(app):
         assert obj is not None
 
 
-def test_sa_report_path_preserved(app):
+def test_sa_report_path_preserved(app, setup_minio):
     with app.app_context():
         user = utils.user.create_user()
         problem = _simple_problem()
@@ -97,7 +97,7 @@ def test_sa_report_path_preserved(app):
         assert submission.sa_report_path == "custom/report.txt"
 
 
-def test_sa_disabled_clears_legacy_status(app):
+def test_sa_disabled_clears_legacy_status(app, setup_minio):
     """When SA is disabled (static_analysis=None), old SA values should be cleared."""
     with app.app_context():
         user = utils.user.create_user()
@@ -132,7 +132,7 @@ def test_sa_disabled_clears_legacy_status(app):
         assert submission.sa_report is None
 
 
-def test_checker_payload_summary_and_artifact_upload(app):
+def test_checker_payload_summary_and_artifact_upload(app, setup_minio):
     with app.app_context():
         user = utils.user.create_user()
         problem = _simple_problem()
