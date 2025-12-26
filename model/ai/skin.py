@@ -7,7 +7,7 @@ import io
 from flask import Blueprint, request, send_file, current_app
 from ulid import ULID
 
-from mongo import User
+from mongo import User, Role
 from mongo.ai import (
     AiVtuberSkin,
     UserSkinPreference,
