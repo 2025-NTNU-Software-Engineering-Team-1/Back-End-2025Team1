@@ -294,6 +294,7 @@ class TestCopyCat(BaseTester):
 
         monkeypatch.setattr(mosspy, 'download_report',
                             mock_moss_download_report)
+        monkeypatch.setenv('MOSS_USERID', '123')
         from model.copycat import get_report_task
         get_report_task(user, pid, S_NAMES)
         problem = Problem(pid)
@@ -315,6 +316,7 @@ class TestCopyCat(BaseTester):
             return 'invalid://example.com/'
 
         monkeypatch.setattr(mosspy.Moss, 'send', mock_moss_send)
+        monkeypatch.setenv('MOSS_USERID', '123')
         from model.copycat import get_report_task
         get_report_task(user, pid, S_NAMES)
         problem = Problem(pid)
