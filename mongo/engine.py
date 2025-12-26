@@ -269,6 +269,15 @@ class Course(Document):
     posts = ListField(ReferenceField('Post'), default=list)
     student_scores = DictField(db_field='studentScores')
 
+    # Course code for joining by code
+    course_code = StringField(
+        max_length=16,
+        unique=True,
+        sparse=True,
+        db_field='courseCode',
+        null=True,
+    )
+
     # for AI_vt
     is_ai_vt_enabled = BooleanField(db_field='isAIEnabled', default=True)
     ai_model = ReferenceField('AiModel',

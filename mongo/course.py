@@ -3,6 +3,8 @@ from .user import *
 from .utils import *
 import re
 import enum
+import secrets
+import string
 from typing import Dict, List, Optional, Any
 from .base import MongoBase
 from datetime import datetime
@@ -207,6 +209,62 @@ class Course(MongoBase, engine=engine.Course):
 
         return scoreboard
 
+    @staticmethod
+    def generate_course_code(length: int = 8) -> str:
+        """
+        Generate a unique random course code.
+        """
+        chars = string.ascii_uppercase + string.digits
+        while True:
+            code = ''.join(secrets.choice(chars) for _ in range(length))
+            # Check if code already exists
+            if not engine.Course.objects(course_code=code).first():
+                return code
+
+    @classmethod
+    def get_by_code(cls, code: str) -> Optional['Course']:
+        """
+        Get a course by its course code.
+        Returns None if not found.
+        """
+        try:
+            course_doc = engine.Course.objects(course_code=code).first()
+            if course_doc:
+                return cls(course_doc)
+            return None
+        except Exception:
+            return None
+
+    def join_by_code(self, user) -> bool:
+        """
+        Join course as a student using course code.
+        Returns True if successful, raises exception otherwise.
+        """
+        if not self:
+            raise engine.DoesNotExist('Course')
+
+        user_wrapper = User(user) if isinstance(user, str) else user
+        if not user_wrapper:
+            raise engine.DoesNotExist('User')
+
+        # Check if user is already in the course
+        if self.id in [c.id for c in user_wrapper.obj.courses]:
+            raise ValueError('User is already in this course')
+
+        # Check if user is teacher or TA (they cannot join via code)
+        if user_wrapper.obj == self.teacher:
+            raise PermissionError(
+                'Teacher cannot join their own course via code')
+        if user_wrapper.obj in self.tas:
+            raise PermissionError('TA cannot join via code')
+
+        # Add user to course as student
+        username = user_wrapper.username
+        self.student_nicknames[username] = username
+        self.add_user(user_wrapper.obj)
+        self.save()
+        return True
+
     @classmethod
     def add_course(cls, course, teacher):
         if re.match(r'^[a-zA-Z0-9._\- ]+$', course) is None:
@@ -223,6 +281,7 @@ class Course(MongoBase, engine=engine.Course):
         co = cls.engine(
             course_name=course,
             teacher=teacher.obj,
+            course_code=cls.generate_course_code(),
         ).save()
         cls(co).add_user(teacher.obj)
         return True

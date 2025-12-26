@@ -76,6 +76,32 @@ def modify_courses(user, course, new_course, teacher):
     return HTTPResponse('Success.')
 
 
+@course_api.route('/join', methods=['POST'])
+@login_required
+@Request.json('course_code')
+def join_course_by_code(user, course_code):
+    """
+    Join a course by course code (as student).
+    """
+    if not course_code:
+        return HTTPError('Course code is required.', 400)
+
+    course = Course.get_by_code(course_code)
+    if not course:
+        return HTTPError('Invalid course code.', 404)
+
+    try:
+        course.join_by_code(user)
+        return HTTPResponse('Successfully joined course.',
+                            data={'course': course.course_name})
+    except ValueError as e:
+        return HTTPError(str(e), 400)
+    except PermissionError as e:
+        return HTTPError(str(e), 403)
+    except engine.DoesNotExist as e:
+        return HTTPError(f'{e} not found.', 404)
+
+
 @course_api.route('/<course_name>', methods=['GET', 'PUT'])
 @login_required(pat_scope=['read:courses'])
 def get_course(user, course_name):
@@ -123,6 +149,114 @@ def get_course(user, course_name):
         )
     else:
         return modify_course()
+
+
+@course_api.route('/<course_name>/member/<username>/role', methods=['PUT'])
+@login_required
+@Request.json('role')
+def change_member_role(user, course_name, username, role):
+    """
+    Change a member's role within the course.
+    Only teachers and admins can do this (not TAs).
+    
+    Roles in course context:
+    - 'student': Regular student
+    - 'ta': Teaching Assistant
+    """
+    course = Course(course_name)
+
+    if not course:
+        return HTTPError('Course not found.', 404)
+
+    # Only course teacher or admin can change roles (not TAs)
+    is_course_teacher = (course.obj.teacher.pk == user.pk)
+    is_admin = (user.role == Role.ADMIN)
+
+    if not (is_course_teacher or is_admin):
+        return HTTPError(
+            'Only course teacher or admin can change member roles.', 403)
+
+    target_user = User(username)
+    if not target_user:
+        return HTTPError('User not found.', 404)
+
+    # Cannot change the course teacher's role
+    if target_user.obj == course.teacher:
+        return HTTPError('Cannot change course teacher role.', 400)
+
+    # Validate role
+    if role not in ['student', 'ta']:
+        return HTTPError('Invalid role. Must be "student" or "ta".', 400)
+
+    # Check if user is in the course
+    is_ta = target_user.obj in course.tas
+    is_student = username in course.student_nicknames
+
+    if not (is_ta or is_student):
+        return HTTPError('User is not a member of this course.', 400)
+
+    # Perform role change
+    if role == 'ta':
+        if is_ta:
+            return HTTPResponse('User is already a TA.')
+        # Move from student to TA
+        if is_student:
+            del course.student_nicknames[username]
+        if target_user.obj not in course.tas:
+            course.tas.append(target_user.obj)
+            course.add_user(target_user.obj)
+    elif role == 'student':
+        if is_student and not is_ta:
+            return HTTPResponse('User is already a student.')
+        # Move from TA to student
+        if is_ta:
+            course.tas = [ta for ta in course.tas if ta != target_user.obj]
+        if username not in course.student_nicknames:
+            course.student_nicknames[username] = username
+            course.add_user(target_user.obj)
+
+    course.save()
+    return HTTPResponse('Role updated successfully.',
+                        data={
+                            'username': username,
+                            'new_role': role
+                        })
+
+
+@course_api.route('/<course_name>/code', methods=['GET', 'POST', 'DELETE'])
+@login_required
+def manage_course_code(user, course_name):
+    """
+    Manage course code for joining.
+    GET: Get current course code
+    POST: Generate a new course code
+    DELETE: Remove course code (disable joining by code)
+    """
+    course = Course(course_name)
+
+    if not course:
+        return HTTPError('Course not found.', 404)
+
+    if not course.permission(user, Course.Permission.MODIFY):
+        return HTTPError('Permission denied.', 403)
+
+    if request.method == 'GET':
+        return HTTPResponse('Success.',
+                            data={'course_code': course.course_code})
+
+    elif request.method == 'POST':
+        # Generate a new course code
+        new_code = Course.generate_course_code()
+        course.course_code = new_code
+        course.save()
+        return HTTPResponse('Course code generated.',
+                            data={'course_code': new_code})
+
+    elif request.method == 'DELETE':
+        # Remove course code
+        course.course_code = None
+        course.save()
+        return HTTPResponse('Course code removed.')
 
 
 @course_api.route('/<course_name>/grade/<student>',
