@@ -13,7 +13,7 @@ class HTTPBaseResponese(tuple):
     ):
         # Import here to avoid circular imports
         from config import FORCE_SECURE_COOKIES
-        
+
         for c in cookies:
             if cookies[c] == None:
                 resp.delete_cookie(c)

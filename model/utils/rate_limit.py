@@ -28,21 +28,18 @@ class RateLimiter:
     
     For production with multiple workers, consider using Redis instead.
     """
-    
+
     def __init__(self):
         self._attempts = {}  # {key: (failure_count, lockout_until)}
         self._lock = Lock()
-        
+
         # Import configuration from centralized config
-        from config import (
-            RATE_LIMIT_ENABLED,
-            RATE_LIMIT_MAX_ATTEMPTS,
-            RATE_LIMIT_LOCKOUT_SECONDS
-        )
+        from config import (RATE_LIMIT_ENABLED, RATE_LIMIT_MAX_ATTEMPTS,
+                            RATE_LIMIT_LOCKOUT_SECONDS)
         self.max_attempts = RATE_LIMIT_MAX_ATTEMPTS
         self.lockout_duration = RATE_LIMIT_LOCKOUT_SECONDS
         self.enabled = RATE_LIMIT_ENABLED
-    
+
     def check(self, key: str) -> tuple:
         """
         Check if the key is rate limited.
@@ -54,47 +51,47 @@ class RateLimiter:
         """
         if not self.enabled:
             return True, 0
-            
+
         with self._lock:
             if key not in self._attempts:
                 return True, 0
-            
+
             failures, lockout_until = self._attempts[key]
-            
+
             if lockout_until is None:
                 return True, 0
-            
+
             now = time.time()
             if now >= lockout_until:
                 # Lockout expired, reset
                 self._attempts[key] = (0, None)
                 return True, 0
-            
+
             # Still locked out
             return False, lockout_until - now
-    
+
     def record_failure(self, key: str) -> None:
         """Record a failed attempt for the key."""
         if not self.enabled:
             return
-            
+
         with self._lock:
             failures, lockout_until = self._attempts.get(key, (0, None))
-            
+
             # If currently locked out, don't increment
             if lockout_until and time.time() < lockout_until:
                 return
-            
+
             failures += 1
-            
+
             if failures >= self.max_attempts:
                 # Start lockout
                 lockout_until = time.time() + self.lockout_duration
             else:
                 lockout_until = None
-            
+
             self._attempts[key] = (failures, lockout_until)
-    
+
     def clear(self, key: str) -> None:
         """Clear attempts for the key (call on successful login)."""
         with self._lock:
