@@ -1,5 +1,27 @@
 from flask import request, abort, current_app, make_response
 from .response import HTTPError
+import re
+
+
+def _is_origin_allowed(origin: str, allowed_patterns: list) -> bool:
+    """
+    Check if the origin matches any of the allowed patterns.
+    Supports wildcards: * matches any subdomain segment.
+    Examples:
+      - "https://example.com" matches exactly
+      - "https://*.example.com" matches any subdomain
+      - "http://localhost:*" matches any port
+    """
+    for pattern in allowed_patterns:
+        pattern = pattern.strip()
+        if not pattern:
+            continue
+        # Convert wildcard pattern to regex
+        # Escape regex special chars except *
+        regex_pattern = re.escape(pattern).replace(r'\*', '[^./]*')
+        if re.match(f'^{regex_pattern}$', origin):
+            return True
+    return False
 
 
 def setup_security(app):
@@ -10,12 +32,16 @@ def setup_security(app):
     - Security Headers (CSP, HSTS, etc.)
     - Global Error Handlers (404, 500)
     """
+    # Import security settings from centralized config
+    from config import CORS_ALLOWED_ORIGINS, CSRF_STRICT_MODE
+
+    allowed_origins = CORS_ALLOWED_ORIGINS
+    csrf_strict = CSRF_STRICT_MODE
 
     @app.after_request
     def add_cors_headers(response):
         origin = request.headers.get('Origin')
-        if origin:
-            # In production, you'd want to restrict this to trusted origins
+        if origin and _is_origin_allowed(origin, allowed_origins):
             response.headers['Access-Control-Allow-Origin'] = origin
             response.headers['Access-Control-Allow-Credentials'] = 'true'
             response.headers[
@@ -47,44 +73,52 @@ def setup_security(app):
 
         # CSRF Protection via Origin/Referer Verification
         server_name = app.config.get('SERVER_NAME')
-        target_origin = server_name.split(':')[0] if server_name else None
 
         origin = request.headers.get('Origin')
         referrer = request.headers.get('Referer')
 
         # Check Origin first (more secure)
         if origin:
-            # origin usually comes as scheme://domain:port
-            # We check if SERVER_NAME is contained or strictly matches appropriately
-            # Simplified strict check:
-            if server_name and server_name not in origin:
-                app.logger.warning(
-                    f'[CSRF Block] Origin mismatch: {origin} not in {server_name}'
-                )
-                abort(403)
+            # In strict mode or when SERVER_NAME is set, validate against allowed origins
+            if csrf_strict or server_name:
+                if not _is_origin_allowed(origin, allowed_origins):
+                    app.logger.warning(
+                        f'[CSRF Block] Origin not in allowed list: {origin}'
+                    )
+                    abort(403)
             return
 
         # Fallback to Referer
         if referrer:
-            if server_name and server_name not in referrer:
-                app.logger.warning(
-                    f'[CSRF Block] Referer mismatch: {referrer} not in {server_name}'
-                )
-                abort(403)
+            if csrf_strict or server_name:
+                # Extract origin from referer
+                from urllib.parse import urlparse
+                parsed = urlparse(referrer)
+                ref_origin = f"{parsed.scheme}://{parsed.netloc}"
+                if not _is_origin_allowed(ref_origin, allowed_origins):
+                    app.logger.warning(
+                        f'[CSRF Block] Referer origin not allowed: {ref_origin}'
+                    )
+                    abort(403)
             return
 
-        # If neither is present, and we have a server_name, we might block.
-        # However, for local dev without SERVER_NAME, we allow.
-        if server_name:
+        # If neither is present, block in strict mode or when SERVER_NAME is set
+        if csrf_strict or server_name:
             app.logger.warning(
                 '[CSRF Block] Missing Origin and Referer headers')
             abort(403)
 
     @app.after_request
     def security_headers(response):
-        # Security Headers
-        response.headers[
-            'Content-Security-Policy'] = "default-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self' ws: wss:;"
+        # CSP: Only set for HTML responses, not for API (JSON) responses
+        content_type = response.content_type or ''
+        if 'application/json' not in content_type:
+            # For HTML pages, set a strict CSP
+            response.headers['Content-Security-Policy'] = \
+                "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " \
+                "connect-src 'self' ws: wss:; img-src 'self' data: blob:; font-src 'self' data:;"
+        # Don't set CSP for JSON API responses - they don't execute scripts
+
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['X-Frame-Options'] = 'DENY'
         response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'

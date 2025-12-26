@@ -11,20 +11,24 @@ class HTTPBaseResponese(tuple):
         status_code=200,
         cookies={},
     ):
+        # Import here to avoid circular imports
+        from config import FORCE_SECURE_COOKIES
+        
         for c in cookies:
             if cookies[c] == None:
                 resp.delete_cookie(c)
             else:
                 d = c.split('_httponly')
 
-                # Default security settings
-                secure_flag = False
-                try:
-                    if current_app.config.get(
-                            'PREFERRED_URL_SCHEME') == 'https':
-                        secure_flag = True
-                except RuntimeError:
-                    pass  # Request context might not be active
+                # Security settings for cookies
+                secure_flag = FORCE_SECURE_COOKIES
+                if not secure_flag:
+                    try:
+                        if current_app.config.get(
+                                'PREFERRED_URL_SCHEME') == 'https':
+                            secure_flag = True
+                    except RuntimeError:
+                        pass  # Request context might not be active
 
                 resp.set_cookie(d[0],
                                 cookies[c],

@@ -225,14 +225,32 @@ def session():
         Returns:
             - 400 Incomplete Data
             - 403 Login Failed
+            - 429 Too Many Attempts
         '''
+        from .utils.rate_limit import login_limiter
+        
         ip_addr = request.headers.get('cf-connecting-ip', request.remote_addr)
+        
+        # Rate limit check
+        allowed, wait_time = login_limiter.check(ip_addr)
+        if not allowed:
+            return HTTPError(
+                f'Too many login attempts. Please try again in {int(wait_time)} seconds.',
+                429
+            )
+        
         try:
             user = User.login(username, password, ip_addr)
         except DoesNotExist:
+            login_limiter.record_failure(ip_addr)
             return HTTPError('Login Failed', 403)
+        
         if not user.active:
             return HTTPError('Invalid User', 403)
+        
+        # Clear rate limit on successful login
+        login_limiter.clear(ip_addr)
+        
         cookies = {'piann_httponly': user.secret, 'jwt': user.cookie}
         return HTTPResponse('Login Success', cookies=cookies)
 
