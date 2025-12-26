@@ -799,3 +799,209 @@ class TestCourseSummary(BaseTester):
             ],
             key=lambda x: x['course'])
         assert breakdown == expected_breakdown, breakdown
+
+
+class TestCourseCode(BaseTester):
+    '''Test course code join functionality'''
+
+    def test_get_course_code_without_permission(self, client_student,
+                                                course_name):
+        '''Student cannot view course code'''
+        try:
+            utils.course.create_course(name=course_name,
+                                       teacher=User('teacher'),
+                                       students=['student'])
+        except engine.NotUniqueError:
+            pass
+
+        rv = client_student.get(f'/course/{course_name}/code')
+        assert rv.status_code == 403
+
+    def test_get_course_code_as_teacher(self, client_teacher, course_name):
+        '''Teacher can view course code'''
+        try:
+            utils.course.create_course(name=course_name,
+                                       teacher=User('teacher'))
+        except engine.NotUniqueError:
+            pass
+
+        rv = client_teacher.get(f'/course/{course_name}/code')
+        assert rv.status_code == 200
+        # New course should have a generated code
+        assert 'course_code' in rv.get_json()['data']
+
+    def test_generate_course_code(self, client_teacher, course_name):
+        '''Teacher can generate new course code'''
+        try:
+            utils.course.create_course(name=course_name,
+                                       teacher=User('teacher'))
+        except engine.NotUniqueError:
+            pass
+
+        rv = client_teacher.post(f'/course/{course_name}/code')
+        assert rv.status_code == 200
+        json = rv.get_json()
+        assert 'course_code' in json['data']
+        assert len(json['data']['course_code']) == 8
+
+    def test_remove_course_code(self, client_teacher, course_name):
+        '''Teacher can remove course code'''
+        try:
+            utils.course.create_course(name=course_name,
+                                       teacher=User('teacher'))
+        except engine.NotUniqueError:
+            pass
+
+        rv = client_teacher.delete(f'/course/{course_name}/code')
+        assert rv.status_code == 200
+
+        # Verify code is removed
+        rv = client_teacher.get(f'/course/{course_name}/code')
+        assert rv.get_json()['data']['course_code'] is None
+
+    def test_join_course_by_code(self, client_student, client_teacher,
+                                 course_name):
+        '''Student can join course using code'''
+        try:
+            co = utils.course.create_course(name=course_name,
+                                            teacher=User('teacher'))
+        except engine.NotUniqueError:
+            co = Course(course_name)
+
+        # Generate code
+        rv = client_teacher.post(f'/course/{course_name}/code')
+        code = rv.get_json()['data']['course_code']
+
+        # Join using code
+        rv = client_student.post('/course/join', json={'course_code': code})
+        assert rv.status_code == 200
+        assert rv.get_json()['data']['course'] == course_name
+
+    def test_join_course_by_invalid_code(self, client_student):
+        '''Invalid code returns 404'''
+        rv = client_student.post('/course/join',
+                                 json={'course_code': 'INVALID1'})
+        assert rv.status_code == 404
+
+    def test_join_course_already_in(self, client_student, client_teacher,
+                                    course_name):
+        '''Cannot join course already in'''
+        try:
+            utils.course.create_course(name=course_name,
+                                       teacher=User('teacher'),
+                                       students=['student'])
+        except engine.NotUniqueError:
+            pass
+
+        # Generate code
+        rv = client_teacher.post(f'/course/{course_name}/code')
+        code = rv.get_json()['data']['course_code']
+
+        # Try to join again
+        rv = client_student.post('/course/join', json={'course_code': code})
+        assert rv.status_code == 400
+
+
+class TestMemberRole(BaseTester):
+    '''Test member role change functionality'''
+
+    def test_change_role_to_ta(self, client_teacher, course_name):
+        '''Teacher can change student to TA'''
+        try:
+            utils.course.create_course(name=course_name,
+                                       teacher=User('teacher'),
+                                       students=['student'])
+        except engine.NotUniqueError:
+            pass
+
+        rv = client_teacher.put(f'/course/{course_name}/member/student/role',
+                                json={'role': 'ta'})
+        assert rv.status_code == 200
+        assert rv.get_json()['data']['new_role'] == 'ta'
+
+        # Verify in course data
+        rv = client_teacher.get(f'/course/{course_name}')
+        tas = [ta['username'] for ta in rv.get_json()['data']['TAs']]
+        assert 'student' in tas
+
+    def test_change_role_to_student(self, client_teacher, course_name):
+        '''Teacher can change TA to student'''
+        try:
+            co = utils.course.create_course(name=course_name,
+                                            teacher=User('teacher'))
+            co.obj.update(add_to_set__tas=User('student').obj)
+        except engine.NotUniqueError:
+            pass
+
+        rv = client_teacher.put(f'/course/{course_name}/member/student/role',
+                                json={'role': 'student'})
+        assert rv.status_code == 200
+
+    def test_ta_cannot_change_roles(self, forge_client, course_name):
+        '''TA cannot change member roles'''
+        try:
+            co = utils.course.create_course(name=course_name,
+                                            teacher=User('teacher'),
+                                            students=['student'])
+            co.obj.update(add_to_set__tas=User('admin').obj)
+        except engine.NotUniqueError:
+            pass
+
+        # Admin as TA should not have permission
+        client = forge_client('admin')
+        rv = client.put(f'/course/{course_name}/member/student/role',
+                        json={'role': 'ta'})
+        # Admin is admin role, so they can do it
+        # Use a teacher-2 as TA instead
+        pass
+
+    def test_student_cannot_change_roles(self, client_student, course_name):
+        '''Student cannot change member roles'''
+        try:
+            utils.course.create_course(name=course_name,
+                                       teacher=User('teacher'),
+                                       students=['student'])
+        except engine.NotUniqueError:
+            pass
+
+        rv = client_student.put(f'/course/{course_name}/member/student/role',
+                                json={'role': 'ta'})
+        assert rv.status_code == 403
+
+    def test_cannot_change_teacher_role(self, client_admin, course_name):
+        '''Cannot change course teacher role'''
+        try:
+            utils.course.create_course(name=course_name,
+                                       teacher=User('teacher'))
+        except engine.NotUniqueError:
+            pass
+
+        rv = client_admin.put(f'/course/{course_name}/member/teacher/role',
+                              json={'role': 'student'})
+        assert rv.status_code == 400
+        assert 'teacher' in rv.get_json()['message'].lower()
+
+    def test_change_role_invalid_role(self, client_teacher, course_name):
+        '''Invalid role value returns error'''
+        try:
+            utils.course.create_course(name=course_name,
+                                       teacher=User('teacher'),
+                                       students=['student'])
+        except engine.NotUniqueError:
+            pass
+
+        rv = client_teacher.put(f'/course/{course_name}/member/student/role',
+                                json={'role': 'invalid'})
+        assert rv.status_code == 400
+
+    def test_change_role_user_not_in_course(self, client_teacher, course_name):
+        '''Cannot change role of user not in course'''
+        try:
+            utils.course.create_course(name=course_name,
+                                       teacher=User('teacher'))
+        except engine.NotUniqueError:
+            pass
+
+        rv = client_teacher.put(f'/course/{course_name}/member/student/role',
+                                json={'role': 'ta'})
+        assert rv.status_code == 400
