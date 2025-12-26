@@ -7,6 +7,7 @@ This package provides modular AI services including:
 - API Key management and rate limiting
 - Conversation history management
 - RAG (Retrieval-Augmented Generation)
+- AI Vtuber Skin management
 """
 
 from .exceptions import (
@@ -20,6 +21,7 @@ from .key_manager import check_rate_limit
 from .context import get_problem_context
 from .conversation import get_conversation_history, reset_conversation_history
 from .prompts import build_vtuber_prompt, EMOTION_KEYWORDS
+from .skin import skin_api
 
 __all__ = [
     # Exceptions
@@ -39,4 +41,6 @@ __all__ = [
     # Prompts
     'build_vtuber_prompt',
     'EMOTION_KEYWORDS',
+    # Skin API
+    'skin_api',
 ]

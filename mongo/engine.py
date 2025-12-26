@@ -896,3 +896,79 @@ class AiTokenUsage(Document):
         'collection': 'ai_token_usage',
         'indexes': ['api_key', ('course_name', 'problem_id')]
     }
+
+
+class AiVtuberSkin(Document):
+    """
+    AI Vtuber skin/avatar document.
+    Stores Live2D model information for AI Vtuber customization.
+    """
+    # Unique identifier (ULID format)
+    skin_id = StringField(db_field='skinId', required=True, unique=True)
+
+    # Display name for the skin
+    name = StringField(max_length=64, required=True)
+
+    # MinIO paths for resources
+    thumbnail_path = StringField(db_field='thumbnailPath', max_length=256)
+    model_path = StringField(db_field='modelPath',
+                             max_length=256,
+                             required=True)
+
+    # model3.json filename within the ZIP
+    model_json_name = StringField(db_field='modelJsonName',
+                                  max_length=128,
+                                  required=True)
+
+    # Uploader information
+    uploaded_by = ReferenceField('User', db_field='uploadedBy', required=True)
+
+    # Flags
+    is_builtin = BooleanField(db_field='isBuiltin', default=False)
+    is_public = BooleanField(db_field='isPublic', default=False)
+
+    # File size in bytes
+    file_size = IntField(db_field='fileSize', default=0)
+
+    # Timestamps
+    created_at = DateTimeField(db_field='createdAt', default=datetime.now)
+
+    # Emotion to Expression ID mappings
+    # Keys: smile, unhappy, tired, surprised
+    # Values: Expression ID string (e.g., "F05") or null if not supported
+    emotion_mappings = DictField(db_field='emotionMappings', default={})
+
+    meta = {
+        'collection':
+        'ai_vtuber_skin',
+        'indexes': [
+            'skin_id',
+            'uploaded_by',
+            {
+                'fields': ['is_builtin', 'is_public']
+            },
+        ]
+    }
+
+
+class UserSkinPreference(Document):
+    """
+    User's AI Vtuber skin preference.
+    Stores which skin a user has selected.
+    """
+    # User reference (unique - one preference per user)
+    user = ReferenceField('User', required=True, unique=True)
+
+    # Selected skin ID (references AiVtuberSkin.skin_id)
+    # Default is 'builtin_hiyori' for the built-in skin
+    selected_skin_id = StringField(db_field='selectedSkinId',
+                                   max_length=64,
+                                   default='builtin_hiyori')
+
+    # Timestamp
+    updated_at = DateTimeField(db_field='updatedAt', default=datetime.now)
+
+    meta = {
+        'collection': 'user_skin_preference',
+        'indexes': ['user', 'selected_skin_id']
+    }

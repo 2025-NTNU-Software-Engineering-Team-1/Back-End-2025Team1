@@ -43,6 +43,7 @@ def app():
         (pat_api, '/pat'),
         (trial_submission_api, '/trial-submission'),
         (ai_api, '/ai'),
+        (skin_api, '/ai'),  # Skin API under /ai prefix
         (login_records_api, ''),
     ]
     for api, prefix in api2prefix:

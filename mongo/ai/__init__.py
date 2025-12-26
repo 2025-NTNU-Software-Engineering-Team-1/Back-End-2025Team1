@@ -10,6 +10,13 @@ from .models import (
     AiTokenUsage,
     migrate_ai_data,
 )
+from .skins import (
+    AiVtuberSkin,
+    UserSkinPreference,
+    SKIN_UPLOAD_LIMITS,
+    MAX_SKIN_FILE_SIZE,
+    SKIN_MINIO_PREFIX,
+)
 
 __all__ = [
     'AiModel',
@@ -17,4 +24,8 @@ __all__ = [
     'AiApiLog',
     'AiTokenUsage',
     'migrate_ai_data',
+    'AiVtuberSkin',
+    'UserSkinPreference',
+    'SKIN_UPLOAD_LIMITS',
+    'MAX_SKIN_FILE_SIZE',
 ]

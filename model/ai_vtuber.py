@@ -15,11 +15,12 @@ from .ai import (
     RateLimitExceededError,
     ContextNotFoundError,
     AIError,
+    skin_api,
 )
 from .ai.vtuber import process_vtuber_request
 from .ai.conversation import get_conversation_history, reset_conversation_history
 
-__all__ = ['ai_api']
+__all__ = ['ai_api', 'skin_api']
 
 ai_api = Blueprint('ai_api', __name__)
 
