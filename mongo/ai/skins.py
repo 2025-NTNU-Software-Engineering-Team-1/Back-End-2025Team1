@@ -336,8 +336,9 @@ class AiVtuberSkin(MongoBase, engine=engine.AiVtuberSkin):
         if not user_doc:
             return (False, "User not found")
 
-        # Students can only delete their own
-        if user_doc.role > 1:
+        # Only students (role=2) are restricted to their own skins
+        # Admins (0), Teachers (1), and TAs (3) can delete any skin
+        if user_doc.role == Role.STUDENT:  # STUDENT
             if skin.uploaded_by.username != requesting_username:
                 return (False, "Permission denied")
 

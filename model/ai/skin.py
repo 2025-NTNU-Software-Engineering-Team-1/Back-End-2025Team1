@@ -274,9 +274,9 @@ def update_skin(user, skin_id):
             f"[Skin Update] Permission check: user={user.username}, role={user.role}, owner={skin.uploaded_by.username if skin.uploaded_by else 'None'}"
         )
 
-        # Only uploader, teachers, or admins can modify
-        # Role 0=ADMIN, 1=TEACHER, 2=STUDENT
-        if user.role > 1 and skin.uploaded_by.username != user.username:
+        # Only uploader, teachers, TAs, or admins can modify
+        # Students can only modify their own skins
+        if user.role == Role.STUDENT and skin.uploaded_by.username != user.username:
             current_app.logger.warning(
                 f"[Skin Update] Permission denied for {user.username}")
             return HTTPError('Permission denied', 403)
@@ -335,8 +335,9 @@ def update_skin(user, skin_id):
 def update_skin_visibility(user, skin_id, is_public):
     """Toggle skin public/private visibility. Only teachers and admins can use this."""
     try:
-        # Only teachers (role <= 1) and admins can change visibility
-        if user.role > 1:
+        # Only teachers, TAs, or admins can change visibility
+        # Students cannot change visibility
+        if user.role == Role.STUDENT:
             return HTTPError(
                 'Permission denied. Only teachers and admins can change visibility.',
                 403)
@@ -378,8 +379,9 @@ def update_skin_emotions(user, skin_id, mappings):
             f"[Skin Emotions] Permission check: user={user.username}, role={user.role}, owner={skin.uploaded_by.username if skin.uploaded_by else 'None'}"
         )
 
-        # Only uploader, teachers, or admins can modify
-        if user.role > 1 and skin.uploaded_by.username != user.username:
+        # Only uploader, teachers, TAs, or admins can modify
+        # Students can only modify their own skins
+        if user.role == Role.STUDENT and skin.uploaded_by.username != user.username:
             return HTTPError('Permission denied', 403)
 
         success = AiVtuberSkin.update_emotion_mappings(skin_id, mappings)
