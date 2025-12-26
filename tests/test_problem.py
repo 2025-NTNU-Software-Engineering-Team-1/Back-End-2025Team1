@@ -824,13 +824,14 @@ def test_asset_checksum_invalid_type(client_admin, problem_ids):
             'problemName': 'Offline problem (edit)',
             'description': description_dict(),
             'tags': [],
+            'config': {
+                'acceptedFormat': 'code',
+            },
             'testCaseInfo': {
                 'language':
                 1,
                 'fillInTemplate':
                 '',
-                'submissionMode':
-                0,
                 'tasks': [{
                     'caseCount': 1,
                     'taskScore': 100,
@@ -1025,7 +1026,7 @@ def test_asset_checksum_invalid_type(client_admin, problem_ids):
         rv = client.get('/problem/3/meta?token=SandboxToken')
         assert rv.status_code == 200, rv.get_json()
         payload = rv.get_json()['data']
-        assert payload['submissionMode'] == 0
+        assert payload['acceptedFormat'] == 'code'
         assert payload['tasks'] == [{
             'caseCount': 1,
             'memoryLimit': 1000,
