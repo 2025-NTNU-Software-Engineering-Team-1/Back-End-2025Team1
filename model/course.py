@@ -240,8 +240,8 @@ def remove_course_member(user, course_name, username):
     is_admin = (user.role == Role.ADMIN)
 
     if not (is_course_teacher or is_admin):
-        return HTTPError(
-            'Only course teacher or admin can remove members.', 403)
+        return HTTPError('Only course teacher or admin can remove members.',
+                         403)
 
     target_user = User(username)
     if not target_user:
