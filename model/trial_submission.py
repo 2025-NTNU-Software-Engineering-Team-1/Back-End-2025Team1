@@ -1,6 +1,6 @@
 import io
 from flask import Blueprint, request, current_app, send_file
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from .utils import *
 from .auth import *
@@ -336,6 +336,37 @@ def get_trial_record(user, trial_id: str):
     except Exception as e:
         current_app.logger.error(f"Error retrieval trial info: {e}")
         return HTTPError("Internal Server Error", 500)
+
+
+@trial_submission_api.route("/<trial_id>/static-analysis", methods=["GET"])
+@login_required
+def get_trial_static_analysis(user, trial_id: str):
+    """
+    Get static analysis report for a Trial Submission.
+    """
+    try:
+        ts = TrialSubmission(trial_id)
+    except engine.DoesNotExist:
+        return HTTPError("Trial submission not found.", 404)
+
+    if not ts.permission(user, TrialSubmission.Permission.FEEDBACK):
+        return HTTPError("forbidden.", 403)
+
+    report = ts.sa_report or ""
+    report_url = None
+    if ts.sa_report_path:
+        try:
+            minio_client = MinioClient()
+            report_url = minio_client.client.get_presigned_url(
+                "GET",
+                minio_client.bucket,
+                ts.sa_report_path,
+                expires=timedelta(minutes=30),
+            )
+        except Exception:
+            current_app.logger.exception("Failed to presign SA report")
+
+    return HTTPResponse("", data={"report": report, "reportUrl": report_url})
 
 
 @trial_submission_api.route("/<trial_id>/output/<int:task_no>/<int:case_no>",

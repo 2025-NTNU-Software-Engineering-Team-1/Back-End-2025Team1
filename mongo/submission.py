@@ -681,16 +681,6 @@ class BaseSubmission(abc.ABC):
         '''
         rejudge this submission
         '''
-        if current_app.config['TESTING']:
-            # delete output file
-            self.delete_output()
-            # turn back to haven't be judged
-            self.update(
-                status=-1,
-                last_send=datetime.now(),
-                tasks=[],
-            )
-            return True
         sent = self.send()  # Calls subclass's send()
         if not sent:
             return False
@@ -1390,6 +1380,8 @@ class Submission(MongoBase, BaseSubmission, engine=engine.Submission):
         if self.handwritten:
             logging.warning(f'try to send a handwritten {self}')
             return False
+        if current_app.config['TESTING']:
+            return True
         # TODO: Ensure problem is ready to submitted
         # if not Problem(self.problem).is_test_case_ready():
         #     raise TestCaseNotFound(self.problem.problem_id)
@@ -2439,6 +2431,8 @@ class TrialSubmission(MongoBase, BaseSubmission,
             "timestamp": int(self.timestamp.timestamp() * 1000),
             "status": status_str,
             "score": self.score,
+            "sa_status": getattr(self.obj, "sa_status", None),
+            "sa_message": getattr(self.obj, "sa_message", None),
             "language_type": self.language,
             "code": code_content,
             "tasks": tasks_data
