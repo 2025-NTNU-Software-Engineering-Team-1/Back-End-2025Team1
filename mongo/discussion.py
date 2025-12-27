@@ -476,6 +476,9 @@ class Discussion:
         if not cls._can_view_problem(user, post.problem_id):
             return None, 'Insufficient permission.'
 
+        if post.is_closed:
+            return None, 'Post is closed.'
+
         contains_code = bool(contains_code_flag)
         if not contains_code:
             contains_code = cls._detect_contains_code(content)
