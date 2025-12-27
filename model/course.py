@@ -222,6 +222,58 @@ def change_member_role(user, course_name, username, role):
                         })
 
 
+@course_api.route('/<course_name>/member/<username>', methods=['DELETE'])
+@login_required
+def remove_course_member(user, course_name, username):
+    """
+    Remove a member from the course.
+    Only teachers and admins can do this (not TAs).
+    Cannot remove the course teacher.
+    """
+    course = Course(course_name)
+
+    if not course:
+        return HTTPError('Course not found.', 404)
+
+    # Only course teacher or admin can remove members (not TAs)
+    is_course_teacher = (course.obj.teacher.pk == user.pk)
+    is_admin = (user.role == Role.ADMIN)
+
+    if not (is_course_teacher or is_admin):
+        return HTTPError(
+            'Only course teacher or admin can remove members.', 403)
+
+    target_user = User(username)
+    if not target_user:
+        return HTTPError('User not found.', 404)
+
+    # Cannot remove the course teacher
+    if target_user.obj == course.teacher:
+        return HTTPError('Cannot remove course teacher.', 400)
+
+    # Check if user is in the course
+    is_ta = target_user.obj in course.tas
+    is_student = username in course.student_nicknames
+
+    if not (is_ta or is_student):
+        return HTTPError('User is not a member of this course.', 400)
+
+    # Remove from TAs if applicable
+    if is_ta:
+        course.tas = [ta for ta in course.tas if ta != target_user.obj]
+
+    # Remove from students if applicable
+    if is_student:
+        del course.student_nicknames[username]
+
+    # Remove course from user's course list
+    course.remove_user(target_user.obj)
+    course.save()
+
+    return HTTPResponse('Member removed successfully.',
+                        data={'username': username})
+
+
 @course_api.route('/<course_name>/code', methods=['GET', 'POST', 'DELETE'])
 @login_required
 def manage_course_code(user, course_name):
