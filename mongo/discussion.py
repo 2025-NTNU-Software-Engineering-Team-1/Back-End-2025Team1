@@ -444,6 +444,14 @@ class Discussion:
             'Contains_Code': bool(r.contains_code),
         } for r in replies_qs]
 
+        # 檢查用戶是否按讚過這個貼文
+        post_like = engine.DiscussionLike.objects(
+            user=user.obj,
+            target_type='post',
+            target_id=post.post_id
+        ).first()
+        is_post_liked = post_like is not None
+
         data = {
             'Post_Id': post.post_id,
             'Title': post.title,
@@ -451,6 +459,7 @@ class Discussion:
             'Created_Time': post.created_time.isoformat(),
             'Content': post.content,
             'Like_Count': post.like_count or 0,
+            'Is_Liked': is_post_liked,
             'Reply_Count': post.reply_count,
             'Category': post.category,
             'Is_Solved': bool(post.is_solved),
