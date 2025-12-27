@@ -8,12 +8,14 @@ from . import announcement
 from . import test
 from . import ranking
 from . import post
+from . import discussion
 from . import copycat
 from . import health
 from . import user
 from . import pat
 from . import trial_submission
 from . import ai_vtuber
+from . import login_records
 
 from .auth import *
 from .profile import *
@@ -25,12 +27,14 @@ from .announcement import *
 from .test import *
 from .ranking import *
 from .post import *
+from .discussion import *
 from .copycat import *
 from .health import *
 from .user import *
 from .pat import *
 from .trial_submission import *
 from .ai_vtuber import *
+from .login_records import *
 
 __all__ = [
     *auth.__all__,
@@ -43,10 +47,12 @@ __all__ = [
     *announcement.__all__,
     *ranking.__all__,
     *post.__all__,
+    *discussion.__all__,
     *copycat.__all__,
     *health.__all__,
     *user.__all__,
     *pat.__all__,
     *trial_submission.__all__,
     *ai_vtuber.__all__,
+    *login_records.__all__,
 ]

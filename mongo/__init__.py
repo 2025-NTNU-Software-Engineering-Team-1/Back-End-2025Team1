@@ -7,8 +7,9 @@ from . import problem
 from . import announcement
 from . import post
 from . import ip_filter
-from . import ai_vtuber
+from . import ai
 from . import pat
+from . import login_records
 
 from .course import *
 from .engine import *
@@ -19,8 +20,9 @@ from .problem import *
 from .announcement import *
 from .post import *
 from .ip_filter import *
-from .ai_vtuber import *
+from .ai import *
 from .pat import *
+from .login_records import *
 
 __all__ = [
     *course.__all__,
@@ -32,6 +34,7 @@ __all__ = [
     *announcement.__all__,
     *post.__all__,
     *ip_filter.__all__,
-    *ai_vtuber.__all__,
+    *ai.__all__,
     *pat.__all__,
+    *login_records.__all__,
 ]

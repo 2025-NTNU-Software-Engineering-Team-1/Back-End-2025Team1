@@ -1,9 +1,11 @@
 import io
 import pytest
 from zipfile import ZipFile
-from mongo import Submission, engine
+from mongo import engine
 from mongo.utils import MinioClient
 from tests.test_submission import _create_submission_with_artifact
+
+pytestmark = pytest.mark.usefixtures("setup_minio")
 
 
 def test_download_task_artifact_zip_aggregation(app, forge_client):

@@ -31,6 +31,13 @@ class TestProfile(BaseTester):
         assert json['message'] == 'Uploaded.'
 
     def test_view_without_username(self, client_student):
+        # Setup profile
+        client_student.post('/profile',
+                            json={
+                                'displayedName': 'aisu_0911',
+                                'bio': 'Hello World!'
+                            })
+
         rv = client_student.get('/profile')
         json = rv.get_json()
         assert rv.status_code == 200
@@ -40,6 +47,13 @@ class TestProfile(BaseTester):
         assert json['data']['bio'] == 'Hello World!'
 
     def test_view_with_username(self, client_student):
+        # Setup profile
+        client_student.post('/profile',
+                            json={
+                                'displayedName': 'aisu_0911',
+                                'bio': 'Hello World!'
+                            })
+
         rv = client_student.get('/profile/student')
         json = rv.get_json()
         assert rv.status_code == 200
@@ -49,7 +63,40 @@ class TestProfile(BaseTester):
         assert json['data']['bio'] == 'Hello World!'
 
     def test_view_with_nonexist_username(self, client_student):
+        # Non-admin users cannot view other users' profiles
         rv = client_student.get('/profile/a_username_not_exist')
+        json = rv.get_json()
+        assert rv.status_code == 403
+        assert json['status'] == 'err'
+        assert json['message'] == 'Permission denied.'
+
+    def test_view_other_user_profile_denied(self, client_student):
+        # Non-admin users cannot view other users' profiles
+        rv = client_student.get('/profile/admin')
+        json = rv.get_json()
+        assert rv.status_code == 403
+        assert json['status'] == 'err'
+        assert json['message'] == 'Permission denied.'
+
+    def test_admin_can_view_other_user_profile(self, client_admin,
+                                               client_student):
+        # Setup student profile first
+        client_student.post('/profile',
+                            json={
+                                'displayedName': 'student_display',
+                                'bio': 'Student bio'
+                            })
+        # Admin can view student's profile
+        rv = client_admin.get('/profile/student')
+        json = rv.get_json()
+        assert rv.status_code == 200
+        assert json['status'] == 'ok'
+        assert json['message'] == 'Profile exist.'
+        assert json['data']['displayedName'] == 'student_display'
+
+    def test_admin_view_nonexist_user(self, client_admin):
+        # Admin gets 404 for non-existent user
+        rv = client_admin.get('/profile/nonexistent_user')
         json = rv.get_json()
         assert rv.status_code == 404
         assert json['status'] == 'err'

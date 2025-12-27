@@ -1,12 +1,14 @@
 import hashlib
 from zipfile import ZipFile
 import io
+import pytest
 
 from mongo import Submission
 from mongo.problem import Problem
 from mongo.utils import MinioClient
 from tests import utils
-from tests.utils import problem
+
+pytestmark = pytest.mark.usefixtures("setup_minio")
 
 
 def test_resource_data_meta_and_checksum(app):

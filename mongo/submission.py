@@ -24,6 +24,7 @@ from datetime import date, datetime, timedelta
 from zipfile import ZipFile, is_zipfile, BadZipFile
 from ulid import ULID
 import abc
+import base64
 
 from . import engine
 from .base import MongoBase
@@ -156,6 +157,7 @@ class BaseSubmission(abc.ABC):
             'RE': 5,
             'JE': 6,
             'OLE': 7,
+            'AE': 8,  # Analysis Error (Static Analysis failed)
         }
 
     @property
@@ -198,12 +200,15 @@ class BaseSubmission(abc.ABC):
         return lang2ext[self.language]
 
     @property
-    def submission_mode(self) -> int:
-        return getattr(self.problem.test_case, 'submission_mode', 0) or 0
+    def accepted_format(self) -> str:
+        """Get accepted format from problem config (single source of truth)."""
+        config = getattr(self.problem, 'config', {}) or {}
+        return config.get('acceptedFormat', 'code')
 
     @property
     def is_zip_mode(self) -> bool:
-        return self.submission_mode == 1
+        """Check if problem accepts zip submissions."""
+        return self.accepted_format == 'zip'
 
     @property
     def execution_mode(self) -> str:
@@ -258,12 +263,243 @@ class BaseSubmission(abc.ABC):
         ret = {}
         try:
             with ZipFile(self._get_output_raw(case)) as zf:
-                ret = {k: zf.read(k) for k in ('stdout', 'stderr')}
+                # Handle case where stdout/stderr files may not exist in zip
+                for k in ('stdout', 'stderr'):
+                    try:
+                        ret[k] = zf.read(k)
+                    except KeyError:
+                        # File doesn't exist in zip, use empty bytes
+                        ret[k] = b''
                 if text:
-                    ret = {k: v.decode('utf-8') for k, v in ret.items()}
+                    ret = {
+                        k: v.decode('utf-8', errors='replace')
+                        for k, v in ret.items()
+                    }
         except AttributeError:
             raise AttributeError('The submission is still in pending')
         return ret
+
+    def get_case_artifact_files(
+        self,
+        task_no: int,
+        case_no: int,
+    ) -> dict:
+        '''
+        Get all files from case artifact zip including stdout, stderr, and other files.
+        
+        Each case has its own output_minio_path pointing to a zip file that contains:
+        - stdout: standard output of this case
+        - stderr: standard error of this case
+        - Other artifact files (images, text files, etc.) if artifact collection is enabled
+        
+        Returns a dict with file names as keys and file contents as values.
+        For text files, content is decoded as string.
+        For binary files (images, etc.), content is base64 encoded string.
+        
+        Args:
+            task_no: Task index
+            case_no: Case index within the task
+            
+        Returns:
+            dict with keys: 'stdout', 'stderr', 'files'
+            - stdout/stderr: None if file doesn't exist, '' if empty, otherwise content string
+            - files: dict mapping filename to file info dict
+        '''
+        try:
+            # Get the specific case object
+            case = self.tasks[task_no].cases[case_no]
+        except IndexError:
+            raise FileNotFoundError('task not exist')
+
+        result = {
+            'stdout':
+            None,  # None means file doesn't exist, '' means empty file
+            'stderr': None,
+            'input': None,  # Test case input (from artifact)
+            'answer': None,  # Expected output (from artifact)
+            'files': {}
+        }
+
+        try:
+            # Get the zip file for this specific case
+            # Each case has its own output_minio_path pointing to its artifact zip
+            output_raw = self._get_output_raw(case)
+            if output_raw is None:
+                # Case has no output/artifact zip
+                return result
+
+            # Image extensions
+            image_extensions = {
+                '.bmp', '.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg'
+            }
+            # Text file extensions
+            text_extensions = {
+                '.txt', '.md', '.log', '.csv', '.json', '.xml', '.html',
+                '.css', '.js', '.py', '.cpp', '.c', '.java'
+            }
+
+            # This zip contains files for this specific case only
+            # Files are directly in the root of the zip (stdout, stderr, and other artifact files)
+            with ZipFile(output_raw) as zf:
+                for name in zf.namelist():
+                    try:
+                        content = zf.read(name)
+                        # Get base name (filename without directory path)
+                        # Handle cases where zip might have paths like "stdout" or "some/path/stdout"
+                        base_name = name.split(
+                            '/')[-1] if '/' in name else name
+                        base_name = base_name.strip('/')
+                        ext = '.' + base_name.split(
+                            '.')[-1].lower() if '.' in base_name else ''
+
+                        # Handle stdout and stderr specially - these are case-specific outputs
+                        if base_name == 'stdout':
+                            # File exists, decode content (could be empty string)
+                            result['stdout'] = content.decode('utf-8',
+                                                              errors='replace')
+                            continue  # Don't add to files dict
+                        elif base_name == 'stderr':
+                            # File exists, decode content (could be empty string)
+                            result['stderr'] = content.decode('utf-8',
+                                                              errors='replace')
+                            continue  # Don't add to files dict
+                        elif base_name == 'input':
+                            # Test case input (from artifact)
+                            result['input'] = content.decode('utf-8',
+                                                             errors='replace')
+                            continue  # Don't add to files dict
+                        elif base_name == 'answer':
+                            # Expected output from AC code (from artifact)
+                            result['answer'] = content.decode('utf-8',
+                                                              errors='replace')
+                            continue  # Don't add to files dict
+                        # Trial artifacts may store input/output as TTCC.in/out
+                        case_prefix = f"{task_no:02d}{case_no:02d}"
+                        if base_name == f"{case_prefix}.in":
+                            if result['input'] is None:
+                                result['input'] = content.decode(
+                                    'utf-8', errors='replace')
+                            continue  # Don't add to files dict
+                        if base_name == f"{case_prefix}.out":
+                            if result['answer'] is None:
+                                result['answer'] = content.decode(
+                                    'utf-8', errors='replace')
+                            continue  # Don't add to files dict
+
+                        # For other files, determine if it's text or binary
+                        is_text = ext in text_extensions
+                        is_image = ext in image_extensions
+
+                        if is_text:
+                            # Try to decode as text
+                            try:
+                                file_content = content.decode('utf-8',
+                                                              errors='replace')
+                                result['files'][name] = {
+                                    'type': 'text',
+                                    'content': file_content,
+                                    'extension': ext
+                                }
+                            except Exception:
+                                # If decode fails, treat as binary
+                                result['files'][name] = {
+                                    'type':
+                                    'binary',
+                                    'content':
+                                    base64.b64encode(content).decode('ascii'),
+                                    'extension':
+                                    ext
+                                }
+                        elif is_image:
+                            # Encode images as base64
+                            mime_map = {
+                                '.png': 'image/png',
+                                '.jpg': 'image/jpeg',
+                                '.jpeg': 'image/jpeg',
+                                '.gif': 'image/gif',
+                                '.webp': 'image/webp',
+                                '.bmp': 'image/bmp',
+                                '.svg': 'image/svg+xml'
+                            }
+                            result['files'][name] = {
+                                'type':
+                                'image',
+                                'content':
+                                base64.b64encode(content).decode('ascii'),
+                                'extension':
+                                ext,
+                                'mimeType':
+                                mime_map.get(ext, 'image/png')
+                            }
+                        else:
+                            # For unknown types, try text first, fallback to binary
+                            try:
+                                file_content = content.decode('utf-8',
+                                                              errors='replace')
+                                result['files'][name] = {
+                                    'type': 'text',
+                                    'content': file_content,
+                                    'extension': ext
+                                }
+                            except Exception:
+                                result['files'][name] = {
+                                    'type':
+                                    'binary',
+                                    'content':
+                                    base64.b64encode(content).decode('ascii'),
+                                    'extension':
+                                    ext
+                                }
+                    except Exception as e:
+                        # Skip files that can't be read
+                        self.logger.warning(
+                            f'Failed to read file {name} from artifact: {e}')
+                        continue
+        except AttributeError:
+            raise AttributeError('The submission is still in pending')
+        except Exception as e:
+            self.logger.error(f'Error reading case artifact: {e}')
+            raise
+
+        return result
+
+    def _ensure_output_fields_initialized(self) -> None:
+        if getattr(self.obj, "output_fields_initialized", False):
+            return
+        for t in self.tasks:
+            for c in t.cases:
+                if not hasattr(c, "output") or c.output is None:
+                    c.output = None
+        self.obj.output_fields_initialized = True
+
+    def set_case_artifact(self, task_no: int, case_no: int,
+                          artifact_data: bytes) -> None:
+        if task_no < 0 or task_no >= len(self.tasks):
+            raise FileNotFoundError('task not exist')
+        task = self.tasks[task_no]
+        if case_no < 0 or case_no >= len(task.cases):
+            raise FileNotFoundError('case not exist')
+        minio_client = MinioClient()
+        object_name = self._generate_output_minio_path(task_no, case_no)
+        output_path = object_name
+        try:
+            minio_client.upload_file_object(
+                io.BytesIO(artifact_data),
+                object_name,
+                len(artifact_data),
+                content_type='application/zip',
+            )
+        except Exception as exc:
+            output_path = None
+            self.logger.warning(
+                f'Failed to upload case artifact to MinIO: {exc}')
+        # ensure ALL tasks' cases have output field to satisfy validation
+        self._ensure_output_fields_initialized()
+        case = task.cases[case_no]
+        if output_path is None:
+            case.output = artifact_data
+        case.output_minio_path = output_path
+        self.save()
 
     def _get_output_raw(self, case: engine.CaseResult) -> io.BytesIO:
         '''
@@ -445,6 +681,9 @@ class BaseSubmission(abc.ABC):
         '''
         rejudge this submission
         '''
+        sent = self.send()  # Calls subclass's send()
+        if not sent:
+            return False
         # delete output file
         self.delete_output()
         # turn back to haven't be judged
@@ -453,9 +692,7 @@ class BaseSubmission(abc.ABC):
             last_send=datetime.now(),
             tasks=[],
         )
-        if current_app.config['TESTING']:
-            return True
-        return self.send()  # Calls subclass's send()
+        return True
 
     def _generate_code_minio_path(self):
         return f'submissions/{generate_ulid()}.zip'
@@ -594,6 +831,13 @@ class BaseSubmission(abc.ABC):
                     content_type='text/plain',
                 )
                 sa_updates['sa_report_path'] = object_name
+        else:
+            sa_updates.update(
+                sa_status=None,
+                sa_message=None,
+                sa_report=None,
+                sa_report_path=None,
+            )
         if checker:
             messages = checker.get('messages') or []
             summary_parts = []
@@ -699,6 +943,7 @@ class BaseSubmission(abc.ABC):
                         status=case['status'],
                         exec_time=case['execTime'],
                         memory_usage=case['memoryUsage'],
+                        output=None,
                         output_minio_path=output_minio_path,
                     ))
 
@@ -744,6 +989,7 @@ class BaseSubmission(abc.ABC):
             tasks=tasks,
             exec_time=exec_time,
             memory_usage=memory_usage,
+            output_fields_initialized=True,
             **sa_updates,
             **checker_updates,
             **scoring_updates,
@@ -837,6 +1083,7 @@ class BaseSubmission(abc.ABC):
             # 'comment', # 'comment' is not in BaseSubmissionDocument
             'tasks',
             'ip_addr',
+            'scoreModifications',  # Exclude score_modifications from list API
         ]
         # delete old keys
         for o in old:
@@ -846,6 +1093,10 @@ class BaseSubmission(abc.ABC):
         # 'comment' is specific to Submission, not BaseSubmission
         if 'comment' in ret:
             del ret['comment']
+
+        # Also remove score_modifications if present (using Python field name)
+        if 'score_modifications' in ret:
+            del ret['score_modifications']
 
         # insert new keys
         ret.update(**_ret)
@@ -1016,7 +1267,13 @@ class Submission(MongoBase, BaseSubmission, engine=engine.Submission):
     '''
 
     def __init__(self, submission_id):
+        # MongoBase.__new__ handles setting self.obj if submission_id is a document or valid PK
+        if not getattr(self, 'obj', None) or not self.obj.id:
+            self.obj = self.engine.objects(id=submission_id).first()
         self.submission_id = str(submission_id)
+
+    def __eq__(self, other):
+        return super().__eq__(other)
 
     def __str__(self):
         return f'submission [{self.submission_id}]'
@@ -1123,6 +1380,8 @@ class Submission(MongoBase, BaseSubmission, engine=engine.Submission):
         if self.handwritten:
             logging.warning(f'try to send a handwritten {self}')
             return False
+        if current_app.config['TESTING']:
+            return True
         # TODO: Ensure problem is ready to submitted
         # if not Problem(self.problem).is_test_case_ready():
         #     raise TestCaseNotFound(self.problem.problem_id)
@@ -1185,6 +1444,18 @@ class Submission(MongoBase, BaseSubmission, engine=engine.Submission):
         CE = 2
         if cap & self.Permission.STUDENT and self.status == CE:
             cap |= self.Permission.VIEW_OUTPUT
+
+        # students can view outputs if problem has artifactCollection enabled
+        if cap & self.Permission.STUDENT:
+            try:
+                problem = Problem(self.problem)
+                artifact_collection = (problem.config
+                                       or {}).get('artifactCollection', [])
+                if artifact_collection:  # Non-empty list means enabled
+                    cap |= self.Permission.VIEW_OUTPUT
+            except Exception as e:
+                self.logger.warning(
+                    f"Error checking artifactCollection for {self}: {e}")
 
         cache.set(key, cap.value, 60)
         return cap
@@ -1383,30 +1654,6 @@ class Submission(MongoBase, BaseSubmission, engine=engine.Submission):
             self.logger.error(f'Failed to set compiled binary: {e}')
             raise
 
-    def set_case_artifact(self, task_no: int, case_no: int,
-                          artifact_data: bytes) -> None:
-        if task_no < 0 or task_no >= len(self.tasks):
-            raise FileNotFoundError('task not exist')
-        task = self.tasks[task_no]
-        if case_no < 0 or case_no >= len(task.cases):
-            raise FileNotFoundError('case not exist')
-        minio_client = MinioClient()
-        object_name = self._generate_output_minio_path(task_no, case_no)
-        minio_client.upload_file_object(
-            io.BytesIO(artifact_data),
-            object_name,
-            len(artifact_data),
-            content_type='application/zip',
-        )
-        # ensure ALL tasks' cases have output field to satisfy validation
-        for t in self.tasks:
-            for c in t.cases:
-                if not hasattr(c, "output") or c.output is None:
-                    c.output = None
-        case = task.cases[case_no]
-        case.output_minio_path = object_name
-        self.save()
-
     def has_compiled_binary(self) -> bool:
         try:
             return bool(self.compiled_binary_minio_path)
@@ -1465,7 +1712,13 @@ class TrialSubmission(MongoBase, BaseSubmission,
     '''
 
     def __init__(self, submission_id):
+        # MongoBase.__new__ handles setting self.obj if submission_id is a document or valid PK
+        if not getattr(self, 'obj', None) or not self.obj.id:
+            self.obj = self.engine.objects(id=submission_id).first()
         self.submission_id = str(submission_id)
+
+    def __eq__(self, other):
+        return super().__eq__(other)
 
     def __str__(self):
         return f'trial_submission [{self.submission_id}]'
@@ -1480,6 +1733,26 @@ class TrialSubmission(MongoBase, BaseSubmission,
         '''
         return 0
 
+    def _generate_output_minio_path(self, task_no: int, case_no: int) -> str:
+        '''
+        generate a output file path for minio (Trial)
+        '''
+        return f'trial_submissions/task{task_no:02d}_case{case_no:02d}_{generate_ulid()}.zip'
+
+    def set_compiled_binary(self, binary_data: bytes) -> None:
+        try:
+            minio_client = MinioClient()
+            object_name = f'trial_compiled_binaries/{self.id}'
+            minio_client.upload_file_object(
+                io.BytesIO(binary_data),
+                object_name,
+                len(binary_data),
+            )
+            self.update(compiled_binary_minio_path=object_name)
+        except Exception as e:
+            self.logger.error(f'Failed to set compiled binary: {e}')
+            raise
+
     def finish_judging(self):
         '''
         Update problem-level test submission stats.
@@ -1491,34 +1764,38 @@ class TrialSubmission(MongoBase, BaseSubmission,
         problem = Problem(self.problem)
         if problem:
             username = self.user.username
-            count_key = f"trial_submission_counts.{username}"
-            problem.obj.update(**{f'inc__{count_key}': 1})
+            # Use MongoDB's $inc operator for DictField nested key
+            # MongoEngine's inc__ doesn't support DictField nested keys directly
+            problem.obj.update(
+                __raw__={'$inc': {
+                    f'trialSubmissionCounts.{username}': 1
+                }})
 
         # No User.add_submission()
         # No Homework.student_status update
-        pass
 
     def submit(self,
                code_file,
                use_default_case: bool = True,
                custom_input_file=None) -> bool:
         '''
-        Prepare data for a test submission.
-        Checks for test mode enablement and quota.
+        Prepare data for a trial submission.
+        Checks for trial mode enablement and quota.
         '''
         if not self:
             raise engine.DoesNotExist(f'{self}')
 
         problem = Problem(self.problem)
-        if not problem.test_mode_enabled:
-            raise PermissionError("Test mode is not enabled for this problem.")
+        if not problem.trial_mode_enabled:
+            raise PermissionError(
+                "Trial mode is not enabled for this problem.")
 
         # Check quota
         if problem.trial_submission_quota > 0:
             username = self.user.username
             current_count = problem.trial_submission_counts.get(username, 0)
             if current_count >= problem.trial_submission_quota:
-                raise PermissionError("Test submission quota exceeded.")
+                raise PermissionError("Trial submission quota exceeded.")
 
         custom_input_path = None
         if not use_default_case:
@@ -1546,77 +1823,228 @@ class TrialSubmission(MongoBase, BaseSubmission,
             return True
         return self.send()
 
+    def _format_sandbox_error(self, resp) -> str:
+        message = None
+        try:
+            payload = resp.json()
+            if isinstance(payload, dict):
+                message = payload.get('message') or payload.get(
+                    'msg') or payload.get('error')
+        except ValueError:
+            message = None
+        if not message:
+            message = (resp.text or '').strip()
+        if not message:
+            message = f'Sandbox error (HTTP {resp.status_code})'
+        return message
+
+    def _status_for_sandbox_response(self, resp) -> int:
+        if resp.status_code == 400:
+            return self.status2code.get('CE', 2)
+        return self.status2code.get('JE', 6)
+
     def send(self) -> bool:
         '''
         Send code, public/custom cases, and AC code to sandbox.
         '''
-        problem = Problem(self.problem)
-        if not problem.test_mode_enabled:
-            self.logger.warning(
-                f"Attempted to send {self} but test mode is disabled.")
-            return False
+        try:
+            problem = Problem(self.problem)
+            if not problem.trial_mode_enabled:
+                raise PermissionError(
+                    "Trial mode is not enabled for this problem.")
 
-        # 1. User's code
+            # Check if allowWrite is enabled (Trial not supported for allowWrite problems)
+            problem_config = problem.config or {}
+            if problem_config.get('allowWrite', False):
+                raise ValueError(
+                    "Trial submission not supported for problems with allowWrite enabled."
+                )
+
+            # Validate test case availability
+            if self.use_default_case:
+                if not problem.public_cases_zip_minio_path:
+                    raise TestCaseNotFound(self.problem_id)
+            else:
+                if not self.custom_input_minio_path:
+                    raise TestCaseNotFound(self.problem_id)
+                # For custom test cases, AC code is required (unless Interactive mode)
+                execution_mode = problem_config.get('executionMode', 'general')
+                if execution_mode != 'interactive' and not problem.ac_code_minio_path:
+                    raise ValueError(
+                        "AC code required for custom test cases (non-interactive mode)"
+                    )
+        except (PermissionError, ValueError, TestCaseNotFound) as exc:
+            error_msg = str(exc)
+            self.logger.warning(f'Failed to send {self}: {error_msg}')
+            self._mark_sandbox_error(error_msg,
+                                     status_code=self.status2code.get('JE', 6))
+            raise ValueError(error_msg)
+
+        raw_code = self._get_code_raw()
+        if raw_code is None:
+            error_msg = "Submission code not found."
+            self.logger.error(f'Failed to send {self}: {error_msg}')
+            self._mark_sandbox_error(error_msg,
+                                     status_code=self.status2code.get('JE', 6))
+            raise ValueError(error_msg)
+
+        # Prepare source code file
         files = {
-            'src': io.BytesIO(b"".join(self._get_code_raw())),
+            'src':
+            ('src.zip', io.BytesIO(b"".join(raw_code)), 'application/zip'),
         }
 
-        # 2. Test cases (public or custom)
-        # TODO: This logic depends heavily on sandbox API.
-        # The sandbox needs to receive either the public cases or custom cases.
-        # This might involve passing Minio paths or zips.
-        if self.use_default_case:
-            if not problem.public_cases_zip_minio_path:
-                raise TestCaseNotFound(self.problem_id)
-            # files['public_cases'] = ... (logic to get public cases zip)
-        else:
-            if not self.custom_input_minio_path:
-                raise TestCaseNotFound(self.problem_id)  # Or a different error
-            # files['custom_cases'] = ... (logic to get custom input zip)
-
-        # 3. AC code (for comparison)
-        # TODO: Add logic for sending AC code
-        # if problem.ac_code_minio_path:
-        #    ac_code_raw = ... (logic to get AC code zip)
-        #    files['ac_code'] = ac_code_raw
-
+        # Target sandbox
         tar = self.target_sandbox()
         if tar is None:
-            self.logger.error(f'can not target a sandbox for {repr(self)}')
-            return False
+            error_msg = 'No available sandbox instance.'
+            self.logger.error(f'{error_msg} {repr(self)}')
+            self._mark_sandbox_error(error_msg,
+                                     status_code=self.status2code.get('JE', 6))
+            raise ValueError(error_msg)
 
+        # Assign token for sandbox verification
         TrialSubmission.assign_token(self.id, tar.token)
 
+        # Prepare form data for sandbox
         post_data = {
             'token': tar.token,
             'problem_id': self.problem_id,
             'language': self.language,
-            'submission_type': 'test',  # Flag for sandbox
-            'use_default_case': self.use_default_case,
-            # 'ac_code_language': problem.ac_code_language,
-            # 'public_cases_path': problem.public_cases_zip_minio_path,
-            # 'custom_cases_path': self.custom_input_minio_path,
-            # 'ac_code_path': problem.ac_code_minio_path,
+            'submission_type': 'trial',  # Flag for sandbox to handle as trial
+            'use_default_case': str(self.use_default_case).lower(
+            ),  # Convert to string for form data
         }
 
-        # This URL might be different, e.g., /submit_test/
+        # Add custom testcases path if using custom test cases
+        if not self.use_default_case:
+            post_data['custom_testcases_path'] = self.custom_input_minio_path
+
         judge_url = f'{tar.url}/submit/{self.id}'
 
-        self.logger.info(f'send {self} to {tar.name}')
-        self.logger.warning(
-            f"TrialSubmission.send() is a placeholder and needs sandbox API integration."
+        self.logger.info(
+            f'send {self} to {tar.name} (trial={True}, use_default={self.use_default_case})'
         )
 
-        self.logger.error("Test submission sandbox endpoint not implemented.")
-        return False
+        try:
+            resp = rq.post(
+                judge_url,
+                data=post_data,
+                files=files,
+            )
+            self.logger.info(
+                f'receive {self} resp from sandbox: {resp.status_code}')
+            if resp.ok:
+                return True
+            error_msg = self._format_sandbox_error(resp)
+            status_code = self._status_for_sandbox_response(resp)
+            self.logger.error(f'Failed to send {self} to sandbox: {error_msg}')
+            self._mark_sandbox_error(error_msg, status_code=status_code)
+            raise ValueError(error_msg)
+        except rq.exceptions.RequestException as exc:
+            # Network issues / timeout
+            error_msg = f'Sandbox communication error: {exc}'
+            self.logger.error(f'Failed to send {self} to sandbox: {exc}')
+            self._mark_sandbox_error(error_msg,
+                                     status_code=self.status2code.get('JE', 6))
+            raise ValueError(error_msg)
+        except Exception as exc:
+            error_msg = f'Sandbox unexpected error: {exc}'
+            self.logger.error(f'Failed to send {self} to sandbox: {exc}')
+            self._mark_sandbox_error(error_msg,
+                                     status_code=self.status2code.get('JE', 6))
+            raise ValueError(error_msg)
 
-        # resp = rq.post(
-        #     judge_url,
-        #     data=post_data,
-        #     files=files,
-        # )
-        # self.logger.info(f'recieve {self} resp from sandbox')
-        # return self.sandbox_resp_handler(resp)
+    def _mark_sandbox_error(self,
+                            error_message: str,
+                            status_code: Optional[int] = None):
+        '''
+        Mark the trial submission as error when sandbox returns an error
+        before judging can begin.
+        Creates a virtual task/case with the error message as stderr,
+        so the error output flow works.
+        '''
+        error_status = status_code if status_code is not None else self.status2code.get(
+            'JE', 6)
+
+        # Create a zip file containing the error message as stderr
+        output_zip = io.BytesIO()
+        with ZipFile(output_zip, 'w') as zf:
+            zf.writestr('stdout', '')
+            zf.writestr('stderr', error_message)
+        output_zip.seek(0)
+        zip_data = output_zip.read()
+        output_zip.seek(0)
+
+        # Upload to MinIO
+        output_path = f'trial/{self.id}/error_output.zip'
+        try:
+            minio_client = MinioClient()
+            minio_client.upload_file_object(output_zip, output_path,
+                                            len(zip_data))
+        except Exception as exc:
+            self.logger.warning(
+                f'Failed to upload sandbox error output: {exc}')
+            output_path = None
+
+        # Create virtual task/case with the error output
+        # Note: output field uses output_minio_path, so we pass the zip data directly
+        case_result = engine.CaseResult(
+            status=error_status,
+            exec_time=0,
+            memory_usage=0,
+            output=zip_data if output_path is None else None,
+            output_minio_path=output_path,
+        )
+        task_result = engine.TaskResult(
+            status=error_status,
+            exec_time=0,
+            memory_usage=0,
+            score=0,
+            cases=[case_result],
+        )
+
+        # Use atomic update to avoid race conditions with rejudge's update()
+        self.obj.update(
+            status=error_status,
+            score=0,
+            tasks=[task_result],
+            exec_time=0,
+            memory_usage=0,
+            output_fields_initialized=True,
+        )
+        # Also update in-memory object for consistency
+        self.obj.status = error_status
+        self.obj.score = 0
+        self.obj.tasks = [task_result]
+        self.logger.info(
+            f'Marked {self} as error due to sandbox issue: {error_message}')
+
+    @classmethod
+    def assign_token(cls, submission_id, token=None):
+        '''
+        Generate a token for the trial submission (for sandbox verification).
+        '''
+        if token is None:
+            token = gen_token()
+        RedisCache().set(gen_key(submission_id), token)
+        return token
+
+    @classmethod
+    def verify_token(cls, submission_id, token):
+        '''
+        Verify sandbox token for trial submission result callback.
+        '''
+        cache = RedisCache()
+        key = gen_key(submission_id)
+        s_token = cache.get(key)
+        if s_token is None:
+            return False
+        s_token = s_token.decode('ascii')
+        valid = secrets.compare_digest(s_token, token)
+        if valid:
+            cache.delete(key)
+        return valid
 
     def own_permission(self, user) -> BaseSubmission.Permission:
         '''
@@ -1777,8 +2205,22 @@ class TrialSubmission(MongoBase, BaseSubmission,
         if not problem:
             raise engine.DoesNotExist(f'{problem} dose not exist')
 
-        if not problem.test_mode_enabled:
-            raise PermissionError("Test mode is not enabled for this problem.")
+        if not problem.trial_mode_enabled:
+            raise PermissionError(
+                "Trial mode is not enabled for this problem.")
+
+        # Check quota (per-user per-problem)
+        if problem.trial_submission_quota > 0:
+            current_count = problem.trial_submission_counts.get(username, 0)
+            if current_count >= problem.trial_submission_quota:
+                raise PermissionError("Trial submission quota exceeded.")
+
+        # Check if allowWrite is enabled (Trial not supported for allowWrite problems)
+        problem_config = problem.config or {}
+        if problem_config.get('allowWrite', False):
+            raise PermissionError(
+                "Trial submission not supported for problems with allowWrite enabled."
+            )
 
         if timestamp is None:
             timestamp = datetime.now()
@@ -1792,6 +2234,38 @@ class TrialSubmission(MongoBase, BaseSubmission,
                                             use_default_case=use_default_case)
         submission.save()
         return cls(submission.id)
+
+    @classmethod
+    def get_last_trial(cls, problem_id: int,
+                       username: str) -> Optional['TrialSubmission']:
+        '''
+        Get the last trial submission for a user on a problem.
+        
+        Args:
+            problem_id: The problem ID
+            username: The username
+            
+        Returns:
+            The last TrialSubmission or None if not found
+        '''
+        try:
+            problem = Problem(problem_id)
+            if not problem:
+                return None
+            user = User(username)
+            if not user:
+                return None
+
+            # Query for the most recent trial submission
+            trial_obj = engine.TrialSubmission.objects(
+                problem=problem.obj,
+                user=user.obj).order_by('-timestamp').first()
+
+            if trial_obj:
+                return cls(trial_obj.id)
+            return None
+        except Exception:
+            return None
 
     @classmethod
     def get_history_for_api(cls,
@@ -1828,16 +2302,24 @@ class TrialSubmission(MongoBase, BaseSubmission,
                     status_str = 'Pending'
 
                 history_list.append({
-                    "Trial_Submission_Id": str(sub.id),
-                    "Problem_Id": str(sub.problem_id),
-                    "Status": status_str,
-                    "Score": sub.score,
-                    "Language_Type": sub.language,  # 0: C, 1: C++, 2: Python
-                    "Timestamp":
-                    sub.timestamp.timestamp()  # 回傳 Unix Timestamp 方便前端處理
+                    "trial_submission_id":
+                    str(sub.id),
+                    "problem_Id":
+                    str(sub.problem_id),
+                    "status":
+                    status_str,
+                    "score":
+                    sub.score,
+                    "language_type":
+                    sub.language,  # 0: C, 1: C++, 2: Python
+                    "timestamp":
+                    int(sub.timestamp.timestamp() *
+                        1000),  # 回傳毫秒級 Unix Timestamp 方便前端處理
+                    "use_default_case":
+                    sub.use_default_case  # 前端用來判斷 public/custom 類型
                 })
 
-            return {"Total_Count": total_count, "History": history_list}
+            return {"total_count": total_count, "history": history_list}
         except Exception as e:
             current_app.logger.error(
                 f"Error getting trial submission history: {e}")
@@ -1846,53 +2328,150 @@ class TrialSubmission(MongoBase, BaseSubmission,
     def get_trial_api_info(self) -> Dict[str, Any]:
         """
             Format the trial submission data for API response.
-            Includes Truncated Stdout/Stderr text for each task.
+            Returns proper task-case hierarchy: each task contains an array of cases.
+            Includes Truncated Stdout/Stderr text for each case.
+            Also includes input and expected output from custom testcases if available.
             """
         # Convert status code
         status_str = self.code2status.get(self.status, 'Judging')
         if self.status < 0:
             status_str = 'Judging' if self.status == -1 else 'Pending'
 
+        # Load custom testcases (input/answer) if available
+        # Format: TTCC.in and TTCC.out where TT=task index, CC=case index
+        testcase_data = {
+        }  # {(task_idx, case_idx): {'input': ..., 'answer': ...}}
+        custom_path = getattr(self.obj, 'custom_input_minio_path', None)
+        if custom_path:
+            try:
+                minio_client = MinioClient()
+                data = minio_client.download_file(custom_path)
+                with ZipFile(io.BytesIO(data)) as zf:
+                    for name in zf.namelist():
+                        # Parse filename like "0000.in" or "0000.out" or "0100.in"
+                        base = name.split('/')[-1]  # Handle nested paths
+                        if len(base) >= 7 and base[4] == '.':
+                            try:
+                                task_idx = int(base[0:2])
+                                case_idx = int(base[2:4])
+                                ext = base[5:]  # 'in' or 'out'
+                                key = (task_idx, case_idx)
+                                if key not in testcase_data:
+                                    testcase_data[key] = {
+                                        'input': None,
+                                        'answer': None
+                                    }
+                                content = zf.read(name).decode(
+                                    'utf-8', errors='replace')
+                                if ext == 'in':
+                                    testcase_data[key]['input'] = content
+                                elif ext == 'out':
+                                    testcase_data[key]['answer'] = content
+                            except (ValueError, IndexError):
+                                continue
+            except Exception as e:
+                current_app.logger.warning(
+                    f"Failed to read custom testcases for trial {self.id}: {e}"
+                )
+
         tasks_data = []
         for i, task in enumerate(self.tasks):
-            # One task for one case only
             if not task.cases:
                 continue
 
-            case = task.cases[0]
+            # Build cases array for this task
+            cases_data = []
+            for j, case in enumerate(task.cases):
+                # Get Stdout/Stderr and input/answer from artifact
+                try:
+                    # Use get_case_artifact_files to get all fields including input and answer
+                    output_content = self.get_case_artifact_files(i, j)
+                    stdout_text = output_content.get('stdout', '') or ''
+                    stderr_text = output_content.get('stderr', '') or ''
+                    # Get input/answer from artifact (set by sandbox)
+                    input_text = output_content.get('input', '') or ''
+                    answer_text = output_content.get('answer', '') or ''
+                except (FileNotFoundError, AttributeError):
+                    stdout_text = ''
+                    stderr_text = ''
+                    input_text = ''
+                    answer_text = ''
 
-            # Get Stdout/Stderr
-            try:
-                output_content = self.get_single_output(i, 0, text=True)
-                stdout_text = output_content.get('stdout', '')
-                stderr_text = output_content.get('stderr', '')
-            except (FileNotFoundError, AttributeError):
-                stdout_text = ''
-                stderr_text = ''
+                # Fallback to custom testcases if artifact didn't have input/answer
+                if not input_text or not answer_text:
+                    tc_data = testcase_data.get((i, j), {})
+                    if not input_text:
+                        input_text = tc_data.get('input', '') or ''
+                    if not answer_text:
+                        answer_text = tc_data.get('answer', '') or ''
 
-            # === Apply Truncate Logic ===
-            # Truncate if exceeds OUTPUT_TRUNCATE_SIZE
-            if len(stdout_text) > OUTPUT_TRUNCATE_SIZE:
-                stdout_text = stdout_text[:OUTPUT_TRUNCATE_SIZE] + OUTPUT_TRUNCATE_MSG
+                # === Apply Truncate Logic ===
+                # Truncate if exceeds OUTPUT_TRUNCATE_SIZE
+                if len(stdout_text) > OUTPUT_TRUNCATE_SIZE:
+                    stdout_text = stdout_text[:OUTPUT_TRUNCATE_SIZE] + OUTPUT_TRUNCATE_MSG
 
-            if len(stderr_text) > OUTPUT_TRUNCATE_SIZE:
-                stderr_text = stderr_text[:OUTPUT_TRUNCATE_SIZE] + OUTPUT_TRUNCATE_MSG
+                if len(stderr_text) > OUTPUT_TRUNCATE_SIZE:
+                    stderr_text = stderr_text[:OUTPUT_TRUNCATE_SIZE] + OUTPUT_TRUNCATE_MSG
 
-            task_status_str = self.code2status.get(case.status, 'Unknown')
+                if input_text and len(input_text) > OUTPUT_TRUNCATE_SIZE:
+                    input_text = input_text[:OUTPUT_TRUNCATE_SIZE] + OUTPUT_TRUNCATE_MSG
 
+                if answer_text and len(answer_text) > OUTPUT_TRUNCATE_SIZE:
+                    answer_text = answer_text[:OUTPUT_TRUNCATE_SIZE] + OUTPUT_TRUNCATE_MSG
+
+                case_status_str = self.code2status.get(case.status, 'Unknown')
+
+                cases_data.append({
+                    "status": case_status_str,
+                    "exec_time": case.exec_time,
+                    "memory_usage": case.memory_usage,
+                    "stdout": stdout_text,
+                    "stderr": stderr_text,
+                    "input": input_text,
+                    "answer": answer_text
+                })
+
+            # Calculate task-level status (worst case status)
+            task_status = task.cases[0].status if task.cases else 0
+            for case in task.cases:
+                if case.status != 0:  # If any case is not AC
+                    task_status = case.status
+                    break
+            task_status_str = self.code2status.get(task_status, 'Unknown')
+
+            # Add task with all its cases
             tasks_data.append({
-                "status": task_status_str,
-                "exec_time": case.exec_time,
-                "memory_usage": case.memory_usage,
-                "score": task.score,
-                "stdout": stdout_text,
-                "stderr": stderr_text
+                "status":
+                task_status_str,
+                "exec_time":
+                max((c.exec_time for c in task.cases), default=0),
+                "memory_usage":
+                max((c.memory_usage for c in task.cases), default=0),
+                "score":
+                task.score,
+                "cases":
+                cases_data
             })
+
+        # Get source code
+        code_content = ""
+        try:
+            code_content = self.get_main_code()
+            if code_content is None:
+                code_content = ""
+        except Exception as e:
+            current_app.logger.warning(
+                f"Failed to get trial submission code: {e}")
+            code_content = ""
 
         return {
             "trial_submission_id": str(self.id),
-            "timestamp": self.timestamp.timestamp(),
+            "timestamp": int(self.timestamp.timestamp() * 1000),
             "status": status_str,
             "score": self.score,
+            "sa_status": getattr(self.obj, "sa_status", None),
+            "sa_message": getattr(self.obj, "sa_message", None),
+            "language_type": self.language,
+            "code": code_content,
             "tasks": tasks_data
         }

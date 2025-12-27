@@ -96,6 +96,8 @@ def view_problem_list(
         'type': p.problem_type,
         'quota': p.quota,
         'submitCount': Problem(p.problem_id).submit_count(user),
+        'trialMode': (p.config or {}).get('trialMode', False),
+        'aiVTuber': (p.config or {}).get('aiVTuber', False),
     } for p in data]
     return HTTPResponse('Success.', data=data)
 
@@ -122,6 +124,7 @@ def view_problem(user: User, problem: Problem):
         'allowedLanguage',
         'courses',
         'quota',
+        'trialSubmissionQuota',
         'ACUser',
         'submitter',
         'canViewStdout',
@@ -134,8 +137,12 @@ def view_problem(user: User, problem: Problem):
     if problem.obj.problem_type == 1:
         data.update({'fillInTemplate': problem.obj.test_case.fill_in_template})
     data.update({
-        'submitCount': problem.submit_count(user),
-        'highScore': problem.get_high_score(user=user),
+        'submitCount':
+        problem.submit_count(user),
+        'highScore':
+        problem.get_high_score(user=user),
+        'trialSubmissionCount':
+        problem.trial_submission_counts.get(user.username, 0),
     })
     config_payload, pipeline_payload = _build_config_and_pipeline(problem)
     if config_payload:
@@ -174,6 +181,17 @@ def get_problem_detailed(user, problem: Problem):
     config_payload, pipeline_payload = _build_config_and_pipeline(problem)
     if config_payload:
         info['config'] = config_payload
+        # Add Trial_Mode info
+        info['Trial_Mode'] = {
+            'trialMode':
+            config_payload.get('trialMode', False),
+            'maxNumberOfTrial':
+            config_payload.get('maxNumberOfTrial', 0),
+            'trialResultVisible':
+            config_payload.get('trialResultVisible', False),
+            'trialResultDownloadable':
+            config_payload.get('trialResultDownloadable', False),
+        }
     if pipeline_payload:
         info['pipeline'] = pipeline_payload
     info.update({'submitCount': problem.submit_count(user)})
@@ -216,13 +234,32 @@ def upload_problem_assets(user: User, problem: Problem):
             request.files.get('resource_data_teacher.zip'),
             'dockerfiles.zip':
             request.files.get('dockerfiles.zip'),
+            'public_testdata.zip':
+            request.files.get('public_testdata.zip'),
+            'ac_code.c':
+            request.files.get('ac_code.c'),
+            'ac_code.cpp':
+            request.files.get('ac_code.cpp'),
+            'ac_code.py':
+            request.files.get('ac_code.py'),
         }
 
         valid_files = {k: v for k, v in files_data.items() if v is not None}
         # 如果之前已經有 asset，可以只更新 meta，不強制上傳檔案
         has_existing_assets = bool((problem.config or {}).get('assetPaths'))
         if not valid_files and not has_existing_assets:
-            return HTTPError('No files provided', 400)
+            # These are for debugging
+            current_file_msg = ''
+            if (problem.config or {}).get('assetPaths'):
+                current_file_msg = 'Current assets: ' + str(
+                    (problem.config or {}).get('assetPaths'))
+            if (problem.config or {}).get('meta'):
+                current_file_msg += ' Current meta: ' + str(
+                    (problem.config or {}).get('meta'))
+            if (problem.config or {}).get('pipeline'):
+                current_file_msg += ' Current pipeline: ' + str(
+                    (problem.config or {}).get('pipeline'))
+            return HTTPError('No files provided. ' + current_file_msg, 400)
         meta_raw = request.form.get('meta')
         try:
             meta = json.loads(meta_raw) if meta_raw else {}
@@ -268,9 +305,17 @@ def upload_problem_assets(user: User, problem: Problem):
     'can_view_stdout',
     'allowed_language',
     'default_code',
+    'Trial_Mode',
 )
 def create_problem(user: User, **ks):
     data = request.json or {}
+
+    # Handle Trial_Mode alias
+    if 'Trial_Mode' in data:
+        data['Test_Mode'] = data['Trial_Mode']
+        if 'Trial_Mode' in ks:
+            # If Request.json put it in ks, move it or let logic handle data['Test_Mode']
+            del ks['Trial_Mode']
 
     alias_pairs = (
         ('problem_name', 'problemName'),
@@ -339,25 +384,34 @@ def create_problem(user: User, **ks):
     if legacy_pipeline:
         ks['pipeline'] = drop_none(legacy_pipeline)
 
-    test_mode_payload = data.get('Test_Mode') or {}
-    derived_test_mode = {}
+    trial_mode_payload = data.get('Trial_Mode') or {}
+    derived_trial_mode = {}
     if 'trialMode' in config_payload:
-        derived_test_mode['Enabled'] = config_payload['trialMode']
+        derived_trial_mode['Enabled'] = config_payload['trialMode']
     if 'trialModeQuotaPerStudent' in config_payload:
-        derived_test_mode['Quota_Per_Student'] = config_payload[
+        derived_trial_mode['Quota_Per_Student'] = config_payload[
             'trialModeQuotaPerStudent']
-    if not test_mode_payload:
-        test_mode_payload = derived_test_mode
+    if 'maxNumberOfTrial' in config_payload:
+        derived_trial_mode['maxNumberOfTrial'] = config_payload[
+            'maxNumberOfTrial']
+    if 'trialResultVisible' in config_payload:
+        derived_trial_mode['trialResultVisible'] = config_payload[
+            'trialResultVisible']
+    if 'trialResultDownloadable' in config_payload:
+        derived_trial_mode['trialResultDownloadable'] = config_payload[
+            'trialResultDownloadable']
+    if not trial_mode_payload:
+        trial_mode_payload = derived_trial_mode
     else:
-        test_mode_payload = {
-            **test_mode_payload,
+        trial_mode_payload = {
+            **trial_mode_payload,
             **{
                 k: v
-                for k, v in derived_test_mode.items() if v is not None
+                for k, v in derived_trial_mode.items() if v is not None
             },
         }
-    if test_mode_payload:
-        ks['Test_Mode'] = drop_none(test_mode_payload)
+    if trial_mode_payload:
+        ks['Trial_Mode'] = drop_none(trial_mode_payload)
 
     try:
         pid = Problem.add(user=user, **ks)
@@ -405,9 +459,10 @@ def manage_problem(user: User, problem: Problem):
         'defaultCode',
         'config',
         'pipeline',
-        'Test_Mode',
+        'Trial_Mode',
     )
     def modify_problem(**p_ks):
+
         kwargs = {
             'problem_name': p_ks.pop('problemName', None),
             'description': p_ks.pop('description', None),
@@ -422,12 +477,20 @@ def manage_problem(user: User, problem: Problem):
             'default_code': p_ks.pop('defaultCode', None),
             'config': p_ks.pop('config', None),
             'pipeline': p_ks.pop('pipeline', None),
-            'Test_Mode': p_ks.pop('Test_Mode', None),
+            'Trial_Mode': p_ks.pop('Trial_Mode', None),
         }
 
+        if 'config' in kwargs or 'pipeline' in kwargs or 'Trial_Mode' in kwargs:
+            full_config = problem.obj.config or {}
+
         data = request.json or {}
+
         config_payload = data.get('config') or {}
         pipeline_payload = data.get('pipeline') or {}
+
+        if 'maxNumberOfTrial' in config_payload:
+            kwargs['trial_submission_quota'] = config_payload[
+                'maxNumberOfTrial']
 
         legacy_config = kwargs.get('config') or {}
         for key in (
@@ -486,24 +549,34 @@ def manage_problem(user: User, problem: Problem):
             if legacy_pipeline:
                 kwargs['pipeline'] = drop_none(legacy_pipeline)
 
-        test_mode_payload = data.get('Test_Mode') or kwargs.get(
-            'Test_Mode') or {}
-        derived_test_mode = {}
+        trial_mode_payload = data.get('Trial_Mode') or kwargs.get(
+            'Trial_Mode') or {}
+        derived_trial_mode = {}
+
         if 'trialMode' in config_payload:
-            derived_test_mode['Enabled'] = config_payload['trialMode']
+            derived_trial_mode['Enabled'] = config_payload['trialMode']
         if 'trialModeQuotaPerStudent' in config_payload:
-            derived_test_mode['Quota_Per_Student'] = config_payload[
+            derived_trial_mode['Quota_Per_Student'] = config_payload[
                 'trialModeQuotaPerStudent']
-        if derived_test_mode:
-            test_mode_payload = {
-                **test_mode_payload,
+        if 'maxNumberOfTrial' in config_payload:
+            derived_trial_mode['maxNumberOfTrial'] = config_payload[
+                'maxNumberOfTrial']
+        if 'trialResultVisible' in config_payload:
+            derived_trial_mode['trialResultVisible'] = config_payload[
+                'trialResultVisible']
+        if 'trialResultDownloadable' in config_payload:
+            derived_trial_mode['trialResultDownloadable'] = config_payload[
+                'trialResultDownloadable']
+        if derived_trial_mode:
+            trial_mode_payload = {
+                **trial_mode_payload,
                 **{
                     k: v
-                    for k, v in derived_test_mode.items() if v is not None
+                    for k, v in derived_trial_mode.items() if v is not None
                 },
             }
-        if test_mode_payload:
-            kwargs['Test_Mode'] = drop_none(test_mode_payload)
+        if trial_mode_payload:
+            kwargs['Trial_Mode'] = drop_none(trial_mode_payload)
 
         Problem.edit_problem(
             user=user,
@@ -714,6 +787,10 @@ def get_checksum(token: str, problem_id: int):
     if not problem:
         return HTTPError(f'{problem} not found', 404)
     submission_mode = getattr(problem.test_case, 'submission_mode', 0) or 0
+    # Also check config.acceptedFormat for zip mode (frontend uses this)
+    config = problem.config or {}
+    if config.get('acceptedFormat') == 'zip':
+        submission_mode = 1
     meta = json.dumps({
         'tasks':
         [json.loads(task.to_json()) for task in problem.test_case.tasks],
@@ -726,6 +803,274 @@ def get_checksum(token: str, problem_id: int):
     return HTTPResponse(data=digest)
 
 
+@problem_api.route('/<int:problem_id>/checker-api-key', methods=['GET'])
+@Request.args('token: str')
+def get_checker_api_key(token: str, problem_id: int):
+    """Get AI API key for custom checker (sandbox only)."""
+    from mongo.ai.models import AiApiKey
+
+    if sandbox.find_by_token(token) is None:
+        return HTTPError('Invalid sandbox token', 401)
+    problem = Problem(problem_id)
+    if not problem:
+        return HTTPError(f'Problem {problem_id} not found', 404)
+
+    # Get aiChecker config from problem
+    config = problem.config or {}
+    ai_checker_cfg = config.get('aiChecker', {})
+    if not ai_checker_cfg.get('enabled'):
+        return HTTPError('AI Checker not enabled for this problem', 404)
+
+    api_key_id = ai_checker_cfg.get('apiKeyId')
+    if not api_key_id:
+        return HTTPError('API Key not configured for AI Checker', 404)
+
+    # Get actual key value using AiApiKey.get_key_by_id
+    key_doc = AiApiKey.get_key_by_id(api_key_id)
+    if not key_doc:
+        return HTTPError('API Key not found', 404)
+    if not key_doc.is_active:
+        return HTTPError('API Key is inactive', 404)
+
+    return HTTPResponse(data={'apiKey': key_doc.key_value})
+
+
+# === Trial Mode APIs for Sandbox ===
+
+
+@problem_api.route('/<int:problem_id>/public-testdata', methods=['GET'])
+@Request.args('token: str')
+def get_public_testdata(token: str, problem_id: int):
+    """Download public test cases ZIP for Trial Mode (sandbox only)."""
+    if sandbox.find_by_token(token) is None:
+        return HTTPError('Invalid sandbox token', 401)
+    problem = Problem(problem_id)
+    if not problem:
+        return HTTPError(f'Problem {problem_id} not found', 404)
+
+    # Check if trial mode is enabled
+    if not problem.trial_mode_enabled:
+        return HTTPError('Trial mode is not enabled for this problem', 403)
+
+    # Try MinIO path first (via standardized property)
+    minio_path = problem.public_cases_zip_minio_path
+    if minio_path:
+        minio_client = MinioClient()
+        try:
+            resp = minio_client.client.get_object(
+                minio_client.bucket,
+                minio_path,
+            )
+            return send_file(
+                BytesIO(resp.read()),
+                mimetype='application/zip',
+                as_attachment=True,
+                download_name=f'public-testdata-{problem_id}.zip',
+            )
+        except Exception as exc:
+            current_app.logger.error(
+                f'Failed to fetch public testdata from MinIO: {exc}')
+            return HTTPError(f'Failed to fetch public testdata: {exc}', 500)
+        finally:
+            if 'resp' in locals():
+                resp.close()
+                resp.release_conn()
+
+    # Fallback to GridFS
+    public_cases_zip = getattr(problem.obj, 'public_cases_zip', None)
+    if public_cases_zip and public_cases_zip.grid_id:
+        return send_file(
+            public_cases_zip,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=f'public-testdata-{problem_id}.zip',
+        )
+
+    return HTTPError('Public test cases not found', 404)
+
+
+@problem_api.route('/<int:problem_id>/public-checksum', methods=['GET'])
+@Request.args('token: str')
+def get_public_checksum(token: str, problem_id: int):
+    """Get checksum of public test cases for cache validation (sandbox only)."""
+    if sandbox.find_by_token(token) is None:
+        return HTTPError('Invalid sandbox token', 401)
+    problem = Problem(problem_id)
+    if not problem:
+        return HTTPError(f'Problem {problem_id} not found', 404)
+
+    if not problem.trial_mode_enabled:
+        return HTTPError('Trial mode is not enabled for this problem', 403)
+
+    # Try MinIO path first (via standardized property)
+    minio_path = problem.public_cases_zip_minio_path
+    if minio_path:
+        minio_client = MinioClient()
+        try:
+            content = minio_client.download_file(minio_path)
+            digest = hashlib.md5(content).hexdigest()
+            return HTTPResponse(data={'checksum': digest})
+        except Exception as exc:
+            current_app.logger.error(
+                f'Failed to fetch public testdata checksum: {exc}')
+            return HTTPError(f'Failed to fetch checksum: {exc}', 500)
+
+    # Fallback to GridFS
+    public_cases_zip = getattr(problem.obj, 'public_cases_zip', None)
+    if public_cases_zip and public_cases_zip.grid_id:
+        content = public_cases_zip.read()
+        public_cases_zip.seek(0)  # Reset for potential re-read
+        digest = hashlib.md5(content).hexdigest()
+        return HTTPResponse(data={'checksum': digest})
+
+    return HTTPError('Public test cases not found', 404)
+
+
+@problem_api.route('/<int:problem_id>/ac-code', methods=['GET'])
+@Request.args('token: str')
+def get_ac_code(token: str, problem_id: int):
+    """Download AC Code for Trial Mode (sandbox only). Returns ZIP with language info.
+    
+    Note: AC code may be stored as a single file (e.g., main.py) or as a ZIP.
+    This endpoint always returns a ZIP file, wrapping single files if necessary.
+    """
+    from pathlib import Path as PathLib
+
+    if sandbox.find_by_token(token) is None:
+        return HTTPError('Invalid sandbox token', 401)
+    problem = Problem(problem_id)
+    if not problem:
+        return HTTPError(f'Problem {problem_id} not found', 404)
+
+    if not problem.trial_mode_enabled:
+        return HTTPError('Trial mode is not enabled for this problem', 403)
+
+    # Get AC code language from config.assetPaths or database field
+    ac_code_language = problem.ac_code_language
+
+    # Try MinIO path first (via standardized property)
+    minio_path = problem.ac_code_minio_path
+    if minio_path:
+        minio_client = MinioClient()
+        try:
+            resp = minio_client.client.get_object(
+                minio_client.bucket,
+                minio_path,
+            )
+            file_content = resp.read()
+            filename = PathLib(minio_path).name
+
+            # Check if already a ZIP file (ZIP magic bytes: PK\x03\x04)
+            is_zip = len(
+                file_content) >= 4 and file_content[:4] == b'PK\x03\x04'
+
+            if is_zip:
+                # Already a ZIP, return as-is
+                zip_buffer = BytesIO(file_content)
+            else:
+                # Wrap single file in ZIP
+                zip_buffer = BytesIO()
+                with zipfile.ZipFile(zip_buffer, 'w',
+                                     zipfile.ZIP_DEFLATED) as zf:
+                    zf.writestr(filename, file_content)
+                zip_buffer.seek(0)
+
+            response = send_file(
+                zip_buffer,
+                mimetype='application/zip',
+                as_attachment=True,
+                download_name=f'ac-code-{problem_id}.zip',
+            )
+            # Add language info in response header
+            if ac_code_language is not None:
+                response.headers['X-AC-Code-Language'] = str(ac_code_language)
+            return response
+        except Exception as exc:
+            current_app.logger.error(
+                f'Failed to fetch AC code from MinIO: {exc}')
+            return HTTPError(f'Failed to fetch AC code: {exc}', 500)
+        finally:
+            if 'resp' in locals():
+                resp.close()
+                resp.release_conn()
+
+    # Fallback to GridFS
+    ac_code = getattr(problem.obj, 'ac_code', None)
+    if ac_code and ac_code.grid_id:
+        file_content = ac_code.read()
+        ac_code.seek(0)
+        filename = getattr(ac_code, 'filename', None) or 'ac_code.py'
+
+        # Check if already a ZIP file
+        is_zip = len(file_content) >= 4 and file_content[:4] == b'PK\x03\x04'
+
+        if is_zip:
+            zip_buffer = BytesIO(file_content)
+        else:
+            zip_buffer = BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr(filename, file_content)
+            zip_buffer.seek(0)
+
+        response = send_file(
+            zip_buffer,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=f'ac-code-{problem_id}.zip',
+        )
+        if ac_code_language is not None:
+            response.headers['X-AC-Code-Language'] = str(ac_code_language)
+        return response
+
+    return HTTPError('AC code not found', 404)
+
+
+@problem_api.route('/<int:problem_id>/ac-code-checksum', methods=['GET'])
+@Request.args('token: str')
+def get_ac_code_checksum(token: str, problem_id: int):
+    """Get checksum of AC code for cache validation (sandbox only)."""
+    if sandbox.find_by_token(token) is None:
+        return HTTPError('Invalid sandbox token', 401)
+    problem = Problem(problem_id)
+    if not problem:
+        return HTTPError(f'Problem {problem_id} not found', 404)
+
+    if not getattr(problem.obj, 'trial_mode_enabled', False):
+        return HTTPError('Trial mode is not enabled for this problem', 403)
+
+    # Get AC code language for inclusion in checksum response
+    ac_code_language = getattr(problem.obj, 'ac_code_language', None)
+
+    # Try MinIO path first
+    minio_path = getattr(problem.obj, 'ac_code_minio_path', None)
+    if minio_path:
+        minio_client = MinioClient()
+        try:
+            content = minio_client.download_file(minio_path)
+            digest = hashlib.md5(content).hexdigest()
+            return HTTPResponse(data={
+                'checksum': digest,
+                'language': ac_code_language,
+            })
+        except Exception as exc:
+            current_app.logger.error(
+                f'Failed to fetch AC code checksum: {exc}')
+            return HTTPError(f'Failed to fetch checksum: {exc}', 500)
+
+    # Fallback to GridFS
+    ac_code = getattr(problem.obj, 'ac_code', None)
+    if ac_code and ac_code.grid_id:
+        content = ac_code.read()
+        ac_code.seek(0)
+        digest = hashlib.md5(content).hexdigest()
+        return HTTPResponse(data={
+            'checksum': digest,
+            'language': ac_code_language,
+        })
+
+    return HTTPError('AC code not found', 404)
+
+
 @problem_api.route('/<int:problem_id>/meta', methods=['GET'])
 @Request.args('token: str')
 def get_meta(token: str, problem_id: int):
@@ -735,12 +1080,13 @@ def get_meta(token: str, problem_id: int):
     problem = Problem(problem_id)
     if not problem:
         return HTTPError(f'{problem} not found', 404)
-    submission_mode = getattr(problem.test_case, 'submission_mode', 0) or 0
     config_payload, pipeline_payload = _build_config_and_pipeline(problem)
+    # Use acceptedFormat as single source of truth
+    accepted_format = config_payload.get('acceptedFormat', 'code')
     meta = {
         'tasks':
         [json.loads(task.to_json()) for task in problem.test_case.tasks],
-        'submissionMode': submission_mode,
+        'acceptedFormat': accepted_format,
     }
     execution_mode = pipeline_payload.get('executionMode', 'general')
     custom_checker = pipeline_payload.get(
@@ -767,7 +1113,7 @@ def get_meta(token: str, problem_id: int):
         'buildStrategy':
         _derive_build_strategy(
             problem=problem,
-            submission_mode=submission_mode,
+            accepted_format=accepted_format,
             execution_mode=execution_mode,
         ),
         'resourceData':
@@ -785,6 +1131,13 @@ def get_meta(token: str, problem_id: int):
         'artifactCollection':
         config_payload.get('artifactCollection', []),
     })
+    # AI Checker settings
+    ai_checker_cfg = config_payload.get('aiChecker', {})
+    if ai_checker_cfg.get('enabled'):
+        meta['aiChecker'] = {
+            'enabled': True,
+            'model': ai_checker_cfg.get('model', 'gemini-2.5-flash'),
+        }
     network_cfg = config_payload.get('networkAccessRestriction')
     if network_cfg:
         meta['networkAccessRestriction'] = network_cfg
@@ -861,23 +1214,26 @@ def update_problem_meta(user: User, problem: Problem):
     if legacy_pipeline:
         kwargs['pipeline'] = drop_none(legacy_pipeline)
 
-    test_mode_payload = data.get('Test_Mode') or {}
-    derived_test_mode = {}
+    trial_mode_payload = data.get('Trial_Mode') or {}
+    derived_trial_mode = {}
     if 'trialMode' in config_payload:
-        derived_test_mode['Enabled'] = config_payload['trialMode']
+        derived_trial_mode['Enabled'] = config_payload['trialMode']
     if 'trialModeQuotaPerStudent' in config_payload:
-        derived_test_mode['Quota_Per_Student'] = config_payload[
+        derived_trial_mode['Quota_Per_Student'] = config_payload[
             'trialModeQuotaPerStudent']
-    if derived_test_mode:
-        test_mode_payload = {
-            **test_mode_payload,
+    if 'maxNumberOfTrial' in config_payload:
+        derived_trial_mode['maxNumberOfTrial'] = config_payload[
+            'maxNumberOfTrial']
+    if derived_trial_mode:
+        trial_mode_payload = {
+            **trial_mode_payload,
             **{
                 k: v
-                for k, v in derived_test_mode.items() if v is not None
+                for k, v in derived_trial_mode.items() if v is not None
             },
         }
-    if test_mode_payload:
-        kwargs['Test_Mode'] = drop_none(test_mode_payload)
+    if trial_mode_payload:
+        kwargs['Trial_Mode'] = drop_none(trial_mode_payload)
 
     if not kwargs:
         return HTTPResponse('Success.')
@@ -1023,7 +1379,7 @@ def clone_problem(
 @Request.json('problem_id')
 @Request.doc('problem_id', 'problem', Problem)
 def publish_problem(user, problem: Problem):
-    if user.role == 1 and problem.owner != user.username:
+    if user.role == Role.TEACHER and problem.owner != user.username:
         return HTTPError('Not the owner.', 403)
     Problem.release_problem(problem.problem_id)
     return HTTPResponse('Success.')
@@ -1110,56 +1466,42 @@ def problem_migrate_test_case(user: User, problem: Problem):
 #
 @problem_api.route('/static-analysis/options', methods=['GET'])
 def get_static_analysis_options():
+    """Return common library symbols for static analysis UI options."""
     try:
-        symbols = [
-            'stdio.h',
-            'stdlib.h',
-            'string.h',
-            'math.h',
-            'time.h',
-            'ctype.h',
-            'assert.h',
-            'errno.h',
-            'float.h',
-            'limits.h',
-            'locale.h',
-            'setjmp.h',
-            'signal.h',
-            'stdarg.h',
-            'stddef.h',
-            'stdint.h',
-            'stdbool.h',
-            'sys/types.h',
-            'sys/stat.h',
-            'fcntl.h',
-            'unistd.h',
-            'pthread.h',
-            'iostream',
-            'vector',
-            'string',
-            'algorithm',
-            'map',
-            'set',
-            'queue',
-            'stack',
-            'deque',
-            'memory',
-        ]
-        headers = sorted({s for s in symbols if s.endswith('.h')})
-        functions = sorted({s for s in symbols if not s.endswith('.h')})
-        imports = []  # Python import list is intentionally empty for now
-
+        from model.utils.library_symbols import get_library_symbols
         return HTTPResponse(
             'Success.',
-            data={
-                'librarySymbols': {
-                    'imports': imports,
-                    'headers': headers,
-                    'functions': functions,
-                }
-            },
+            data={'librarySymbols': get_library_symbols()},
         )
+    except Exception as e:
+        return HTTPError(str(e), 400)
 
+
+@problem_api.get('/syntax-options')
+def get_syntax_options():
+    """
+    Return categorized syntax options for static analysis.
+
+    Returns Python (130+) and C/C++ (66+) syntax types with:
+    - common: Frequently used types for UI buttons
+    - all: Complete list for validation
+    - categories: Grouped by functionality
+
+    Response format:
+    {
+        "python": { "common": [...], "all": [...], "categories": {...} },
+        "cpp": { "common": [...], "all": [...], "categories": {...} }
+    }
+    """
+    try:
+        from model.utils.syntax_options import (get_python_syntax_options,
+                                                get_cpp_syntax_options)
+
+        return HTTPResponse('Success.',
+                            data={
+                                'python': get_python_syntax_options(),
+                                'cpp': get_cpp_syntax_options()
+                            })
     except Exception as e:
         return HTTPError(str(e), 400)
 
@@ -1172,10 +1514,10 @@ def get_public_testcases(user, problem_id: int):
     if not problem or not getattr(problem, "obj", None):
         return HTTPError("Problem not found.", 404)
 
-    # Enforce test mode: if field exists and is False -> forbid
-    if hasattr(problem.obj, "test_mode_enabled") and not getattr(
-            problem.obj, "test_mode_enabled", False):
-        return HTTPError("Test mode disabled.", 403)
+    # Enforce trial mode: if field exists and is False -> forbid
+    if hasattr(problem.obj, "trial_mode_enabled") and not getattr(
+            problem.obj, "trial_mode_enabled", False):
+        return HTTPError("Trial mode disabled.", 403)
 
     # Redis Cache Lookup
     cache_key = f'PROBLEM_PUBLIC_TESTCASES_{problem_id}'
@@ -1192,8 +1534,8 @@ def get_public_testcases(user, problem_id: int):
                 f"Cache hit but failed to parse for {cache_key}: {e}")
             # If fails: continue to fetch from MinIO
 
-    # Cache miss or fail: Fetch from MinIO
-    zip_path = getattr(problem, "public_cases_zip_minio_path", None)
+    # Cache miss or fail: Fetch from MinIO (via standardized property)
+    zip_path = problem.public_cases_zip_minio_path
     if not zip_path:
         return HTTPError("No public testcases.", 404)
 
@@ -1312,30 +1654,69 @@ def request_trial_submission(user,
     Create a trial submission request
     
     Returns:
-        Trial_Submission_Id if successful
+        trial_submission_id if successful
     """
     current_app.logger.info(
         f"Requesting trial submission for problem id-{problem_id} by user {user.username}"
     )
+    current_app.logger.debug(
+        f"[TRIAL] Entry params: problem_id={problem_id}, language_type={language_type}, "
+        f"use_default_test_cases={use_default_test_cases}")
+
     # Load problem
     problem_proxy = Problem(problem_id)
     if not problem_proxy or not getattr(problem_proxy, "obj", None):
+        current_app.logger.error(f"[TRIAL] Problem {problem_id} not found")
         return HTTPError("Problem not found.", 404)
 
     problem = problem_proxy
+    current_app.logger.debug(f"[TRIAL] Problem loaded: {problem.problem_name}")
+
+    # Backward compatibility for clients sending legacy key casing.
+    data = request.get_json(silent=True) or {}
+    if "Use_Default_Test_Cases" in data:
+        use_default_test_cases = data.get("Use_Default_Test_Cases")
+    elif "use_default_test_cases" in data:
+        use_default_test_cases = data.get("use_default_test_cases")
 
     # Validate language type (0: C, 1: C++, 2: Python)
     if language_type not in [0, 1, 2]:
+        current_app.logger.error(
+            f"[TRIAL] Invalid language type: {language_type}")
         return HTTPError(
             "Invalid language type. Must be 0 (C), 1: C++, 2: Python).", 400)
 
     # Check if user has permission to submit
-    if not problem.permission(user, Problem.Permission.ONLINE):
+    has_permission = problem.permission(user, Problem.Permission.ONLINE)
+    current_app.logger.debug(
+        f"[TRIAL] Permission check: has_permission={has_permission}, user={user.username}"
+    )
+    if not has_permission:
+        current_app.logger.warning(
+            f"[TRIAL] User {user.username} denied permission to problem {problem_id}"
+        )
         return HTTPError(
             "You don't have permission to submit to this problem.", 403)
 
+    # Check if trial mode is enabled
+    trial_enabled = problem.trial_mode_enabled
+    config = getattr(problem.obj, 'config', {}) or {}
+    trial_mode_db = getattr(problem.obj, 'trial_mode_enabled', None)
+    current_app.logger.debug(
+        f"[TRIAL] Trial mode check: trial_enabled={trial_enabled}, "
+        f"config.trialMode={config.get('trialMode')}, "
+        f"db.trial_mode_enabled={trial_mode_db}")
+    if not trial_enabled:
+        current_app.logger.warning(
+            f"[TRIAL] Trial mode not enabled for problem {problem_id}")
+        return HTTPError("Trial mode is not enabled for this problem.", 403)
+
     # Use TrialSubmission.add() instead of creating engine object directly
     try:
+        current_app.logger.debug(
+            f"[TRIAL] Calling TrialSubmission.add: problem_id={problem_id}, "
+            f"username={user.username}, lang={language_type}, use_default={use_default_test_cases}"
+        )
         trial_submission = TrialSubmission.add(
             problem_id=problem_id,
             username=user.username,
@@ -1343,15 +1724,22 @@ def request_trial_submission(user,
             timestamp=datetime.now(),
             ip_addr=request.remote_addr,
             use_default_case=use_default_test_cases)
-
+        current_app.logger.info(
+            f"[TRIAL] Successfully created trial submission: {trial_submission.id}"
+        )
         return HTTPResponse(
             "Trial submission created successfully.",
-            data={"Trial_Submission_Id": str(trial_submission.id)})
+            data={"trial_submission_id": str(trial_submission.id)})
     except PermissionError as e:
-        current_app.logger.info(
-            f"Permission error for trial submission by user {user.username} on problem id-{problem_id}: {str(e)}"
+        current_app.logger.warning(
+            f"[TRIAL] PermissionError for user {user.username} on problem {problem_id}: {e}"
         )
         return HTTPError(str(e), 403)
     except Exception as e:
-        current_app.logger.error(f"Error creating trial submission: {str(e)}")
+        current_app.logger.error(
+            f"[TRIAL] Exception in TrialSubmission.add: {type(e).__name__}: {e}"
+        )
+        import traceback
+        current_app.logger.debug(
+            f"[TRIAL] Traceback: {traceback.format_exc()}")
         return HTTPError(f"Failed to create trial submission: {str(e)}", 500)

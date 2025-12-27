@@ -10,6 +10,8 @@ from . import engine
 from . import config
 from .config import FLASK_DEBUG, MINIO_HOST, MINIO_SECRET_KEY, MINIO_ACCESS_KEY, MINIO_BUCKET
 
+Role = engine.User.Role
+
 if TYPE_CHECKING:
     from .user import User  # pragma: no cover
     from .problem import Problem  # pragma: no cover
@@ -31,12 +33,29 @@ def hash_id(salt, text):
 
 
 def perm(course, user):
-    '''4: admin, 3: teacher, 2: TA, 1: student, 0: not found
     '''
-    return 4 - [
-        user.role == 0, user == course.teacher, user in course.tas,
-        user.username in course.student_nicknames.keys(), True
-    ].index(True)
+    Return permission level:
+    4: admin / owner
+    3: teacher
+    2: TA
+    1: student
+    0: guest / not found
+    '''
+    if user.role == Role.ADMIN:
+        return 4
+
+    # Check if user is the course teacher
+    if course.teacher and user.pk == course.teacher.pk:
+        return 3
+
+    # Check if user is in TAs list
+    if user.pk in [ta.pk for ta in course.tas]:
+        return 2
+
+    if user.username in course.student_nicknames.keys():
+        return 1
+
+    return 0
 
 
 class Cache(abc.ABC):
@@ -197,12 +216,26 @@ def generate_ulid() -> str:
 class MinioClient:
 
     def __init__(self):
-        self.client = Minio(
-            config.MINIO_HOST,
-            access_key=config.MINIO_ACCESS_KEY,
-            secret_key=config.MINIO_SECRET_KEY,
-            secure=not config.FLASK_DEBUG,
-        )
+        if not config.MINIO_HOST:
+            raise ValueError(
+                'MINIO_HOST environment variable is not set. '
+                'Please ensure MinIO service is configured and running.')
+        if not config.MINIO_ACCESS_KEY or not config.MINIO_SECRET_KEY:
+            raise ValueError(
+                'MINIO_ACCESS_KEY or MINIO_SECRET_KEY environment variable is not set. '
+                'Please configure MinIO credentials.')
+        try:
+            self.client = Minio(
+                config.MINIO_HOST,
+                access_key=config.MINIO_ACCESS_KEY,
+                secret_key=config.MINIO_SECRET_KEY,
+                secure=config.MINIO_SECURE,
+            )
+        except Exception as e:
+            raise ValueError(
+                f'Failed to initialize MinIO client: {str(e)}. '
+                f'Please check MINIO_HOST ({config.MINIO_HOST}) and ensure MinIO service is running.'
+            ) from e
         self.bucket = config.MINIO_BUCKET
 
     def upload_file_object(

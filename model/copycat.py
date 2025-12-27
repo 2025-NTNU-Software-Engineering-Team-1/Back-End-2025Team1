@@ -1,7 +1,16 @@
 from typing import Dict
+from mongo import Problem
 from flask import Blueprint, request, current_app
-from mongo import *
-from mongo.utils import *
+from mongo.copycat_service import (
+    build_student_dict,
+    collect_submission_paths,
+    get_course,
+    get_problem,
+    has_grade_permission,
+    mark_report_requested,
+    require_moss_userid,
+    update_problem_report,
+)
 from .utils import *
 from .auth import *
 
@@ -29,37 +38,24 @@ def is_valid_url(url):
     return url is not None and regex.search(url)
 
 
-def get_report_task(user, problem_id, student_dict: Dict):
-    # select all ac code
-    submissions = Submission.filter(
-        user=user,
-        offset=0,
-        count=-1,
-        status=0,
-        problem=problem_id,
+def get_report_task(user, problem_id, student_dict: Dict, moss_userid=None):
+    last_cc_submission, last_python_submission = collect_submission_paths(
+        user,
+        problem_id,
+        student_dict,
     )
 
-    last_cc_submission = {}
-    last_python_submission = {}
-    for submission in submissions:
-        s = Submission(submission.id)
-        if s.user.username in student_dict:
-            if s.language in [0, 1] \
-                and s.user.username not in last_cc_submission:
-                last_cc_submission[
-                    submission.user.username] = s.main_code_path()
-            elif s.language in [2] \
-                and s.user.username not in last_python_submission:
-                last_python_submission[
-                    submission.user.username] = s.main_code_path()
-
-    moss_userid = 97089070
+    if moss_userid is None:
+        moss_userid = require_moss_userid()
 
     # get logger
     logger = logging.getLogger('guincorn.error')
 
     # Get problem object
-    problem = Problem(problem_id)
+    problem = get_problem(problem_id)
+    if not problem:
+        logger.info(f"[copycat] problem not found: {problem_id}")
+        return
 
     cpp_report_url = ''
     python_report_url = ''
@@ -110,7 +106,8 @@ def get_report_task(user, problem_id, student_dict: Dict):
         )
 
     # insert report url into DB & update status
-    problem.obj.update(
+    update_problem_report(
+        problem_id,
         cpp_report_url=cpp_report_url,
         python_report_url=python_report_url,
         moss_status=2,
@@ -144,13 +141,13 @@ def get_report(user, course, problem_id):
     except ValueError:
         return HTTPError('problemId must be integer', 400)
 
-    course = Course(course)
-    if not course.permission(user, Course.Permission.GRADE):
-        return HTTPError('Forbidden.', 403)
     if not problem:
         return HTTPError('Problem not exist.', 404)
+    course = get_course(course)
     if not course:
         return HTTPError('Course not found.', 404)
+    if not has_grade_permission(course, user):
+        return HTTPError('Forbidden.', 403)
 
     cpp_report_url = problem.cpp_report_url
     python_report_url = problem.python_report_url
@@ -188,32 +185,31 @@ def detect(user, course, problem_id, student_nicknames):
             },
         )
 
-    course = Course(course)
-    problem = Problem(problem_id)
+    course = get_course(course)
+    problem = get_problem(problem_id)
 
     # Check if student is in course
-    student_dict = {}
-    for student, nickname in student_nicknames.items():
-        if not User(student):
-            return HTTPResponse(f'User: {student} not found.', 404)
-        student_dict[student] = nickname
-    # Check student_dict
-    if not student_dict:
-        return HTTPResponse('Empty student list.', 404)
     # some privilege or exist check
-    if not course.permission(user, Course.Permission.GRADE):
-        return HTTPError('Forbidden.', 403)
     if not problem:
         return HTTPError('Problem not exist.', 404)
     if not course:
         return HTTPError('Course not found.', 404)
+    if not has_grade_permission(course, user):
+        return HTTPError('Forbidden.', 403)
 
-    problem = Problem(problem_id)
-    problem.update(
-        cpp_report_url="",
-        python_report_url="",
-        moss_status=1,
-    )
+    student_dict, err = build_student_dict(student_nicknames)
+    if err is not None:
+        return HTTPResponse(err, 404)
+
+    if not current_app.config['TESTING']:
+        try:
+            moss_userid = require_moss_userid()
+        except ValueError as exc:
+            return HTTPError(str(exc), 500)
+    else:
+        moss_userid = None
+
+    mark_report_requested(problem_id)
     if not current_app.config['TESTING']:
         threading.Thread(
             target=get_report_task,
@@ -221,6 +217,7 @@ def detect(user, course, problem_id, student_nicknames):
                 user,
                 problem_id,
                 student_dict,
+                moss_userid,
             ),
         ).start()
 

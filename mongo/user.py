@@ -13,6 +13,8 @@ import hashlib
 import jwt
 import os
 import re
+import base64
+import json
 
 if TYPE_CHECKING:
     from .course import Course  # pragma: no cover
@@ -113,6 +115,7 @@ class User(MongoBase, engine=engine.User):
                         f'[username={username}, role={role}]', )
         # Register
         registered_users = []
+        skipped = []
         for u in new_users:
             try:
                 new_user = cls.signup(
@@ -129,13 +132,30 @@ class User(MongoBase, engine=engine.User):
                     new_user.update(role=role)
                     new_user.reload('role')
             except engine.NotUniqueError:
+                # Determine whether conflict is on username or email
+                reason = 'unknown'
                 try:
                     new_user = cls.get_by_username(u['username'])
+                    reason = 'username'
                 except engine.DoesNotExist:
-                    new_user = cls.get_by_email(u['email'])
-                if force:
+                    try:
+                        new_user = cls.get_by_email(u['email'])
+                        reason = 'email'
+                    except engine.DoesNotExist:
+                        # Fallback: mark as unknown conflict
+                        new_user = None
+                if new_user is not None and force:
                     new_user.force_update(u, course)
-            registered_users.append(new_user)
+                else:
+                    # Record skipped entry for frontend to present to the user
+                    skipped.append({
+                        'username': u.get('username'),
+                        'email': u.get('email'),
+                        'reason': reason,
+                    })
+            # Only append if we have a User instance
+            if isinstance(new_user, cls) or new_user is not None:
+                registered_users.append(new_user)
         if course is not None:
             new_student_nicknames = {
                 **course.student_nicknames,
@@ -145,7 +165,8 @@ class User(MongoBase, engine=engine.User):
                 }
             }
             course.update_student_namelist(new_student_nicknames)
-        return new_users
+        # Return both registered users and skipped entries (if any)
+        return {'registered': registered_users, 'skipped': skipped}
 
     def force_update(self, new_user: Dict[str, Any], course: Optional[Course]):
         '''
@@ -236,7 +257,8 @@ class User(MongoBase, engine=engine.User):
             'secret': secret,
             'data': data
         }
-        return jwt.encode(payload, JWT_SECRET, algorithm='HS256')
+        token = jwt.encode(payload, JWT_SECRET, algorithm='HS256')
+        return token
 
     def properties(self, *keys) -> Dict[str, Any]:
         '''
@@ -301,13 +323,58 @@ class User(MongoBase, engine=engine.User):
 
 
 def jwt_decode(token):
+    """
+    Decode and verify JWT token with strict algorithm validation.
+    
+    Security: Explicitly rejects alg: none and any algorithm not in whitelist.
+    """
+    if not token:
+        return None
+
+    # Allowed algorithms whitelist - only HS256 is allowed
+    ALLOWED_ALGORITHMS = ['HS256']
+
     try:
-        json = jwt.decode(
+        # First, decode the header to check the algorithm before verification
+        # This prevents alg: none attacks
+        parts = token.split('.')
+        if len(parts) != 3:
+            return None
+
+        # Decode header (first part)
+        header_data = parts[0]
+        # JWT uses URL-safe base64 without padding
+        # Add padding if needed for base64 decoding
+        padding = 4 - len(header_data) % 4
+        if padding != 4:
+            header_data += '=' * padding
+
+        try:
+            header_json = base64.urlsafe_b64decode(header_data)
+            header = json.loads(header_json)
+        except (ValueError, json.JSONDecodeError, TypeError, Exception):
+            # Catch all exceptions during header decoding (base64 errors, JSON errors, etc.)
+            return None
+
+        # Check algorithm in header
+        alg = header.get('alg', '').upper()
+
+        # Explicitly reject alg: none and any algorithm not in whitelist
+        if alg == 'NONE' or alg not in [a.upper() for a in ALLOWED_ALGORITHMS]:
+            raise ValueError('Invalid algorithm used')
+
+        # Now perform the actual JWT verification with algorithm whitelist
+        decoded = jwt.decode(
             token,
             JWT_SECRET,
             issuer=JWT_ISS,
-            algorithms='HS256',
+            algorithms=ALLOWED_ALGORITHMS,  # Strict whitelist
         )
+        return decoded
     except jwt.exceptions.PyJWTError:
         return None
-    return json
+    except ValueError:
+        raise
+    except Exception:
+        # Catch any other exceptions (base64 decode errors, etc.)
+        return None

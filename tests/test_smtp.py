@@ -25,7 +25,7 @@ html = "test"
 
 def test_smtp_send(monkeypatch):
 
-    os.environ['SMTP_SERVER'] = "http://mock.server"
+    monkeypatch.setenv('SMTP_SERVER', "http://mock.server")
 
     from contextlib import contextmanager
     mock_smtp = MagicMock()
@@ -44,7 +44,7 @@ def test_smtp_send(monkeypatch):
 
 def test_smtp_send_without_server_env(monkeypatch):
 
-    del os.environ['SMTP_SERVER']
+    monkeypatch.delenv('SMTP_SERVER', raising=False)
 
     from contextlib import contextmanager
     mock_smtp = MagicMock()

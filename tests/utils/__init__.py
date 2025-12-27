@@ -1,4 +1,5 @@
 import mongomock
+from mongoengine import disconnect
 
 from mongo import *
 from mongo import engine
@@ -8,6 +9,7 @@ from . import problem
 from . import submission
 from . import homework
 
+import os
 import random
 import secrets
 
@@ -57,8 +59,14 @@ def problem_result(pid):
 
 
 def drop_db(
-    host: str = 'mongodb://localhost',
+    host: str = None,
     db: str = 'normal-oj',
 ):
+    if host is None:
+        host = os.environ.get('MONGO_HOST', 'mongomock://localhost')
+    if host.startswith('mongomock'):
+        host = host.replace('mongomock', 'mongodb')
+    # Disconnect any existing connections first
+    disconnect(alias='default')
     conn = connect(db, host=host, mongo_client_class=mongomock.MongoClient)
     conn.drop_database(db)

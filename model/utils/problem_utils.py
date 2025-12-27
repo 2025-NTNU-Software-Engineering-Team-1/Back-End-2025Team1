@@ -1,5 +1,8 @@
 import copy
-from typing import Dict, Tuple
+import os
+import json
+import time
+from typing import Dict, List, Tuple
 from mongo.problem import Problem
 
 
@@ -24,6 +27,12 @@ def build_config_and_pipeline(problem: Problem) -> Tuple[Dict, Dict]:
     config_payload.setdefault('resourceDataTeacher', False)
     config_payload['trialMode'] = config_payload.get(
         'trialMode', config_payload.get('testMode', False))
+    config_payload['maxNumberOfTrial'] = config_payload.get(
+        'maxNumberOfTrial', 0)
+    config_payload['trialResultVisible'] = config_payload.get(
+        'trialResultVisible', False)
+    config_payload['trialResultDownloadable'] = config_payload.get(
+        'trialResultDownloadable', False)
     pipeline_payload = {
         'allowRead': config_payload.get('allowRead', False),
         'allowWrite': config_payload.get('allowWrite', False),
@@ -79,16 +88,77 @@ def build_static_analysis_rules(problem: Problem):
     }
 
 
-def derive_build_strategy(problem: Problem, submission_mode: int,
+def derive_build_strategy(problem: Problem, accepted_format: str,
                           execution_mode: str) -> str:
-    """Decide build strategy based on submission/testcase mode and executionMode."""
+    """Decide build strategy based on acceptedFormat and executionMode."""
     exec_mode = execution_mode or 'general'
-    is_zip = submission_mode == 1
+    is_zip = accepted_format == 'zip'
     if exec_mode == 'functionOnly':
         return 'makeFunctionOnly'
     if exec_mode == 'interactive':
         return 'makeInteractive'
-    # general (legacy zip -> makeNormal)
+    # general (zip -> makeNormal)
     if is_zip:
         return 'makeNormal'
     return 'compile'
+
+
+def validate_static_analysis_syntax(
+        config: Dict,
+        allowed_language: int,
+        auto_filter: bool = True) -> Tuple[List[str], Dict]:
+    """
+    Validate and optionally filter static analysis syntax values.
+
+    Args:
+        config: The staticAnalysis config dict
+        allowed_language: Bitmask (1=C, 2=C++, 4=Python)
+        auto_filter: If True, filter out invalid values; if False, return errors
+
+    Returns:
+        Tuple of (error_messages, filtered_config)
+        - error_messages: List of validation error strings (empty if auto_filter)
+        - filtered_config: Config with invalid syntax values removed
+    """
+    from .syntax_options import filter_invalid_syntax, validate_syntax_values
+
+    errors = []
+    lib_cfg = config.get('libraryRestrictions', {})
+
+    if not lib_cfg or not lib_cfg.get('enabled'):
+        return errors, config
+
+    # Determine which languages to validate against
+    languages = []
+    if allowed_language & 4:  # Python
+        languages.append('python')
+    if allowed_language & 3:  # C or C++
+        languages.append('cpp')
+
+    if not languages:
+        languages = ['python', 'cpp']  # Default to both
+
+    for mode in ('whitelist', 'blacklist'):
+        mode_cfg = lib_cfg.get(mode, {})
+        syntax_list = mode_cfg.get('syntax', [])
+
+        if not syntax_list:
+            continue
+
+        if auto_filter:
+            # Filter out invalid values for each language
+            # Keep values that are valid in ANY of the allowed languages
+            valid_for_any = set()
+            for lang in languages:
+                valid_for_any.update(filter_invalid_syntax(syntax_list, lang))
+            mode_cfg['syntax'] = list(valid_for_any)
+        else:
+            # Report errors for invalid values
+            for lang in languages:
+                invalid = validate_syntax_values(syntax_list, lang)
+                if invalid:
+                    errors.append(
+                        f"Invalid {mode} syntax for {lang}: {', '.join(invalid)}"
+                    )
+
+    return errors, config

@@ -19,6 +19,7 @@ from mongo.utils import (
     MinioClient,
 )
 from .utils import *
+from .utils.submission_utils import clear_submission_list_cache_for_submission
 from .auth import *
 
 __all__ = ['submission_api']
@@ -223,7 +224,7 @@ def get_submission_list(
                     400,
                 )
         # students can only get their own submissions
-        if user.role == User.engine.Role.STUDENT:
+        if user.role == Role.STUDENT:
             username = user.username
         try:
             params = drop_none({
@@ -322,6 +323,35 @@ def get_submission_output(
     except AttributeError as e:
         return HTTPError(str(e), 102)
     return HTTPResponse('ok', data=output)
+
+
+@submission_api.get('/<submission>/artifact/case/<int:task_no>/<int:case_no>')
+@login_required(pat_scope=['read:submissions'])
+@Request.doc('submission', Submission)
+def get_case_artifact_files(
+    user,
+    submission: Submission,
+    task_no: int,
+    case_no: int,
+):
+    '''
+    Get all files from case artifact zip including stdout, stderr, and other files.
+    Returns files with appropriate encoding (text as string, images as base64).
+    Only available when artifact collection is enabled for this task.
+    '''
+    if not submission.permission(user, Submission.Permission.VIEW_OUTPUT):
+        return HTTPError('permission denied', 403)
+    if not submission.is_artifact_enabled(task_no):
+        return HTTPError('artifact collection not enabled for this task', 404)
+    try:
+        artifact_files = submission.get_case_artifact_files(task_no, case_no)
+    except FileNotFoundError as e:
+        return HTTPError(str(e), 400)
+    except AttributeError as e:
+        return HTTPError(str(e), 102)
+    except Exception as e:
+        return HTTPError(f'Failed to read artifact files: {str(e)}', 500)
+    return HTTPResponse('ok', data=artifact_files)
 
 
 @submission_api.get('/<submission>/artifact/zip/<int:task_index>')
@@ -458,7 +488,13 @@ def get_static_analysis(user, submission: Submission):
     report_url = None
     if submission.sa_report_path:
         try:
-            report_url = MinioClient().presign_get(submission.sa_report_path)
+            minio_client = MinioClient()
+            report_url = minio_client.client.get_presigned_url(
+                'GET',
+                minio_client.bucket,
+                submission.sa_report_path,
+                expires=timedelta(minutes=30),
+            )
         except Exception:
             current_app.logger.exception("Failed to presign SA report")
     return HTTPResponse('', data={"report": report, "reportUrl": report_url})
@@ -496,6 +532,10 @@ def on_submission_complete(submission: Submission, tasks, token):
             f'{type(e).__name__}: {e}',
             400,
         )
+
+    # Clear submission list cache for this submission only
+    clear_submission_list_cache_for_submission(str(submission.id))
+
     return HTTPResponse(f'{submission} result recieved.')
 
 
@@ -567,6 +607,245 @@ def grade_submission(user: User, submission: Submission, score: int):
     return HTTPResponse(f'{submission} score recieved.')
 
 
+@submission_api.route('/<submission>/manual-grade', methods=['PUT'])
+@login_required
+@Request.json('score: int', 'reason')
+@Request.doc('submission', Submission)
+def manual_grade_submission(user: User,
+                            submission: Submission,
+                            score: int,
+                            reason: str = None):
+    """
+    Manually modify submission total score via frontend UI.
+    This is separate from the PAT-based /grade endpoint.
+    Records modification history for audit trail.
+    """
+    try:
+        if not submission.permission(user, Submission.Permission.GRADE):
+            return HTTPError('forbidden.', 403)
+
+        if score is None:
+            return HTTPError('score is required.', 400)
+
+        if score < 0 or score > 100:
+            return HTTPError('score must be between 0 and 100.', 400)
+
+        # Record the modification
+        before_score = submission.score
+        modification_record = engine.ScoreModificationRecord(
+            modifier=user.username,
+            timestamp=datetime.now(),
+            before_score=before_score,
+            after_score=score,
+            task_index=None,  # None means total score
+            reason=reason,
+        )
+
+        # Update submission score only (do NOT change status)
+        # Status should remain unchanged when manually modifying score
+        # Append modification record to the list
+        if not hasattr(submission, 'score_modifications'
+                       ) or submission.score_modifications is None:
+            submission.score_modifications = []
+        submission.score_modifications.append(modification_record)
+
+        submission.update(
+            score=score,
+            score_modifications=submission.score_modifications,
+        )
+        submission.reload()
+
+        # Sync homework grades
+        try:
+            submission.finish_judging()
+        except Exception as e:
+            current_app.logger.error(
+                f'Failed to sync homework grades for {submission}: {e}',
+                exc_info=True)
+            # Continue even if homework sync fails
+
+        # Clear submission list cache
+        try:
+            clear_submission_list_cache_for_submission(str(submission.id))
+        except Exception as e:
+            current_app.logger.warning(
+                f'Failed to clear cache for submission {submission.id}: {e}')
+
+        return HTTPResponse(
+            f'{submission} score manually updated from {before_score} to {score}.',
+            data={
+                'ok': True,
+                'beforeScore': before_score,
+                'afterScore': score,
+            })
+    except Exception as e:
+        # HTTPError is not an Exception, it's a return value, so we don't catch it
+        # Only catch actual exceptions
+        current_app.logger.error(
+            f'Error in manual_grade_submission for submission {submission.id}: {e}',
+            exc_info=True)
+        return HTTPError(f'Failed to update score: {str(e)}', 500)
+
+
+@submission_api.route('/<submission>/manual-grade/task/<int:task_index>',
+                      methods=['PUT'])
+@login_required
+@Request.json('score: int', 'reason')
+@Request.doc('submission', Submission)
+def manual_grade_task(user: User,
+                      submission: Submission,
+                      task_index: int,
+                      score: int,
+                      reason: str = None):
+    """
+    Manually modify a specific task's score via frontend UI.
+    Recalculates total score as sum of all task scores.
+    Records modification history for audit trail.
+    """
+    try:
+        if not submission.permission(user, Submission.Permission.GRADE):
+            return HTTPError('forbidden.', 403)
+
+        if score is None:
+            return HTTPError('score is required.', 400)
+
+        # Validate task_index
+        if task_index < 0 or task_index >= len(submission.tasks):
+            return HTTPError(
+                f'Invalid task index. Submission has {len(submission.tasks)} tasks.',
+                400)
+
+        # Get the task
+        task = submission.tasks[task_index]
+        before_score = task.score
+
+        # Validate score range based on problem's task configuration
+        if score < 0:
+            return HTTPError('score must be non-negative.', 400)
+
+        # Get max score for this task from problem config
+        problem = submission.problem
+        max_task_score = None
+        try:
+            if problem and problem.test_case and problem.test_case.tasks:
+                if task_index < len(problem.test_case.tasks):
+                    max_task_score = problem.test_case.tasks[
+                        task_index].task_score
+        except (AttributeError, IndexError) as e:
+            current_app.logger.warning(
+                f'Could not get max task score for task {task_index}: {e}')
+
+        if max_task_score is not None and score > max_task_score:
+            return HTTPError(
+                f'score must be between 0 and {max_task_score} for this task.',
+                400)
+
+        # Record the modification
+        modification_record = engine.ScoreModificationRecord(
+            modifier=user.username,
+            timestamp=datetime.now(),
+            before_score=before_score,
+            after_score=score,
+            task_index=task_index,
+            reason=reason,
+        )
+
+        # Calculate new total score (sum of all task scores, with updated score for target task)
+        new_total_score = 0
+        for i, t in enumerate(submission.tasks):
+            if i == task_index:
+                new_total_score += score
+            else:
+                new_total_score += t.score
+
+        # Use MongoDB's raw update through collection to update just the score field
+        # This avoids ValidationError when recreating EmbeddedDocument with CaseResult
+        engine.Submission._get_collection().update_one(
+            {'_id': submission.obj.id}, {
+                '$set': {
+                    f'tasks.{task_index}.score': score,
+                    'score': new_total_score,
+                },
+                '$push': {
+                    'scoreModifications': modification_record.to_mongo(),
+                }
+            })
+        submission.reload()
+
+        # Sync homework grades
+        try:
+            submission.finish_judging()
+        except Exception as e:
+            current_app.logger.error(
+                f'Failed to sync homework grades for {submission}: {e}',
+                exc_info=True)
+            # Continue even if homework sync fails
+
+        # Clear submission list cache
+        try:
+            clear_submission_list_cache_for_submission(str(submission.id))
+        except Exception as e:
+            current_app.logger.warning(
+                f'Failed to clear cache for submission {submission.id}: {e}')
+
+        return HTTPResponse(
+            f'{submission} task {task_index} score manually updated from {before_score} to {score}.',
+            data={
+                'ok': True,
+                'taskIndex': task_index,
+                'beforeScore': before_score,
+                'afterScore': score,
+                'newTotalScore': new_total_score,
+            })
+    except Exception as e:
+        # HTTPError is not an Exception, it's a return value, so we don't catch it
+        # Only catch actual exceptions
+        current_app.logger.error(
+            f'Error in manual_grade_task for submission {submission.id}, task {task_index}: {e}',
+            exc_info=True)
+        return HTTPError(f'Failed to update task score: {str(e)}', 500)
+
+
+@submission_api.route('/<submission>/score-history', methods=['GET'])
+@login_required
+@Request.doc('submission', Submission)
+def get_score_history(user: User, submission: Submission):
+    """
+    Get the score modification history for a submission.
+    Only users with GRADE permission can view this.
+    """
+    if not submission.permission(user, Submission.Permission.GRADE):
+        return HTTPError('forbidden.', 403)
+
+    # Get the score_modifications list
+    modifications = getattr(submission, 'score_modifications', []) or []
+
+    history = []
+    for mod in modifications:
+        history.append({
+            'modifier':
+            mod.modifier,
+            # Return timestamp in seconds (formatTime will multiply by 1000)
+            'timestamp':
+            mod.timestamp.timestamp() if mod.timestamp else None,
+            'beforeScore':
+            mod.before_score,
+            'afterScore':
+            mod.after_score,
+            'taskIndex':
+            mod.task_index,  # None means total score
+            'reason':
+            mod.reason,
+        })
+
+    return HTTPResponse('Score modification history retrieved.',
+                        data={
+                            'ok': True,
+                            'history': history,
+                            'count': len(history),
+                        })
+
+
 @submission_api.route('/<submission>/comment', methods=['PUT'])
 @login_required
 @Request.files('comment')
@@ -591,10 +870,19 @@ def comment_submission(user, submission: Submission, comment):
 @login_required
 @Request.doc('submission', Submission)
 def rejudge(user, submission: Submission):
-    if submission.status == -2 or (submission.status == -1 and
-                                   (datetime.now() -
-                                    submission.last_send).seconds < 300):
-        return HTTPError(f'{submission} haven\'t be judged', 403)
+    # Check if submission is currently being judged (rate limit protection)
+    if submission.status == -2:
+        return HTTPError(
+            'Submission is queued and not yet judged. Please wait.', 403)
+    if submission.status == -1:
+        time_since_send = (datetime.now() - submission.last_send).seconds
+        if time_since_send < 300:
+            remaining_seconds = 300 - time_since_send
+            remaining_minutes = (remaining_seconds // 60) + 1
+            return HTTPError(
+                f'Rejudge rate limit: Submission is currently being judged. '
+                f'Please wait approximately {remaining_minutes} minute(s) before trying again.',
+                403)
     if not submission.permission(user, Submission.Permission.REJUDGE):
         return HTTPError('forbidden.', 403)
     try:
@@ -609,7 +897,247 @@ def rejudge(user, submission: Submission):
     # Check explicit False (not None or other falsy values)
     if success is False:
         return HTTPError('Some error occurred, please contact the admin', 500)
+
+    # Clear submission list cache for this submission only
+    clear_submission_list_cache_for_submission(str(submission.id))
+
     return HTTPResponse('', data={'ok': True})
+
+
+@submission_api.route('/<submission>', methods=['DELETE'])
+@login_required
+@Request.doc('submission', Submission)
+def delete_submission(user, submission: Submission):
+    """
+    Delete a submission. Only admin can delete submissions.
+    Protection: Cannot delete if currently being judged.
+    """
+    # Only admin can delete submissions
+    if not User(user.username).role == 0:  # Role.ADMIN
+        return HTTPError('Only admin can delete submissions.', 403)
+
+    # Protection: Cannot delete if currently being judged
+    if submission.status == -1:
+        last_send = getattr(submission, 'last_send', None)
+        if last_send:
+            seconds_since_send = (datetime.now() - last_send).total_seconds()
+            if seconds_since_send < 600:  # 10 minutes
+                minutes_remaining = int((600 - seconds_since_send) / 60) + 1
+                return HTTPError(
+                    f"Cannot delete: submission is currently being judged. "
+                    f"Please wait {minutes_remaining} minutes or until judging completes.",
+                    409  # Conflict
+                )
+
+    try:
+        # Clear submission list cache before deletion so list refreshes immediately
+        clear_submission_list_cache_for_submission(str(submission.id))
+        # Delete code from MinIO if exists
+        if submission.code_minio_path:
+            try:
+                minio_client = MinioClient()
+                minio_client.client.remove_object(minio_client.bucket,
+                                                  submission.code_minio_path)
+            except Exception as e:
+                current_app.logger.warning(
+                    f"Failed to delete code from MinIO: {e}")
+
+        # Delete the submission document
+        submission.delete()
+        return HTTPResponse('Submission deleted successfully.',
+                            data={'ok': True})
+    except Exception as e:
+        current_app.logger.error(f"Error deleting submission: {e}")
+        return HTTPError(f'Failed to delete submission: {str(e)}', 500)
+
+
+@submission_api.route('/rejudge-all', methods=['POST'])
+@login_required
+@Request.json('problem_id: int')
+def rejudge_all_submissions(user, problem_id: int):
+    """
+    Rejudge all submissions for a specific problem.
+    Only admin/teacher/TA with course permissions can use this.
+    """
+    # Check permission
+    req_user = User(user.username)
+    if req_user.role not in (0, 1, 2):  # Admin, Teacher, TA
+        return HTTPError('Forbidden.', 403)
+
+    try:
+        problem = Problem(problem_id)
+    except engine.DoesNotExist:
+        return HTTPError('Problem not found.', 404)
+
+    # For non-admin, check course permission
+    if req_user.role != 0:
+        has_permission = False
+        for course in problem.courses:
+            if Course(course.course_name).permission(req_user,
+                                                     Course.Permission.GRADE):
+                has_permission = True
+                break
+        if not has_permission:
+            return HTTPError(
+                'You do not have permission to rejudge for this problem.', 403)
+
+    # Get all submissions for this problem
+    submissions = Submission.filter(problem=problem_id)
+
+    success_count = 0
+    failed_count = 0
+    skipped_count = 0
+
+    for sub in submissions:
+        try:
+            # Skip if never judged or recently sent
+            if sub.status == -2:
+                skipped_count += 1
+                continue
+            if sub.status == -1:
+                last_send = getattr(sub, 'last_send', None)
+                if last_send and (datetime.now() -
+                                  last_send).total_seconds() < 60:
+                    skipped_count += 1
+                    continue
+
+            sub.rejudge()
+            success_count += 1
+        except Exception as e:
+            current_app.logger.warning(
+                f"Failed to rejudge submission {sub.id}: {e}")
+            failed_count += 1
+
+    return HTTPResponse(
+        f'Rejudge completed. Success: {success_count}, Failed: {failed_count}, Skipped: {skipped_count}',
+        data={
+            'ok': True,
+            'success': success_count,
+            'failed': failed_count,
+            'skipped': skipped_count
+        })
+
+
+@submission_api.route('/delete-all', methods=['DELETE'])
+@login_required
+@Request.json('filters')
+def delete_all_submissions(user, filters: dict = None):
+    """
+    Delete all submissions matching filters.
+    Admin/Teacher/TA with course permission can use this.
+    filters: {
+        problem_id: int (optional),
+        course: str (required),
+        username: str (optional),
+        status: int (optional),
+        language_type: int (optional)
+    }
+    """
+    if filters is None:
+        return HTTPError('filters is required.', 400)
+
+    course_name = filters.get('course')
+    if not course_name:
+        return HTTPError('course is required.', 400)
+
+    # Check permission
+    req_user = User(user.username)
+    if req_user.role not in (0, 1, 2):  # Admin, Teacher, TA
+        return HTTPError('Forbidden.', 403)
+
+    # For non-admin, check course permission
+    if req_user.role != 0:
+        if not Course(course_name).permission(req_user,
+                                              Course.Permission.GRADE):
+            return HTTPError(
+                'You do not have permission to delete submissions for this course.',
+                403)
+
+    # Use Submission.filter to get matching submissions (handles course filtering)
+    try:
+        # Map frontend filters to Submission.filter arguments
+        problem_id = None
+        if filters.get('problemId'):
+            try:
+                problem_id = int(filters['problemId'])
+            except ValueError:
+                pass
+
+        username = filters.get('username')
+
+        status = None
+        raw_status = filters.get('status')
+        if raw_status is not None:
+            status_map = {
+                'AC': 0,
+                'WA': 1,
+                'CE': 2,
+                'TLE': 3,
+                'MLE': 4,
+                'RE': 5,
+                'JE': 6,
+                'OLE': 7
+            }
+            if str(raw_status).upper() in status_map:
+                status = status_map[str(raw_status).upper()]
+            else:
+                try:
+                    status = int(raw_status)
+                except ValueError:
+                    pass
+
+        language_type = None
+        if filters.get('languageType'):
+            try:
+                language_type = int(filters['languageType'])
+            except ValueError:
+                pass
+
+        submissions = Submission.filter(
+            user=req_user,
+            offset=0,
+            count=-1,  # Get all
+            problem=problem_id,
+            q_user=username,
+            status=status,
+            language_type=language_type,
+            course=course_name,
+        )
+    except Exception as e:
+        current_app.logger.error(f"Error filtering submissions: {e}")
+        return HTTPError(f'Filter error: {e}', 400)
+
+    deleted_count = 0
+    skipped_count = 0
+
+    for sub in submissions:
+        try:
+            # Skip if currently judging (sub is wrapper)
+            if sub.status == -1:
+                last_send = getattr(sub.obj, 'last_send', None)
+                if last_send and (datetime.now() -
+                                  last_send).total_seconds() < 600:
+                    skipped_count += 1
+                    continue
+
+            # Clear cache for this submission
+            clear_submission_list_cache_for_submission(str(sub.id))
+
+            # Delete (wrapper handles file deletion)
+            sub.delete()
+            deleted_count += 1
+        except Exception as e:
+            current_app.logger.error(
+                f"Error deleting submission {sub.id}: {e}")
+            skipped_count += 1
+
+    return HTTPResponse(
+        f'Delete completed. Deleted: {deleted_count}, Skipped: {skipped_count}',
+        data={
+            'ok': True,
+            'deleted': deleted_count,
+            'skipped': skipped_count
+        })
 
 
 @submission_api.route('/config', methods=['GET', 'PUT'])

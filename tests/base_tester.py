@@ -1,14 +1,13 @@
+import os
 import secrets
 import typing
-from typing import Literal, Tuple, Dict, Any, Union
-import mongomock
-from mongoengine import connect
-from mongo import *
-from flask.testing import FlaskClient
-from .conftest import *
+from typing import Any, Dict, Literal, Tuple, Union
+import pytest
 
-if typing.TYPE_CHECKING:
-    from flask.testing import TestResponse
+import mongomock
+from flask.testing import FlaskClient
+from mongo import *
+from mongoengine import connect, disconnect
 
 
 def random_string(k=None):
@@ -28,16 +27,22 @@ def random_string(k=None):
     return secrets.token_urlsafe(k)
 
 
+@pytest.mark.usefixtures("setup_minio")
 class BaseTester:
-    MONGO_HOST = 'mongodb://localhost'
+    MONGO_HOST = os.environ.get('MONGO_HOST', 'mongomock://localhost')
     DB = 'normal-oj'
     USER_CONFIG = 'tests/user.json'
 
     @classmethod
     def drop_db(cls):
+        # Disconnect any existing connections first
+        disconnect(alias='default')
+        host = cls.MONGO_HOST
+        if host.startswith('mongomock'):
+            host = host.replace('mongomock', 'mongodb')
         conn = connect(
             cls.DB,
-            host=cls.MONGO_HOST,
+            host=host,
             mongo_client_class=mongomock.MongoClient,
         )
         conn.drop_database(cls.DB)
@@ -94,3 +99,6 @@ class BaseTester:
         else:
             rv_data = None
         return rv, rv_json, rv_data
+
+
+from .conftest import *

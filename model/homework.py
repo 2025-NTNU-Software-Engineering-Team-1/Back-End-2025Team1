@@ -12,41 +12,42 @@ homework_api = Blueprint('homework_api', __name__)
 
 
 @homework_api.route('/', methods=['POST'])
+@login_required
+@Request.json('name', 'course_name', 'markdown', 'start', 'end', 'problem_ids',
+              'scoreboard_status', 'penalty')
+def add_homework_route(user, course_name, name, markdown, start, end,
+                       problem_ids, scoreboard_status, penalty):
+    try:
+        Homework.add(
+            user=user,
+            hw_name=name,
+            markdown=markdown,
+            scoreboard_status=scoreboard_status,
+            course_name=course_name,
+            problem_ids=problem_ids or [],
+            start=start,
+            end=end,
+            penalty=penalty,
+        )
+    except NameError:
+        return HTTPError('user must be the teacher or ta of this course', 403)
+    except FileExistsError:
+        return HTTPError('homework exists in this course', 400)
+    return HTTPResponse('Add homework Success')
+
+
 @homework_api.route('/<homework_id>', methods=['PUT', 'DELETE', 'GET'])
 @login_required
-def homework_entry(user, homework_id=None):
+def homework_operation_route(user, homework_id):
     '''
     apply a operation to single homework
     '''
-
-    @Request.json('name', 'course_name', 'markdown', 'start', 'end',
-                  'problem_ids', 'scoreboard_status', 'penalty')
-    def add_homework(course_name, name, markdown, start, end, problem_ids,
-                     scoreboard_status, penalty):
-        try:
-            homework = Homework.add(
-                user=user,
-                hw_name=name,
-                markdown=markdown,
-                scoreboard_status=scoreboard_status,
-                course_name=course_name,
-                problem_ids=problem_ids or [],
-                start=start,
-                end=end,
-                penalty=penalty,
-            )
-        except NameError:
-            return HTTPError('user must be the teacher or ta of this course',
-                             403)
-        except FileExistsError:
-            return HTTPError('homework exists in this course', 400)
-        return HTTPResponse('Add homework Success')
 
     @Request.json('name', 'markdown', 'start', 'end', 'problem_ids',
                   'scoreboard_status', 'penalty')
     def update_homework(name, markdown, start, end, problem_ids,
                         scoreboard_status, penalty):
-        homework = Homework.update(
+        Homework.update(
             user=user,
             homework_id=homework_id,
             markdown=markdown,
@@ -68,6 +69,8 @@ def homework_entry(user, homework_id=None):
     def get_homework():
         homework = Homework.get_by_id(homework_id)
         ret = {
+            'id':
+            str(homework.id),
             'name':
             homework.homework_name,
             'start':
@@ -88,7 +91,6 @@ def homework_entry(user, homework_id=None):
 
     handler = {
         'GET': get_homework,
-        'POST': add_homework,
         'PUT': update_homework,
         'DELETE': delete_homework
     }

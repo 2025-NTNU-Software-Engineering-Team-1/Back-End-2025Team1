@@ -1,5 +1,4 @@
 import pytest
-import json
 import os
 from unittest.mock import patch
 from mongo import engine, AiApiKey
@@ -16,6 +15,7 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_TEST_KEY', 'sk-test-key')
 # ==========================================
 # Base Class: Common Setup
 # ==========================================
+@pytest.mark.usefixtures("setup_minio")
 class BaseAiTest:
 
     @pytest.fixture(autouse=True)
@@ -552,7 +552,7 @@ class TestAiManagement(BaseAiTest):
 
 
 from datetime import timedelta
-from mongo.ai_vtuber import AiModel
+from mongo.ai import AiModel
 
 
 # ==========================================
@@ -580,7 +580,7 @@ class TestAiFeatures(BaseAiTest):
         assert flash.rpd_limit == 20
 
         # Check Flash Lite
-        lite = engine.AiModel.objects(name='gemini-2.5-flash-lite').first()
+        lite = engine.AiModel.objects(name='gemini-flash-lite-latest').first()
         assert lite is not None
         assert lite.rpm_limit == 10
 
@@ -588,8 +588,8 @@ class TestAiFeatures(BaseAiTest):
         pro = engine.AiModel.objects(name='gemini-3.0-pro').first()
         assert pro is None
 
-    @patch('mongo.ai_vtuber.datetime')
-    @patch('mongo.ai_vtuber.engine.RPD_RESET_INTERVAL',
+    @patch('mongo.ai.models.datetime')
+    @patch('mongo.ai.models.engine.RPD_RESET_INTERVAL',
            new=timedelta(hours=24))
     def test_rpd_reset_logic(self, mock_datetime):
         """
@@ -660,13 +660,13 @@ class TestAiFeatures(BaseAiTest):
         AiModel.initialize_default_models()
 
         # 2. Run Migration
-        from mongo.ai_vtuber import migrate_ai_data
+        from mongo.ai import migrate_ai_data
         migrate_ai_data()
 
         # 3. Verify Course
         raw_course.reload()
         assert raw_course.is_ai_vt_enabled is True
-        assert raw_course.ai_model.name == 'gemini-2.5-flash-lite'
+        assert raw_course.ai_model.name == 'gemini-flash-lite-latest'
 
         # 4. Verify Key
         raw_key.reload()

@@ -10,7 +10,7 @@ from zipfile import ZipFile, BadZipFile
 __all__ = [*mongoengine.__all__]
 
 TAIPEI_TIMEZONE = timezone(timedelta(hours=8))
-DEFAULT_AI_MODEL = 'gemini-2.5-flash-lite'
+DEFAULT_AI_MODEL = 'gemini-flash-lite-latest'
 RPD_RESET_INTERVAL = timedelta(hours=24)
 
 MONGO_HOST = os.environ.get('MONGO_HOST', 'mongomock://localhost')
@@ -44,6 +44,11 @@ def handler(event):
         return fn
 
     return decorator
+
+
+def utc8_now():
+    # Use timezone-aware datetime in Asia/Taipei (UTC+8).
+    return datetime.now(TAIPEI_TIMEZONE)
 
 
 @handler(signals.pre_save)
@@ -250,6 +255,16 @@ class Homework(Document):
     penalty = StringField(max_length=10000, default='score = 0')
 
 
+class AuthorizationCode(EmbeddedDocument):
+    code = StringField(required=True)
+    # 0: Unlimited, >0: Limit
+    max_usage = IntField(default=0)
+    current_usage = IntField(default=0)
+    is_active = BooleanField(default=True)
+    creator = ReferenceField('User')
+    created_at = DateTimeField(default=datetime.now)
+
+
 class Course(Document):
     meta = {
         'strict': False
@@ -269,12 +284,32 @@ class Course(Document):
     posts = ListField(ReferenceField('Post'), default=list)
     student_scores = DictField(db_field='studentScores')
 
+    # Course code for joining by code
+    course_code = StringField(
+        max_length=16,
+        unique=True,
+        sparse=True,
+        db_field='courseCode',
+        null=True,
+    )
+    auth_codes = ListField(EmbeddedDocumentField(AuthorizationCode))
+
     # for AI_vt
     is_ai_vt_enabled = BooleanField(db_field='isAIEnabled', default=True)
     ai_model = ReferenceField('AiModel',
                               db_field='aiModel',
                               null=True,
                               default=DEFAULT_AI_MODEL)
+
+    # Appearance
+    color = StringField(max_length=7,
+                        db_field='color',
+                        default=None,
+                        null=True)
+    emoji = StringField(max_length=8,
+                        db_field='emoji',
+                        default=None,
+                        null=True)
 
 
 class Number(Document):
@@ -404,8 +439,10 @@ class Problem(Document):
     ac_user = IntField(db_field='ACUser', default=0)
     submitter = IntField(default=0)
     homeworks = ListField(ReferenceField('Homework'), default=list)
+    deadline = DateTimeField(required=False, db_field='deadline')
     # user can view stdout/stderr
     can_view_stdout = BooleanField(db_field='canViewStdout', default=True)
+    allow_code = BooleanField(db_field='allowCode', default=True)
     cpp_report_url = StringField(
         db_field='cppReportUrl',
         default='',
@@ -433,16 +470,16 @@ class Problem(Document):
         max_length=10**4,
         default='',
     )
-    meta = {'strict': False}
 
-    # === Test Mode Fields ===
-    test_mode_enabled = BooleanField(db_field='testModeEnabled', default=False)
-    test_submission_quota = IntField(
-        db_field='testSubmissionQuota',
+    # === Trial Mode Fields ===
+    trial_mode_enabled = BooleanField(db_field='trialModeEnabled',
+                                      default=False)
+    trial_submission_quota = IntField(
+        db_field='trialSubmissionQuota',
         default=-1  # -1 for unlimited
     )
 
-    # Public test cases for Test Mode
+    # Public test cases for Trial Mode
     public_cases_zip = ZipField(
         db_field='publicCasesZip',
         default=None,
@@ -454,7 +491,7 @@ class Problem(Document):
         db_field='publicCasesZipMinioPath',
     )
 
-    # AC Code for Test Mode
+    # AC Code for Trial Mode
     ac_code = ZipField(db_field='acCode', default=None, null=True)
     ac_code_minio_path = StringField(
         null=True,
@@ -466,10 +503,10 @@ class Problem(Document):
         null=True,
     )
 
-    # Stats for Test Mode
+    # Stats for Trial Mode
     # Dict[username, count]
-    test_submission_counts = DictField(db_field='testSubmissionCounts',
-                                       default={})
+    trial_submission_counts = DictField(db_field='trialSubmissionCounts',
+                                        default={})
 
 
 class CaseResult(EmbeddedDocument):
@@ -477,7 +514,7 @@ class CaseResult(EmbeddedDocument):
     exec_time = IntField(required=True, db_field='execTime')
     memory_usage = IntField(required=True, db_field='memoryUsage')
     output = ZipField(
-        required=True,
+        required=False,
         null=True,
         max_size=11**9,
     )
@@ -494,6 +531,21 @@ class TaskResult(EmbeddedDocument):
     memory_usage = IntField(default=-1, db_field='memoryUsage')
     score = IntField(default=0)
     cases = EmbeddedDocumentListField(CaseResult, default=list)
+
+
+class ScoreModificationRecord(EmbeddedDocument):
+    """
+    Record of a manual score modification by a teacher/TA/admin.
+    Used for audit trail of grade changes.
+    """
+    modifier = StringField(
+        required=True)  # username of the person who modified
+    timestamp = DateTimeField(required=True, default=datetime.now)
+    before_score = IntField(required=True, db_field='beforeScore')
+    after_score = IntField(required=True, db_field='afterScore')
+    task_index = IntField(null=True,
+                          db_field='taskIndex')  # None = total score
+    reason = StringField(max_length=512, null=True)
 
 
 class BaseSubmissionDocument(Document):
@@ -520,6 +572,8 @@ class BaseSubmissionDocument(Document):
     tasks = EmbeddedDocumentListField(TaskResult, default=list)
     exec_time = IntField(default=-1, db_field='runTime')
     memory_usage = IntField(default=-1, db_field='memoryUsage')
+    output_fields_initialized = BooleanField(
+        db_field='outputFieldsInitialized', default=False)
     code = ZipField(null=True, max_size=10**7)
     code_minio_path = StringField(
         null=True,
@@ -547,7 +601,7 @@ class BaseSubmissionDocument(Document):
     last_send = DateTimeField(db_field='lastSend', default=datetime.now)
     ip_addr = StringField(default=None, null=True)
     sa_status = IntField(null=True, db_field='saStatus')
-    sa_message = StringField(max_length=1024, null=True, db_field='saMessage')
+    sa_message = StringField(max_length=65536, null=True, db_field='saMessage')
     sa_report = StringField(null=True, db_field='saReport')
     sa_report_path = StringField(max_length=256,
                                  null=True,
@@ -557,11 +611,16 @@ class BaseSubmissionDocument(Document):
 class Submission(BaseSubmissionDocument):
     meta = {'indexes': [('problem', 'user'), ('problem', '-score')]}
     comment = FileField(default=None, null=True)
+    score_modifications = EmbeddedDocumentListField(
+        ScoreModificationRecord,
+        default=list,
+        db_field='scoreModifications',
+    )
 
 
 class TrialSubmission(BaseSubmissionDocument):
     """
-    Document for Test Mode Submissions.
+    Document for Trial Mode Submissions.
     These submissions are for testing against public/custom cases
     and do not affect homework scores.
     """
@@ -626,6 +685,9 @@ class PostThread(Document):
     created = DateTimeField(required=True)
     updated = DateTimeField(required=True)
     status = IntField(default=0, choices=[0, 1])  # not delete / delete
+    pinned = BooleanField(default=False)
+    closed = BooleanField(default=False)
+    solved = BooleanField(default=False)
     reply = ListField(ReferenceField('PostThread', db_field='postThread'),
                       dafault=list)
 
@@ -633,6 +695,70 @@ class PostThread(Document):
 class Post(Document):
     post_name = StringField(default='', required=True, max_length=64)
     thread = ReferenceField('PostThread', db_field='postThread')
+
+
+class DiscussionPost(Document):
+    meta = {
+        'indexes': ['problem_id'],
+    }
+    post_id = SequenceField(db_field='postId', required=True, unique=True)
+    title = StringField(required=True, max_length=128)
+    content = StringField(required=True, max_length=100000)
+    problem_id = StringField(required=True,
+                             max_length=64,
+                             db_field='problemId')
+    category = StringField(max_length=64, default='')
+    language = StringField(max_length=32, default='')
+    contains_code = BooleanField(default=False, db_field='containsCode')
+    reply_count = IntField(default=0, db_field='replyCount')
+    like_count = IntField(default=0, db_field='likeCount')
+    is_pinned = BooleanField(default=False, db_field='isPinned')
+    is_closed = BooleanField(default=False, db_field='isClosed')
+    is_solved = BooleanField(default=False, db_field='isSolved')
+    is_deleted = BooleanField(default=False, db_field='isDeleted')
+    author = ReferenceField('User', required=True)
+    created_time = DateTimeField(default=datetime.now, db_field='createdTime')
+    updated_time = DateTimeField(default=datetime.now, db_field='updatedTime')
+
+
+class DiscussionReply(Document):
+    meta = {
+        'indexes': ['reply_id', 'post'],
+    }
+    reply_id = SequenceField(db_field='replyId', required=True, unique=True)
+    post = ReferenceField('DiscussionPost', required=True)
+    parent_reply = ReferenceField('DiscussionReply', null=True)
+    reply_to_id = IntField(db_field='replyToId', required=True)
+    author = ReferenceField('User', required=True)
+    content = StringField(required=True, max_length=100000)
+    contains_code = BooleanField(default=False, db_field='containsCode')
+    created_time = DateTimeField(default=datetime.now, db_field='createdTime')
+    like_count = IntField(default=0, db_field='likeCount')
+    is_deleted = BooleanField(default=False, db_field='isDeleted')
+
+
+class DiscussionLike(Document):
+    meta = {
+        'indexes': [
+            {
+                'fields': ['user', 'target_type', 'target_id'],
+                'unique': True,
+            },
+        ],
+    }
+    user = ReferenceField('User', required=True)
+    target_type = StringField(required=True, choices=['post', 'reply'])
+    target_id = IntField(required=True)
+    created_time = DateTimeField(default=datetime.now, db_field='createdTime')
+
+
+class DiscussionLog(Document):
+    user = ReferenceField('User', required=True)
+    action = StringField(required=True)
+    target_type = StringField()
+    target_id = StringField()
+    timestamp = DateTimeField(default=datetime.now)
+    meta = {'collection': 'discussion_log'}
 
 
 class Config(Document):
@@ -667,7 +793,7 @@ class LoginRecords(Document):
     user_id = StringField(required=True)
     ip_addr = StringField(required=True)
     success = BooleanField(required=True, default=False)
-    timestamp = DateTimeField(required=True, default=datetime.now)
+    timestamp = DateTimeField(required=True, default=utc8_now)
 
 
 class PersonalAccessToken(Document):
@@ -760,11 +886,8 @@ class AiApiKey(Document):
     last_reset_date = DateTimeField(default=datetime.now,
                                     db_field='lastResetDate')
     created_by = ReferenceField('User', db_field='createdBy', required=True)
-    meta = {'collection': 'ai_api_key'}
     created_at = DateTimeField(default=datetime.now, db_field='createdAt')
     updated_at = DateTimeField(default=datetime.now, db_field='updatedAt')
-    created_by = ReferenceField('User', db_field='createdBy', required=True)
-    is_active = BooleanField(db_field='isActive', default=True)
     meta = {
         'collection': 'ai_api_key',
         'indexes': [{
@@ -809,4 +932,80 @@ class AiTokenUsage(Document):
     meta = {
         'collection': 'ai_token_usage',
         'indexes': ['api_key', ('course_name', 'problem_id')]
+    }
+
+
+class AiVtuberSkin(Document):
+    """
+    AI Vtuber skin/avatar document.
+    Stores Live2D model information for AI Vtuber customization.
+    """
+    # Unique identifier (ULID format)
+    skin_id = StringField(db_field='skinId', required=True, unique=True)
+
+    # Display name for the skin
+    name = StringField(max_length=64, required=True)
+
+    # MinIO paths for resources
+    thumbnail_path = StringField(db_field='thumbnailPath', max_length=256)
+    model_path = StringField(db_field='modelPath',
+                             max_length=256,
+                             required=True)
+
+    # model3.json filename within the ZIP
+    model_json_name = StringField(db_field='modelJsonName',
+                                  max_length=128,
+                                  required=True)
+
+    # Uploader information
+    uploaded_by = ReferenceField('User', db_field='uploadedBy', required=True)
+
+    # Flags
+    is_builtin = BooleanField(db_field='isBuiltin', default=False)
+    is_public = BooleanField(db_field='isPublic', default=False)
+
+    # File size in bytes
+    file_size = IntField(db_field='fileSize', default=0)
+
+    # Timestamps
+    created_at = DateTimeField(db_field='createdAt', default=datetime.now)
+
+    # Emotion to Expression ID mappings
+    # Keys: smile, unhappy, tired, surprised
+    # Values: Expression ID string (e.g., "F05") or null if not supported
+    emotion_mappings = DictField(db_field='emotionMappings', default={})
+
+    meta = {
+        'collection':
+        'ai_vtuber_skin',
+        'indexes': [
+            'skin_id',
+            'uploaded_by',
+            {
+                'fields': ['is_builtin', 'is_public']
+            },
+        ]
+    }
+
+
+class UserSkinPreference(Document):
+    """
+    User's AI Vtuber skin preference.
+    Stores which skin a user has selected.
+    """
+    # User reference (unique - one preference per user)
+    user = ReferenceField('User', required=True, unique=True)
+
+    # Selected skin ID (references AiVtuberSkin.skin_id)
+    # Default is 'builtin_hiyori' for the built-in skin
+    selected_skin_id = StringField(db_field='selectedSkinId',
+                                   max_length=64,
+                                   default='builtin_hiyori')
+
+    # Timestamp
+    updated_at = DateTimeField(db_field='updatedAt', default=datetime.now)
+
+    meta = {
+        'collection': 'user_skin_preference',
+        'indexes': ['user', 'selected_skin_id']
     }

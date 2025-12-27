@@ -1,9 +1,38 @@
+"""
+Test configuration for Normal-OJ backend.
+
+IMPORTANT: This module forces the use of mongomock (in-memory database)
+for all tests, ensuring that tests NEVER touch the real MongoDB database.
+"""
+import os
+import sys
+
+# =============================================================================
+# CRITICAL: Force mongomock BEFORE any mongo module is imported
+# This MUST be at the very top of conftest.py
+# =============================================================================
+os.environ['MONGO_HOST'] = 'mongomock://localhost'
+os.environ.pop('REDIS_HOST', None)
+os.environ.pop('REDIS_PORT', None)
+os.environ.pop('SMTP_SERVER', None)
+os.environ.pop('SMTP_NOREPLY', None)
+if (worker_id := os.environ.get('PYTEST_XDIST_WORKER')):
+    os.environ['MINIO_BUCKET'] = f'normal-oj-test-{worker_id}'
+
+os.environ['LOG_CONSOLE_LEVEL'] = 'ERROR'
+
 from typing import Dict, List, Protocol
 from flask import Flask
 from flask.testing import FlaskClient
+import mongomock
+import mongomock.gridfs
+
 from mongo import *
 from mongo import engine
-import mongomock.gridfs
+from mongo import config as mongo_config
+
+if (worker_id := os.environ.get('PYTEST_XDIST_WORKER')):
+    mongo_config.MINIO_BUCKET = f'normal-oj-test-{worker_id}'
 
 import pytest
 import random
@@ -17,6 +46,23 @@ from testcontainers.minio import MinioContainer
 import mongo.config
 import shutil
 import subprocess
+
+
+def pytest_configure(config):
+    """
+    Pytest hook called early in pytest startup.
+    
+    Double-check that we're using mongomock to prevent any possibility
+    of tests destroying the real database.
+    """
+    mongo_host = os.environ.get('MONGO_HOST', '')
+    if 'mongomock' not in mongo_host:
+        pytest.exit(
+            "SAFETY CHECK FAILED: MONGO_HOST is not set to mongomock!\n"
+            f"Current MONGO_HOST: {mongo_host}\n"
+            "Tests must use mongomock to avoid destroying real data.\n"
+            "Please set MONGO_HOST=mongomock://localhost",
+            returncode=1)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -36,8 +82,7 @@ def check_docker():
         pytest.exit(f"Could not check Docker status: {e}", 1)
 
 
-# use a tmp minio for entire test session
-@pytest.fixture(autouse=True, scope='session')
+@pytest.fixture(scope='session')
 def setup_minio():
     with MinioContainer(
             image='quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z') as minio:
@@ -47,12 +92,19 @@ def setup_minio():
         mongo.config.MINIO_HOST = cfg['endpoint']
         # TODO: Should we override this?
         mongo.config.FLASK_DEBUG = True
+        mongo.config.MINIO_SECURE = False
         minio.get_client().make_bucket(mongo.config.MINIO_BUCKET)
         yield
 
 
 @pytest.fixture(scope="module", autouse=True)
 def clean_db_after_module():
+    """
+    Clean up test data after each module.
+    
+    NOTE: Tests now use mongomock (in-memory database), so this cleanup
+    only affects the mock database, NOT the real MongoDB.
+    """
 
     def _get_all_models_recursive(cls):
         all_models = list(cls.__subclasses__())
@@ -62,7 +114,7 @@ def clean_db_after_module():
 
     yield
 
-    # Post cleanup
+    # Post cleanup - only affects mongomock, never the real database
     all_models = _get_all_models_recursive(mongo.engine.Document)
     for model in all_models:
         # Skip abstract models
@@ -81,7 +133,23 @@ def app(tmp_path):
     app = flask_app()
     app.config['TESTING'] = True
     app.config['SERVER_NAME'] = 'test.test'
+    app.config['PREFERRED_URL_SCHEME'] = 'https'
     mongomock.gridfs.enable_gridfs_integration()
+
+    # Define custom client to auto-inject Origin for CSRF protection
+    from flask.testing import FlaskClient
+
+    class SecureClient(FlaskClient):
+
+        def open(self, *args, **kwargs):
+            env = kwargs.get('environ_base', {})
+            # Inject Origin header if not present
+            if 'HTTP_ORIGIN' not in env:
+                env['HTTP_ORIGIN'] = 'https://test.test'
+            kwargs['environ_base'] = env
+            return super().open(*args, **kwargs)
+
+    app.test_client_class = SecureClient
 
     # modify submission config for testing
     # use tmp dir to save user source code
@@ -105,9 +173,10 @@ class ForgeClient(Protocol):
 
 
 @pytest.fixture
-def forge_client(client: FlaskClient):
+def forge_client(app: Flask):
 
     def seted_cookie(username: str) -> FlaskClient:
+        client = app.test_client()
         secret = User(username).secret
         if isinstance(secret, bytes):
             secret = secret.decode()

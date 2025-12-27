@@ -1,7 +1,6 @@
 import json
 import enum
 import copy
-import ast
 from hashlib import md5
 from datetime import datetime, timedelta
 from typing import (
@@ -98,6 +97,61 @@ class Problem(MongoBase, engine=engine.Problem):
         if language >= 3 or language < 0:
             return False
         return bool((1 << language) & self.allowed_language)
+
+    @property
+    def trial_mode_enabled(self) -> bool:
+        """Check if trial mode is enabled for this problem."""
+        # First, check database field directly (most reliable)
+        # This handles cases where the field exists in DB but not as Python attribute
+        if hasattr(self.obj, '_data'):
+            db_data = self.obj._data
+            if 'trial_mode_enabled' in db_data:
+                value = db_data.get('trial_mode_enabled', False)
+                # Sync to Python attribute if not already set
+                if value and not hasattr(self.obj, 'trial_mode_enabled'):
+                    self.obj.trial_mode_enabled = True
+                    self.obj.save()
+                return bool(value)
+            # Backward compatibility: check old DB field
+            if 'test_mode_enabled' in db_data:
+                old_value = db_data.get('test_mode_enabled', False)
+                # Migrate old field to new field
+                if old_value:
+                    self.obj.trial_mode_enabled = True
+                    self.obj.save()
+                return bool(old_value)
+
+        # Check Python attribute (may not exist if field was set directly in DB)
+        if hasattr(self.obj, 'trial_mode_enabled'):
+            value = getattr(self.obj, 'trial_mode_enabled', False)
+            return bool(value)
+        # Backward compatibility: check old field name
+        if hasattr(self.obj, 'test_mode_enabled'):
+            old_value = getattr(self.obj, 'test_mode_enabled', False)
+            # Migrate old field to new field
+            if old_value:
+                self.obj.trial_mode_enabled = True
+                self.obj.save()
+            return bool(old_value)
+
+        # Fallback: check config.trialMode (frontend sets this)
+        # This ensures compatibility even if DB field is not synced
+        config = getattr(self.obj, 'config', None) or {}
+        trial_val = config.get('trialMode') or config.get('testMode')
+        if trial_val:
+            return True
+
+        return False
+
+    @property
+    def trial_submission_quota(self) -> int:
+        """Get trial submission quota for this problem."""
+        return getattr(self.obj, 'trial_submission_quota', -1)
+
+    @property
+    def trial_submission_counts(self) -> Dict[str, int]:
+        """Get trial submission counts for this problem."""
+        return getattr(self.obj, 'trial_submission_counts', {})
 
     def submit_count(self, user: User) -> int:
         '''
@@ -293,8 +347,73 @@ class Problem(MongoBase, engine=engine.Problem):
                         'teacherLang') is None:
                     current_asset_paths['teacherLang'] = inferred_teacher_lang
                 current_config['assetPaths'] = current_asset_paths
+
+            # Handle public_testdata.zip for Trial Mode
+            trial_mode_files_uploaded = False
+            public_testdata_file = files_data.get('public_testdata.zip')
+            if public_testdata_file:
+                trial_mode_files_uploaded = True
+                # Validate zip file
+                try:
+                    from zipfile import ZipFile
+                    public_testdata_file.seek(0)
+                    ZipFile(public_testdata_file).testzip()
+                except Exception as e:
+                    raise BadZipFile(
+                        f'Invalid public_testdata.zip file: {str(e)}')
+
+                public_testdata_file.seek(0)
+                file_data = public_testdata_file.read()
+                file_size = len(file_data)
+
+                path = f'problem/{self.problem_id}/public_testdata/public_testdata.zip'
+                minio_client.client.put_object(
+                    minio_client.bucket,
+                    path,
+                    BytesIO(file_data),
+                    file_size,
+                    part_size=5 * 1024 * 1024,
+                )
+                self.update(public_cases_zip_minio_path=path)
+                # Also update assetPaths for frontend detection
+                if 'assetPaths' not in current_config:
+                    current_config['assetPaths'] = {}
+                current_config['assetPaths']['public_testdata'] = path
+
+            # Handle AC code files for Trial Mode (ac_code.c, ac_code.cpp, ac_code.py)
+            ac_code_lang_map = {
+                'ac_code.c': 0,
+                'ac_code.cpp': 1,
+                'ac_code.py': 2,
+            }
+            for ac_filename, lang_code in ac_code_lang_map.items():
+                ac_file = files_data.get(ac_filename)
+                if ac_file:
+                    trial_mode_files_uploaded = True
+                    ac_file.seek(0)
+                    file_data = ac_file.read()
+                    file_size = len(file_data)
+
+                    path = f'problem/{self.problem_id}/ac_code/{ac_filename}'
+                    minio_client.client.put_object(
+                        minio_client.bucket,
+                        path,
+                        BytesIO(file_data),
+                        file_size,
+                        part_size=5 * 1024 * 1024,
+                    )
+                    self.update(
+                        ac_code_minio_path=path,
+                        ac_code_language=lang_code,
+                    )
+                    # Also update assetPaths for frontend detection
+                    if 'assetPaths' not in current_config:
+                        current_config['assetPaths'] = {}
+                    current_config['assetPaths']['ac_code'] = path
+                    break  # Only one AC code file should be uploaded
+
             kwargs_for_edit = {}
-            if meta_config or new_asset_paths:
+            if meta_config or new_asset_paths or trial_mode_files_uploaded:
                 kwargs_for_edit['config'] = current_config
             if pipeline_payload:
                 kwargs_for_edit['pipeline'] = pipeline_payload
@@ -408,7 +527,7 @@ class Problem(MongoBase, engine=engine.Problem):
         default_code: Optional[str] = None,
         config: Optional[dict] = None,
         pipeline: Optional[dict] = None,
-        Test_Mode: Optional[dict] = None,
+        Trial_Mode: Optional[dict] = None,
         **kwargs,
     ):
         if len(courses) == 0:
@@ -420,7 +539,7 @@ class Problem(MongoBase, engine=engine.Problem):
             course_objs.append(course.id)
         config = config or {}
         pipeline = pipeline or {}
-        test_mode = Test_Mode or {}
+        trial_mode = Trial_Mode or {}
         if 'scoringScript' in pipeline and 'scoringScrip' not in pipeline:
             pipeline['scoringScrip'] = pipeline['scoringScript']
         static_analysis_cfg = (config.get('staticAnalysis')
@@ -435,9 +554,40 @@ class Problem(MongoBase, engine=engine.Problem):
                 'networkAccessRestriction',
                 config['networkAccessRestriction'],
             )
+        if 'Enabled' in trial_mode:
+            trial_mode_enabled = trial_mode.get('Enabled')
+        elif 'trialMode' in trial_mode:
+            trial_mode_enabled = trial_mode.get('trialMode')
+        else:
+            trial_mode_enabled = config.get('trialMode',
+                                            config.get('testMode', False))
+        trial_mode_enabled = bool(trial_mode_enabled)
+
+        max_number_of_trial = trial_mode.get('maxNumberOfTrial')
+        if max_number_of_trial is None:
+            max_number_of_trial = config.get('maxNumberOfTrial', 0)
+
+        trial_result_visible = trial_mode.get('trialResultVisible')
+        if trial_result_visible is None:
+            trial_result_visible = config.get('trialResultVisible', False)
+
+        trial_result_downloadable = trial_mode.get('trialResultDownloadable')
+        if trial_result_downloadable is None:
+            trial_result_downloadable = config.get('trialResultDownloadable',
+                                                   False)
+
+        quota_per_student = trial_mode.get('Quota_Per_Student')
+        if quota_per_student is None:
+            quota_per_student = trial_mode.get('trialModeQuotaPerStudent')
+        if quota_per_student is None:
+            quota_per_student = config.get(
+                'trialModeQuotaPerStudent',
+                config.get('testModeQuotaPerStudent', 0),
+            )
         full_config = {
             'compilation': config.get('compilation', False),
-            'testMode': test_mode.get('Enabled', False),
+            'testMode': trial_mode_enabled,
+            'trialMode': trial_mode_enabled,
             'aiVTuber': config.get('aiVTuber', False),
             'acceptedFormat': config.get('acceptedFormat', 'code'),
             'staticAnalys': static_analysis_cfg,
@@ -449,7 +599,11 @@ class Problem(MongoBase, engine=engine.Problem):
             'customChecker': pipeline.get('customChecker', False),
             'teacherFirst': pipeline.get('teacherFirst', False),
             'scoringScript': pipeline.get('scoringScrip', {'custom': False}),
-            'testModeQuotaPerStudent': test_mode.get('Quota_Per_Student', 0),
+            'maxNumberOfTrial': max_number_of_trial,
+            'trialResultVisible': bool(trial_result_visible),
+            'trialResultDownloadable': bool(trial_result_downloadable),
+            'testModeQuotaPerStudent': quota_per_student,
+            'trialModeQuotaPerStudent': quota_per_student,
         }
         for key in (
                 'aiVTuberMaxToken',
@@ -476,6 +630,7 @@ class Problem(MongoBase, engine=engine.Problem):
             'quota': quota,
             'default_code': default_code,
             'config': full_config,
+            'trial_submission_quota': max_number_of_trial,
         })
         # Create ProblemDescription for the embedded document field
         if description_dict:
@@ -488,6 +643,7 @@ class Problem(MongoBase, engine=engine.Problem):
                 sample_output=description_dict.get('sampleOutput', []),
             )
         problem = cls.engine(**problem_args).save()
+
         programming_problem_args = drop_none({
             'test_case':
             test_case_info,
@@ -559,12 +715,26 @@ class Problem(MongoBase, engine=engine.Problem):
                     sample_output=desc.get('sampleOutput', []),
                 )
 
-        if 'config' in kwargs or 'pipeline' in kwargs or 'Test_Mode' in kwargs:
+        if 'config' in kwargs or 'pipeline' in kwargs or 'Trial_Mode' in kwargs:
             full_config = problem.obj.config or {}
+            trial_quota_update = None
 
             if 'config' in kwargs and kwargs.get('config') is not None:
-                full_config.update(kwargs.pop('config'))
+                config_update = kwargs.pop('config')
+                full_config.update(config_update)
                 _sync_config_aliases(full_config)
+                if 'maxNumberOfTrial' in config_update and config_update.get(
+                        'maxNumberOfTrial') is not None:
+                    trial_quota_update = config_update.get('maxNumberOfTrial')
+
+                # Sync trial_mode_enabled from config.trialMode (frontend sends this)
+                if 'trialMode' in config_update:
+                    trial_mode_enabled = config_update['trialMode']
+                    full_config['testMode'] = trial_mode_enabled
+                    # Sync trial_mode_enabled database field
+                    problem.obj.trial_mode_enabled = trial_mode_enabled
+                    # Ensure it's saved by adding to kwargs
+                    kwargs['trial_mode_enabled'] = trial_mode_enabled
 
             if 'pipeline' in kwargs and kwargs.get('pipeline') is not None:
                 pipeline = kwargs.pop('pipeline')
@@ -587,16 +757,45 @@ class Problem(MongoBase, engine=engine.Problem):
                     full_config['staticAnalysis'] = pipeline['staticAnalysis']
                     full_config['staticAnalys'] = pipeline['staticAnalysis']
 
-            if 'Test_Mode' in kwargs and kwargs.get('Test_Mode') is not None:
-                test_mode = kwargs.pop('Test_Mode')
-                if 'Enabled' in test_mode:
-                    full_config['testMode'] = test_mode['Enabled']
-                if 'Quota_Per_Student' in test_mode:
-                    full_config['testModeQuotaPerStudent'] = test_mode[
-                        'Quota_Per_Student']
+            if 'Trial_Mode' in kwargs and kwargs.get('Trial_Mode') is not None:
+                trial_mode = kwargs.pop('Trial_Mode')
+                trial_mode_enabled = None
+                if 'Enabled' in trial_mode:
+                    trial_mode_enabled = trial_mode.get('Enabled')
+                elif 'trialMode' in trial_mode:
+                    trial_mode_enabled = trial_mode.get('trialMode')
+                if trial_mode_enabled is not None:
+                    trial_mode_enabled = bool(trial_mode_enabled)
+                    full_config['testMode'] = trial_mode_enabled
+                    full_config['trialMode'] = trial_mode_enabled
+                    # Sync trial_mode_enabled database field
+                    problem.obj.trial_mode_enabled = trial_mode_enabled
+                    # Ensure it's saved by adding to kwargs
+                    kwargs['trial_mode_enabled'] = trial_mode_enabled
+
+                quota_per_student = trial_mode.get('Quota_Per_Student')
+                if quota_per_student is None:
+                    quota_per_student = trial_mode.get(
+                        'trialModeQuotaPerStudent')
+                if quota_per_student is not None:
+                    full_config['testModeQuotaPerStudent'] = quota_per_student
+                    full_config['trialModeQuotaPerStudent'] = quota_per_student
+
+                if trial_mode.get('maxNumberOfTrial') is not None:
+                    full_config['maxNumberOfTrial'] = trial_mode.get(
+                        'maxNumberOfTrial')
+                    trial_quota_update = trial_mode.get('maxNumberOfTrial')
+                if trial_mode.get('trialResultVisible') is not None:
+                    full_config['trialResultVisible'] = trial_mode.get(
+                        'trialResultVisible')
+                if trial_mode.get('trialResultDownloadable') is not None:
+                    full_config['trialResultDownloadable'] = trial_mode.get(
+                        'trialResultDownloadable')
 
             kwargs['config'] = full_config
             _sync_config_aliases(kwargs['config'])
+            if trial_quota_update is not None:
+                kwargs['trial_submission_quota'] = trial_quota_update
 
         if 'test_case_info' in kwargs and kwargs.get(
                 'test_case_info') is not None:

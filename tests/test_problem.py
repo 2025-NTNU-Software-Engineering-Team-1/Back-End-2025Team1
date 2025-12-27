@@ -38,8 +38,8 @@ def assert_basic_problem_config(config):
     assert config['allowWrite'] is False
     assert config['scoringScript'] == {'custom': False}
     assert config['teacherFirst'] is False
-    assert config['testMode'] is False
-    assert config['testModeQuotaPerStudent'] == 0
+    assert config['trialMode'] is False
+    assert config['maxNumberOfTrial'] == 0
     assert config.get('staticAnalys', {}).get('custom') is False
 
 
@@ -99,6 +99,7 @@ def advanced_pipeline_payload():
     }
 
 
+@pytest.mark.usefixtures("setup_minio")
 class TestProblem(BaseTester):
     # add a problem which status value is invalid (POST /problem/manage)
     def test_add_with_invalid_value(self, client_admin):
@@ -146,6 +147,10 @@ class TestProblem(BaseTester):
 
     # add a problem which problem name is misssing (POST /problem/manage)
     def test_add_with_missing_argument(self, client_admin):
+        try:
+            utils.course.create_course(name='math', teacher=User('admin'))
+        except engine.NotUniqueError:
+            pass
         request_json_with_missing_argument = {
             'courses': ['math'],
             'status': 1,
@@ -298,7 +303,7 @@ class TestProblem(BaseTester):
         assert config['staticAnalysis']['networkAccessRestriction'][
             'connectWithLocal']['whitelist'] == ['192.168.2.2']
         assert config['scoringScript'] == {'custom': False}
-        assert config['testMode'] is True
+        assert config['trialMode'] is True
 
     def test_add_problem_with_empty_course_list(self, client_admin):
         request_json = {
@@ -418,8 +423,13 @@ class TestProblem(BaseTester):
 
     def test_view_problem_from_invalid_ip(self, client_student, monkeypatch):
         from model.problem import Problem
+        utils.course.create_course(teacher='admin',
+                                   name='math',
+                                   students=['student'])
+        prob = utils.problem.create_problem(course='math', owner='admin')
+
         monkeypatch.setattr(Problem, 'is_valid_ip', lambda *_: False)
-        rv = client_student.get('/problem/4')
+        rv = client_student.get(f'/problem/{prob.id}')
         assert rv.status_code == 403, rv.get_json()
         assert rv.get_json()['message'] == 'Invalid IP address.'
 
@@ -814,13 +824,14 @@ def test_asset_checksum_invalid_type(client_admin, problem_ids):
             'problemName': 'Offline problem (edit)',
             'description': description_dict(),
             'tags': [],
+            'config': {
+                'acceptedFormat': 'code',
+            },
             'testCaseInfo': {
                 'language':
                 1,
                 'fillInTemplate':
                 '',
-                'submissionMode':
-                0,
                 'tasks': [{
                     'caseCount': 1,
                     'taskScore': 100,
@@ -1015,7 +1026,7 @@ def test_asset_checksum_invalid_type(client_admin, problem_ids):
         rv = client.get('/problem/3/meta?token=SandboxToken')
         assert rv.status_code == 200, rv.get_json()
         payload = rv.get_json()['data']
-        assert payload['submissionMode'] == 0
+        assert payload['acceptedFormat'] == 'code'
         assert payload['tasks'] == [{
             'caseCount': 1,
             'memoryLimit': 1000,
@@ -1522,7 +1533,11 @@ class TestTrialSubmissionAPI(BaseTester):
         # Also make sure problem is visible
         try:
             problem.obj.problem_status = 0  # Visible
-            problem.obj.test_mode_enabled = True
+            problem.obj.trial_mode_enabled = True
+            # Update config for new trial mode logic
+            if not problem.obj.config:
+                problem.obj.config = {}
+            problem.obj.config['trialMode'] = True
         except Exception:
             pass
         try:
@@ -1601,11 +1616,11 @@ class TestTrialSubmissionAPI(BaseTester):
         assert rv.status_code == 404
         assert 'Problem not found' in rv.get_json()['message']
 
-    def test_get_public_testcases_test_mode_disabled(
+    def test_get_public_testcases_trial_mode_disabled(
             self, forge_client, setup_problem_with_testcases):
         problem, _ = setup_problem_with_testcases
-        if hasattr(problem.obj, "test_mode_enabled"):
-            problem.obj.test_mode_enabled = False
+        if hasattr(problem.obj, "trial_mode_enabled"):
+            problem.obj.trial_mode_enabled = False
             problem.obj.save()
             problem.reload()
 
@@ -1614,7 +1629,7 @@ class TestTrialSubmissionAPI(BaseTester):
         assert rv.status_code == 403
         json = rv.get_json()
         assert json['status'] == 'err'
-        assert 'Test mode disabled' in json['message']
+        assert 'Trial mode disabled' in json['message']
 
     def test_get_public_testcases_no_zip_uploaded(
             self, forge_client, setup_problem_with_testcases):
@@ -1725,8 +1740,8 @@ class TestTrialSubmissionAPI(BaseTester):
         assert rv.status_code == 200
         data = rv.get_json()
         assert data['status'] == 'ok'
-        assert 'Trial_Submission_Id' in data['data']
-        trial_id = data['data']['Trial_Submission_Id']
+        assert 'trial_submission_id' in data['data']
+        trial_id = data['data']['trial_submission_id']
 
         # Verify record
         from mongo.submission import TrialSubmission
@@ -1755,7 +1770,7 @@ class TestTrialSubmissionAPI(BaseTester):
         rv = client.post('/problem/999999/trial/request',
                          json={
                              'languageType': 2,
-                             'Use_Default_Test_Cases': True
+                             'use_default_test_cases': True
                          })
         assert rv.status_code == 404
         assert 'Problem not found' in rv.get_json()['message']
@@ -1784,5 +1799,5 @@ class TestTrialSubmissionAPI(BaseTester):
             })
         assert rv.status_code == 200
         from mongo.submission import TrialSubmission
-        ts = TrialSubmission(rv.get_json()['data']['Trial_Submission_Id'])
+        ts = TrialSubmission(rv.get_json()['data']['trial_submission_id'])
         assert ts.use_default_case is False

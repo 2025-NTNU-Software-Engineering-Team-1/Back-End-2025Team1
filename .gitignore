@@ -9,10 +9,17 @@ __pycache__
 .DS_Store
 
 # virtual env
+.venv/
+.venv.bak/
+venv/
+env/
 .venv
 venv
 .venv.bak
 .env
+.env.local
+*/.venv/
+*/venv/
 
 # vs & vs code cache
 .vs
@@ -28,3 +35,10 @@ coverage.html
 htmlcov
 
 /minio/
+.venv.bak/
+
+.act/
+
+.act/
+
+.act/

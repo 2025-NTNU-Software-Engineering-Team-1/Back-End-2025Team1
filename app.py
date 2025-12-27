@@ -4,7 +4,7 @@ from logging.config import dictConfig
 from flask import Flask
 from model import *
 from mongo import *
-from mongo.ai_vtuber import migrate_ai_data
+from mongo.ai import migrate_ai_data, ensure_default_skin_uploaded
 from config import LOGGING_CONFIG, LOG_DIR
 
 
@@ -15,18 +15,36 @@ def app():
 
     # Create a flask app
     app = Flask(__name__)
-    app.config['PREFERRED_URL_SCHEME'] = 'https'
+    app.config['PREFERRED_URL_SCHEME'] = os.environ.get(
+        'PREFERRED_URL_SCHEME', 'http')
     app.url_map.strict_slashes = False
     setup_smtp(app)
+
+    # Apply security configurations (CSRF, Headers, Error Handlers)
+    from model.utils.security import setup_security
+    setup_security(app)
+
     # Register flask blueprint
-    api2prefix = [(auth_api, '/auth'), (profile_api, '/profile'),
-                  (problem_api, '/problem'), (submission_api, '/submission'),
-                  (course_api, '/course'), (homework_api, '/homework'),
-                  (test_api, '/test'), (ann_api, '/ann'),
-                  (ranking_api, '/ranking'), (post_api, '/post'),
-                  (copycat_api, '/copycat'), (health_api, '/health'),
-                  (user_api, '/user'), (pat_api, '/pat'),
-                  (trial_submission_api, '/trial-submission'), (ai_api, '/ai')]
+    api2prefix = [
+        (auth_api, '/auth'),
+        (profile_api, '/profile'),
+        (problem_api, '/problem'),
+        (submission_api, '/submission'),
+        (course_api, '/course'),
+        (homework_api, '/homework'),
+        (test_api, '/test'),
+        (ann_api, '/ann'),
+        (post_api, '/post'),
+        (discussion_api, '/discussion'),
+        (copycat_api, '/copycat'),
+        (health_api, '/health'),
+        (user_api, '/user'),
+        (pat_api, '/pat'),
+        (trial_submission_api, '/trial-submission'),
+        (ai_api, '/ai'),
+        (skin_api, '/ai'),  # Skin API under /ai prefix
+        (login_records_api, ''),
+    ]
     for api, prefix in api2prefix:
         app.register_blueprint(api, url_prefix=prefix)
 
@@ -58,6 +76,7 @@ def app():
     # Initialize AI Models and Data
     try:
         AiModel.initialize_default_models()
+        ensure_default_skin_uploaded()
         migrate_ai_data()
     except Exception as e:
         app.logger.warning(f"AI initialization failed: {e}")
@@ -73,20 +92,34 @@ def app():
 
 
 def setup_smtp(app: Flask):
-    logger = logging.getLogger('gunicorn.error')
     if os.getenv('SMTP_SERVER') is None:
-        logger.info(
-            '\'SMTP_SERVER\' is not set. email-related function will be disabled'
+        app.logger.info(
+            "'SMTP_SERVER' is not set. email-related function will be disabled"
         )
         return
-    if os.getenv('SMTP_NOREPLY') is None:
-        raise RuntimeError('missing required configuration \'SMTP_NOREPLY\'')
-    if os.getenv('SMTP_NOREPLY_PASSWORD') is None:
-        logger.info('\'SMTP_NOREPLY\' set but \'SMTP_NOREPLY_PASSWORD\' not')
-    # config for external URLs
+
+    # Check for required SMTP settings with fallback
+    smtp_noreply = os.getenv('SMTP_NOREPLY')
     server_name = os.getenv('SERVER_NAME')
+
+    if smtp_noreply is None:
+        app.logger.warning(
+            "'SMTP_SERVER' is set but 'SMTP_NOREPLY' is missing. "
+            "Email functionality will be disabled.")
+        return
+
     if server_name is None:
-        raise RuntimeError('missing required configuration \'SERVER_NAME\'')
+        app.logger.warning(
+            "'SMTP_SERVER' is set but 'SERVER_NAME' is missing. "
+            "Email functionality will be disabled.")
+        return
+
+    if os.getenv('SMTP_NOREPLY_PASSWORD') is None:
+        app.logger.info("'SMTP_NOREPLY' set but 'SMTP_NOREPLY_PASSWORD' not")
+
+    # All required settings present, configure SMTP
     app.config['SERVER_NAME'] = server_name
     if (application_root := os.getenv('APPLICATION_ROOT')) is not None:
         app.config['APPLICATION_ROOT'] = application_root
+
+    app.logger.info(f"SMTP configured: server={os.getenv('SMTP_SERVER')}")

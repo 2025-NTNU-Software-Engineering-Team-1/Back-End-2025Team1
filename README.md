@@ -25,6 +25,13 @@ To ensure everything is set up correctly, run the tests:
 ```bash
 poetry run pytest
 ```
+
+You can also run tests in parallel to speed up the process (e.g., using 4 workers):
+```bash
+poetry run pytest -n 4
+```
+If you found any tests failed, add `--dist loadfile` to the command to ensure the tests in a file are run in a same worker.
+
 All tests should pass (or skip). Create an issue if you found any tests failed.
 
 ### 5. Code Formatting
@@ -67,6 +74,12 @@ SMTP server is required for sending emails, such as password reset and signup ne
 - `SMTP_SERVER`: SMTP server
 - `SMTP_NOREPLY`: email account used to send emails, e.g. `noreply@noj.tw`
 - `SMTP_NOREPLY_PASSWORD`: password of `SMTP_NOREPLY` (optional)
+
+### MOSS Configuration (Plagiarism Detection)
+
+MOSS is used for source-code similarity / plagiarism detection. You can skip this if you will not develop features related to plagiarism / similarity checking.
+
+- `MOSS_USERID`: your Stanford MOSS user id (numeric). Required to enable MOSS-related features.
 
 ### Optional
 

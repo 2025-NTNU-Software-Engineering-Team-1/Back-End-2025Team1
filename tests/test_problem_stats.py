@@ -8,6 +8,8 @@ from tests.base_tester import BaseTester
 from tests.conftest import forge_client
 from . import utils
 
+pytestmark = pytest.mark.usefixtures("setup_minio")
+
 
 def setup_function(_):
     # TODO: if not called, the client_admin will have invalid token to access

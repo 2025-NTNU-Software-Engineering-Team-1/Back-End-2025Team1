@@ -1,8 +1,11 @@
 from . import engine
 from .user import *
+from .user import Role
 from .utils import *
 import re
 import enum
+import secrets
+import string
 from typing import Dict, List, Optional, Any
 from .base import MongoBase
 from datetime import datetime
@@ -19,6 +22,13 @@ class Course(MongoBase, engine=engine.Course):
         SCORE = enum.auto()  # only can view self score
         MODIFY = enum.auto()  # manage course
         GRADE = enum.auto()  # grade students' score
+
+    def check_privilege(self, user):
+        return any((
+            user.role == Role.ADMIN,
+            bool(self.obj.teacher and user.pk == self.obj.teacher.pk),
+            user.pk in [ta.pk for ta in self.obj.tas],
+        ))
 
     def __new__(cls, course_name, *args, **kwargs):
         try:
@@ -69,7 +79,7 @@ class Course(MongoBase, engine=engine.Course):
 
     @classmethod
     def get_user_courses(cls, user):
-        if user.role != 0:
+        if user.role != Role.ADMIN:
             return user.courses
         else:
             return cls.get_all()
@@ -86,7 +96,7 @@ class Course(MongoBase, engine=engine.Course):
             engine.Submission.objects(problem__in=problems).count(),
         }
 
-    def edit_course(self, user, new_course, teacher):
+    def edit_course(self, user, new_course, teacher, color=None, emoji=None):
         if re.match(r'^[a-zA-Z0-9._\- ]+$', new_course) is None:
             raise ValueError
 
@@ -99,7 +109,7 @@ class Course(MongoBase, engine=engine.Course):
             raise engine.DoesNotExist('User')
 
         # HACK: not sure why the unique index is not work during the test
-        if Course(new_course):
+        if new_course != self.course_name and Course(new_course):
             raise engine.NotUniqueError('Course')
 
         self.course_name = new_course
@@ -107,6 +117,16 @@ class Course(MongoBase, engine=engine.Course):
             self.remove_user(self.teacher)
             self.add_user(te.obj)
         self.teacher = te.obj
+
+        if color:
+            if not re.match(r'^#[0-9a-fA-F]{6}$', color):
+                raise ValueError('Invalid color format')
+            self.color = color
+        if emoji:
+            if len(emoji) > 8:
+                raise ValueError('Emoji too long')
+            self.emoji = emoji
+
         self.save()
         return True
 
@@ -207,22 +227,149 @@ class Course(MongoBase, engine=engine.Course):
 
         return scoreboard
 
+    @staticmethod
+    def generate_course_code(length: int = 8) -> str:
+        """
+        Generate a unique random course code.
+        """
+        chars = string.ascii_uppercase + string.digits
+        while True:
+            code = ''.join(secrets.choice(chars) for _ in range(length))
+            # Check if code already exists
+            if not engine.Course.objects(course_code=code).first():
+                return code
+
+    def add_auth_code(self, creator, max_usage=0):
+        if not self:
+            raise engine.DoesNotExist('Course')
+
+        # Generate unique code
+        while True:
+            code = self.generate_course_code()
+            if code == self.course_code:
+                continue
+            if any(ac.code == code for ac in self.auth_codes):
+                continue
+            break
+
+        auth_code = engine.AuthorizationCode(
+            code=code,
+            max_usage=max_usage,
+            creator=creator.obj if hasattr(creator, 'obj') else creator,
+            is_active=True)
+
+        self.update(push__auth_codes=auth_code)
+        self.reload()
+        return auth_code
+
+    def remove_auth_code(self, code):
+        if not self:
+            raise engine.DoesNotExist('Course')
+
+        # Use pull to remove from list
+        # We can't really pull by code easily with EmbeddedDocument unless we match exact object
+        # So filtering list and saving is easier
+        filtered = [ac for ac in self.auth_codes if ac.code != code]
+        if len(filtered) == len(self.auth_codes):
+            return False  # Not found
+
+        self.auth_codes = filtered
+        self.save()
+        return True
+
     @classmethod
-    def add_course(cls, course, teacher):
+    def get_by_code(cls, code: str) -> Optional['Course']:
+        """
+        Get a course by its course code.
+        Returns None if not found.
+        """
+        try:
+            course_doc = engine.Course.objects(
+                engine.Q(course_code=code)
+                | engine.Q(auth_codes__code=code)).first()
+            if course_doc:
+                return cls(course_doc)
+            return None
+        except Exception:
+            return None
+
+    def join_by_code(self, user, code: Optional[str] = None) -> bool:
+        """
+        Join course as a student using course code.
+        Returns True if successful, raises exception otherwise.
+        """
+        if not self:
+            raise engine.DoesNotExist('Course')
+
+        user_wrapper = User(user) if isinstance(user, str) else user
+        if not user_wrapper:
+            raise engine.DoesNotExist('User')
+
+        # Check if user is already in the course
+        if self.id in [c.id for c in user_wrapper.obj.courses]:
+            raise ValueError('User is already in this course')
+
+        # Check if user is teacher or TA (they cannot join via code)
+        if user_wrapper.obj == self.teacher:
+            raise PermissionError(
+                'Teacher cannot join their own course via code')
+        if user_wrapper.obj in self.tas:
+            raise PermissionError('TA cannot join via code')
+
+        # Handle Authorization Code Logic
+        if code:
+            # Check if it is an auth code
+            auth_code_obj = next(
+                (ac for ac in self.auth_codes if ac.code == code), None)
+            if auth_code_obj:
+                if not auth_code_obj.is_active:
+                    raise PermissionError('Authorization code is inactive.')
+                if auth_code_obj.max_usage > 0 and auth_code_obj.current_usage >= auth_code_obj.max_usage:
+                    raise PermissionError(
+                        'Authorization code usage limit reached.')
+
+                # Increment usage
+                auth_code_obj.current_usage += 1
+                # Save is done at the end
+            elif code != self.course_code:
+                # If code is provided but not found in auth_codes AND not equal to course_code
+                # (This case might happen if get_by_code found it but then it was removed?
+                # Or if join_by_code called directly)
+                # But get_by_code uses Q logic.
+                pass
+
+        # Add user to course as student
+        username = user_wrapper.username
+        self.student_nicknames[username] = username
+        self.add_user(user_wrapper.obj)
+        self.save()
+        return True
+
+    @classmethod
+    def add_course(cls, course, teacher, color=None, emoji=None):
         if re.match(r'^[a-zA-Z0-9._\- ]+$', course) is None:
             raise ValueError
         teacher = User(teacher)
         if not teacher:
             raise engine.DoesNotExist('User')
-        if teacher.role >= 2:
+        if teacher.role >= Role.STUDENT:
             raise PermissionError(
                 f'{teacher} is not permitted to create a course')
         # HACK: not sure why the unique index is not work during the test
         if cls(course):
             raise engine.NotUniqueError('Course')
+
+        if color and not re.match(r'^#[0-9a-fA-F]{6}$', color):
+            raise ValueError('Invalid color format')
+        if emoji and len(emoji) > 8:
+            raise ValueError('Emoji too long')
+
         co = cls.engine(
             course_name=course,
             teacher=teacher.obj,
+            course_code=cls.generate_course_code(),
+            color=color,
+            emoji=emoji,
         ).save()
         cls(co).add_user(teacher.obj)
         return True

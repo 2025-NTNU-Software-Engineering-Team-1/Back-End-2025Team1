@@ -16,6 +16,8 @@ from .base_tester import BaseTester
 from .utils import *
 from tests import utils
 
+pytestmark = pytest.mark.usefixtures("setup_minio")
+
 A_NAMES = [
     'teacher',
     'admin',
@@ -54,6 +56,7 @@ def submission_testcase_setup(
     BaseTester.teardown_class()
 
 
+@pytest.mark.usefixtures("setup_minio")
 class SubmissionTester:
     # all submission count
     init_submission_count = 8
@@ -64,8 +67,8 @@ class SubmissionTester:
 def zip_problem(problem_ids):
     pid = problem_ids('teacher', 1, True)[0]
     prob = Problem(pid)
-    prob.update(test_case__submission_mode=1)
-    prob.reload('test_case')
+    prob.update(config__acceptedFormat='zip')
+    prob.reload('config')
     return pid
 
 
@@ -708,8 +711,8 @@ class TestCreateSubmission(SubmissionTester):
     ):
         pid = problem_ids('teacher', 1, True)[0]
         prob = Problem(pid)
-        prob.update(test_case__submission_mode=1)
-        prob.reload('test_case')
+        prob.update(config__acceptedFormat='zip')
+        prob.reload('config')
         prob.update(config__executionMode='functionOnly')
         client = forge_client('student')
         rv, rv_json, rv_data = BaseTester.request(

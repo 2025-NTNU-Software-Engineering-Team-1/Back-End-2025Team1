@@ -73,7 +73,10 @@ def login_required(func=None, *, pat_scope=None):
             if user is None:
                 if token is None:
                     return HTTPError('Not Logged In', 403)
-                json = jwt_decode(token)
+                try:
+                    json = jwt_decode(token)
+                except ValueError:
+                    return HTTPError('Invalid Token', 403)
                 if json is None or not json.get('secret'):
                     return HTTPError('Invalid Token', 403)
                 user = User(json['data']['username'])
@@ -225,14 +228,35 @@ def session():
         Returns:
             - 400 Incomplete Data
             - 403 Login Failed
+            - 429 Too Many Attempts
         '''
+        from .utils.rate_limit import login_limiter
+
         ip_addr = request.headers.get('cf-connecting-ip', request.remote_addr)
+
+        # Rate limit check
+        allowed, wait_time = login_limiter.check(ip_addr)
+        if not allowed:
+            retry_after = int(wait_time)
+            err = HTTPError(
+                f'Too many login attempts. Please try again in {retry_after} seconds.',
+                429)
+            # Add Retry-After header to the response object in the tuple
+            err[0].headers['Retry-After'] = str(retry_after)
+            return err
+
         try:
             user = User.login(username, password, ip_addr)
         except DoesNotExist:
+            login_limiter.record_failure(ip_addr)
             return HTTPError('Login Failed', 403)
+
         if not user.active:
             return HTTPError('Invalid User', 403)
+
+        # Clear rate limit on successful login
+        login_limiter.clear(ip_addr)
+
         cookies = {'piann_httponly': user.secret, 'jwt': user.cookie}
         return HTTPResponse('Login Success', cookies=cookies)
 
@@ -325,7 +349,10 @@ def active(token=None):
         '''
         if agreement is not True:
             return HTTPError('Not Confirm the Agreement', 403)
-        json = jwt_decode(token)
+        try:
+            json = jwt_decode(token)
+        except ValueError:
+            return HTTPError('Invalid Token', 403)
         if json is None or not json.get('secret'):
             return HTTPError('Invalid Token.', 403)
         user = User(json['data']['username'])
@@ -343,7 +370,10 @@ def active(token=None):
     def redir():
         '''Redirect user to active page.
         '''
-        json = jwt_decode(token)
+        try:
+            json = jwt_decode(token)
+        except ValueError:
+            return HTTPError('Invalid Token', 403)
         if json is None:
             return HTTPError('Invalid Token', 403)
         user = User(json['data']['username'])
@@ -419,35 +449,89 @@ def batch_signup(
     if force is None:
         force = False
     try:
-        new_users = User.batch_signup(
+        result = User.batch_signup(
             new_users=new_users,
             course=course,
             force=force,
         )
     except ValueError as e:
         return HTTPError(str(e), 400)
+
+    # If any entries were skipped because username/email already existed,
+    # return them in the response so the frontend can show a clear message.
+    if isinstance(result, dict) and result.get('skipped'):
+        return HTTPResponse(data={'skipped': result.get('skipped')})
+
     return HTTPResponse()
 
 
-@auth_api.route('/me', methods=['GET'])
-@Request.args('fields')
-@login_required
-def get_me(user: User, fields: Optional[str]):
-    default = [
-        'username',
-        'email',
-        'md5',
-        'active',
-        'role',
-        'editorConfig',
-        'displayedName',
-        'bio',
-    ]
-    if fields is None:
-        fields = default
-    else:
-        fields = fields.split(',')
+def _get_user_from_token(token: Optional[str]) -> Optional[User]:
+    if not token:
+        return None
+
+    # Propagate ValueError to be handled by caller (e.g. get_me)
+    # to distinguish between invalid algorithm (attack) and just invalid token (expired/etc)
+    # However, existing calls might expect None.
+    # User instruction: "alg:none -> 403".
+    # _get_user_from_token is internal. If I let it raise, I must fix callers.
+    # Callers: get_me (only one?)
+    # Let's remove the try-catch block added in previous step and let it propagate.
+    json = jwt_decode(token)
+    if not json or not json.get('secret'):
+        return None
+
     try:
-        return HTTPResponse(data=user.properties(*fields))
-    except ValueError as e:
-        return HTTPError(str(e), 400)
+        user = User(json['data']['username'])
+        # Check for ID mismatch
+        if json['data'].get('userId') != user.user_id:
+            return None
+        # Check active status
+        if not user.active:
+            return None
+        return user
+    except Exception:
+        return None
+
+
+@auth_api.route('/me', methods=['GET'])
+@Request.values('fields')
+@Request.cookies(vars_dict={'token': 'piann'})
+def get_me(token: Optional[str], fields: Optional[str]):
+    try:
+        user = _get_user_from_token(token)
+    except ValueError:
+        return HTTPError('Invalid Token', 403)
+
+    if user:
+        default = [
+            'username',
+            'email',
+            'md5',
+            'active',
+            'role',
+            'editorConfig',
+            'displayedName',
+            'bio',
+        ]
+        if fields is None:
+            fields = default
+        else:
+            fields = fields.split(',')
+        try:
+            return HTTPResponse(data=user.properties(*fields))
+        except ValueError as e:
+            return HTTPError(str(e), 400)
+
+    # Return Mock Guest User
+    return HTTPResponse(
+        data={
+            'username': 'guest',
+            'role': -1,
+            'active': False,
+            'email': '',
+            'displayedName': 'Guest',
+            'bio': '',
+            'editorConfig': {},
+            'userId': '',
+            'md5': '',
+        })
