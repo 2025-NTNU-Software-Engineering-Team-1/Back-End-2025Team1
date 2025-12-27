@@ -256,6 +256,16 @@ class Homework(Document):
     penalty = StringField(max_length=10000, default='score = 0')
 
 
+class AuthorizationCode(EmbeddedDocument):
+    code = StringField(required=True)
+    # 0: Unlimited, >0: Limit
+    max_usage = IntField(default=0)
+    current_usage = IntField(default=0)
+    is_active = BooleanField(default=True)
+    creator = ReferenceField('User')
+    created_at = DateTimeField(default=datetime.now)
+
+
 class Course(Document):
     meta = {
         'strict': False
@@ -283,6 +293,7 @@ class Course(Document):
         db_field='courseCode',
         null=True,
     )
+    auth_codes = ListField(EmbeddedDocumentField(AuthorizationCode))
 
     # for AI_vt
     is_ai_vt_enabled = BooleanField(db_field='isAIEnabled', default=True)

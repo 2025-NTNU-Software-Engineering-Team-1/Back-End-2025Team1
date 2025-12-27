@@ -1005,3 +1005,95 @@ class TestMemberRole(BaseTester):
         rv = client_teacher.put(f'/course/{course_name}/member/student/role',
                                 json={'role': 'ta'})
         assert rv.status_code == 400
+
+
+class TestCourseCode(BaseTester):
+    '''Test authorization code feature'''
+
+    def test_legacy_course_code(self, client_admin, client_student):
+        utils.user.create_user(username='admin', role=engine.User.Role.ADMIN)
+        utils.user.create_user(username='student',
+                               role=engine.User.Role.STUDENT)
+
+        # Create course
+        course_name = f"course_{secrets.token_hex(4)}"
+        client_admin.post('/course',
+                          json={
+                              'course': course_name,
+                              'teacher': 'admin'
+                          })
+
+        # Admin generates code (legacy behavior)
+        rv = client_admin.post(f'/course/{course_name}/code', json={})
+        assert rv.status_code == 200
+        code = rv.get_json()['data']['course_code']
+        assert code
+
+        # Student joins
+        rv = client_student.post('/course/join', json={'course_code': code})
+        assert rv.status_code == 200
+        assert Course(course_name).course_code == code
+
+    def test_auth_code_lifecycle(self, client_admin, client_student,
+                                 forge_client):
+        utils.user.create_user(username='admin', role=engine.User.Role.ADMIN)
+        utils.user.create_user(username='student',
+                               role=engine.User.Role.STUDENT)
+        utils.user.create_user(username='student2',
+                               role=engine.User.Role.STUDENT)
+
+        # Create course
+        course_name = f"course_{secrets.token_hex(4)}"
+        client_admin.post('/course',
+                          json={
+                              'course': course_name,
+                              'teacher': 'admin'
+                          })
+
+        # Admin generates auth code with limit 1
+        rv = client_admin.post(f'/course/{course_name}/code',
+                               json={'max_usage': 1})
+        assert rv.status_code == 200
+        auth_code = rv.get_json()['data']['code']
+        assert auth_code
+
+        # Verify it lists
+        rv = client_admin.get(f'/course/{course_name}/code')
+        data = rv.get_json()['data']
+        assert 'auth_codes' in data
+        codes = data['auth_codes']
+        assert any(c['code'] == auth_code for c in codes)
+
+        # Student 1 joins
+        rv = client_student.post('/course/join',
+                                 json={'course_code': auth_code})
+        assert rv.status_code == 200
+
+        # Student 2 tries to join (should fail)
+        client_student2 = forge_client('student2')
+        rv = client_student2.post('/course/join',
+                                  json={'course_code': auth_code})
+        assert rv.status_code == 403, rv.get_json()
+        assert 'usage limit reached' in rv.get_json()['message']
+
+        # Admin deletes code
+        rv = client_admin.delete(f'/course/{course_name}/code/{auth_code}')
+        assert rv.status_code == 200
+
+        # Verify removed
+        rv = client_admin.get(f'/course/{course_name}/code')
+        codes = rv.get_json()['data']['auth_codes']
+        assert not any(c['code'] == auth_code for c in codes)
+
+    def test_auth_code_bad_usage(self, client_admin):
+        utils.user.create_user(username='admin', role=engine.User.Role.ADMIN)
+        course_name = f"course_{secrets.token_hex(4)}"
+        client_admin.post('/course',
+                          json={
+                              'course': course_name,
+                              'teacher': 'admin'
+                          })
+
+        rv = client_admin.post(f'/course/{course_name}/code',
+                               json={'max_usage': -1})
+        assert rv.status_code == 400

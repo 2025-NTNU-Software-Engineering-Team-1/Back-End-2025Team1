@@ -6,7 +6,7 @@ from mongo import *
 from .auth import *
 from .utils import *
 from .utils.ai import DEFAULT_AI_MODEL
-from mongo.utils import *
+from mongo.utils import perm
 from mongo.course import *
 from mongo import engine
 from datetime import datetime
@@ -14,13 +14,6 @@ from datetime import datetime
 __all__ = ['course_api']
 
 course_api = Blueprint('course_api', __name__)
-
-
-def teacher_permission_check(user, course: Course) -> bool:
-    is_course_teacher = (course.obj.teacher.pk == user.pk)
-    is_ta = any(ta.pk == user.pk for ta in course.obj.tas)
-    is_staff = (user.role == Role.ADMIN)
-    return is_course_teacher or is_staff or is_ta
 
 
 @course_api.get('/')
@@ -93,7 +86,7 @@ def join_course_by_code(user, course_code):
         return HTTPError('Invalid course code.', 404)
 
     try:
-        course.join_by_code(user)
+        course.join_by_code(user, code=course_code)
         return HTTPResponse('Successfully joined course.',
                             data={'course': course.course_name})
     except ValueError as e:
@@ -175,8 +168,10 @@ def change_member_role(user, course_name, username, role):
     # Only course teacher or admin can change roles (not TAs)
     is_course_teacher = (course.obj.teacher.pk == user.pk)
     is_admin = (user.role == Role.ADMIN)
+    is_global_teacher_ta = (user.role == Role.TEACHER and user.pk
+                            in [ta.pk for ta in (course.tas or [])])
 
-    if not (is_course_teacher or is_admin):
+    if not (is_course_teacher or is_admin or is_global_teacher_ta):
         return HTTPError(
             'Only course teacher or admin can change member roles.', 403)
 
@@ -245,22 +240,73 @@ def manage_course_code(user, course_name):
         return HTTPError('Permission denied.', 403)
 
     if request.method == 'GET':
+        auth_codes_info = [{
+            'code':
+            ac.code,
+            'max_usage':
+            ac.max_usage,
+            'current_usage':
+            ac.current_usage,
+            'is_active':
+            ac.is_active,
+            'created_at':
+            ac.created_at.isoformat() if ac.created_at else None
+        } for ac in course.auth_codes]
+
         return HTTPResponse('Success.',
-                            data={'course_code': course.course_code})
+                            data={
+                                'course_code': course.course_code,
+                                'auth_codes': auth_codes_info
+                            })
 
     elif request.method == 'POST':
-        # Generate a new course code
-        new_code = Course.generate_course_code()
-        course.course_code = new_code
-        course.save()
-        return HTTPResponse('Course code generated.',
-                            data={'course_code': new_code})
+        # Check if creating new global code or auth code
+        data = request.json or {}
+        max_usage = data.get('max_usage')
+
+        if max_usage is not None:
+            # Create new auth code
+            try:
+                max_usage = int(max_usage)
+                if max_usage < 0: raise ValueError
+            except ValueError:
+                return HTTPError('Invalid max_usage.', 400)
+
+            auth_code = course.add_auth_code(user, max_usage)
+            return HTTPResponse('Authorization code generated.',
+                                data={'code': auth_code.code})
+        else:
+            # Generate a new course code (Legacy)
+            new_code = Course.generate_course_code()
+            course.course_code = new_code
+            course.save()
+            return HTTPResponse('Course code generated.',
+                                data={'course_code': new_code})
 
     elif request.method == 'DELETE':
-        # Remove course code
+        # Remove course code (Legacy)
         course.course_code = None
         course.save()
         return HTTPResponse('Course code removed.')
+
+
+@course_api.route('/<course_name>/code/<code>', methods=['DELETE'])
+@login_required
+def delete_course_code(user, course_name, code):
+    """
+    Remove specific authorization code.
+    """
+    course = Course(course_name)
+    if not course:
+        return HTTPError('Course not found.', 404)
+
+    if not course.permission(user, Course.Permission.MODIFY):
+        return HTTPError('Permission denied.', 403)
+
+    if course.remove_auth_code(code):
+        return HTTPResponse('Authorization code removed.')
+    else:
+        return HTTPError('Authorization code not found.', 404)
 
 
 @course_api.route('/<course_name>/grade/<student>',
@@ -416,7 +462,7 @@ def get_course_ai_usage(user, course_name):
     if not course:
         return HTTPError('Course not found', 404)
 
-    if not teacher_permission_check(user, course):
+    if not course.check_privilege(user):
         return HTTPError('Permission denied', 403)
 
     try:
@@ -440,7 +486,7 @@ def course_ai_key_entry(user, course_name):
     if not course:
         return HTTPError('Course not found', 404)
 
-    if not teacher_permission_check(user, course):
+    if not course.check_privilege(user):
         return HTTPError('Permission denied', 403)
 
     # ===== GET: Retrieve Keys =====
@@ -572,7 +618,7 @@ def get_key_suggestion(user, course_name, model):
     if not course:
         return HTTPError('Course not found', 404)
 
-    if not teacher_permission_check(user, course):
+    if not course.check_privilege(user):
         return HTTPError('Permission denied', 403)
 
     # 1. Model Name

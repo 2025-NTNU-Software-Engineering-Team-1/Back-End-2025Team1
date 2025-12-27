@@ -142,11 +142,7 @@ def get_course_login_records(
     except engine.DoesNotExist:
         return HTTPError('Course not found.', 404)
 
-    is_admin = user.role == Role.ADMIN
-    is_teacher = course.teacher and course.teacher.username == user.username
-    is_ta = user.username in [ta.username for ta in (course.tas or [])]
-
-    if not (is_admin or is_teacher or is_ta):
+    if not course.check_privilege(user):
         return HTTPError('Permission denied. Teacher or TA only.', 403)
 
     try:
@@ -181,11 +177,7 @@ def download_course_login_records(user, course_name: str):
     except engine.DoesNotExist:
         return HTTPError('Course not found.', 404)
 
-    is_admin = user.role == Role.ADMIN
-    is_teacher = course.teacher and course.teacher.username == user.username
-    is_ta = user.username in [ta.username for ta in (course.tas or [])]
-
-    if not (is_admin or is_teacher or is_ta):
+    if not course.check_privilege(user):
         return HTTPError('Permission denied. Teacher or TA only.', 403)
 
     records = LoginRecords.get_by_course_for_csv(course_name)
