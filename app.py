@@ -34,7 +34,6 @@ def app():
         (homework_api, '/homework'),
         (test_api, '/test'),
         (ann_api, '/ann'),
-        (ranking_api, '/ranking'),
         (post_api, '/post'),
         (discussion_api, '/discussion'),
         (copycat_api, '/copycat'),
