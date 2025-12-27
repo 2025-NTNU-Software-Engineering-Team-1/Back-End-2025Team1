@@ -137,7 +137,8 @@ def setup_security(app):
         is_api_blueprint = request.blueprint and request.blueprint.endswith(
             '_api')
         should_set_csp = not is_api_blueprint and (
-            not app.config.get('TESTING') and 'application/json' not in content_type)
+            not app.config.get('TESTING')
+            and 'application/json' not in content_type)
 
         if is_api_blueprint:
             response.headers['Cache-Control'] = 'no-store'

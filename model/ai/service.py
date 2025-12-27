@@ -94,10 +94,31 @@ def call_ai_service(
                                  timeout=DEFAULT_TIMEOUT)
 
         if response.status_code != 200:
-            logger.error(
-                f"AI Service Error {response.status_code}: {response.text}")
-            raise AIServiceError(f"AI Provider Error: {response.text}",
-                                 status_code=response.status_code)
+            # Parse error message from response
+            error_detail = "Unknown error"
+            try:
+                error_json = response.json()
+                error_detail = error_json.get('error',
+                                              {}).get('message',
+                                                      response.text[:200])
+            except Exception:
+                error_detail = response.text[:200] if response.text else "Unknown error"
+
+            # Handle specific error codes
+            if response.status_code == 429:
+                logger.warning(f"AI quota exceeded: {error_detail}")
+                raise AIServiceError(
+                    "API quota exceeded. Please try again later.",
+                    status_code=429)
+            elif response.status_code == 401 or response.status_code == 403:
+                logger.error(f"AI authentication error: {error_detail}")
+                raise AIServiceError("API authentication failed.",
+                                     status_code=response.status_code)
+            else:
+                logger.error(
+                    f"AI Service Error {response.status_code}: {error_detail}")
+                raise AIServiceError(f"AI service error: {error_detail}",
+                                     status_code=response.status_code)
 
         result = response.json()
 

@@ -2236,6 +2236,38 @@ class TrialSubmission(MongoBase, BaseSubmission,
         return cls(submission.id)
 
     @classmethod
+    def get_last_trial(cls, problem_id: int,
+                       username: str) -> Optional['TrialSubmission']:
+        '''
+        Get the last trial submission for a user on a problem.
+        
+        Args:
+            problem_id: The problem ID
+            username: The username
+            
+        Returns:
+            The last TrialSubmission or None if not found
+        '''
+        try:
+            problem = Problem(problem_id)
+            if not problem:
+                return None
+            user = User(username)
+            if not user:
+                return None
+
+            # Query for the most recent trial submission
+            trial_obj = engine.TrialSubmission.objects(
+                problem=problem.obj,
+                user=user.obj).order_by('-timestamp').first()
+
+            if trial_obj:
+                return cls(trial_obj.id)
+            return None
+        except Exception:
+            return None
+
+    @classmethod
     def get_history_for_api(cls,
                             user: User,
                             problem: Problem,

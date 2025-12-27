@@ -22,14 +22,19 @@ VTUBER_SYSTEM_PROMPT_TEMPLATE = """You are an AI teaching assistant with a Vtube
 [Context Info]
 Problem: {title}
 Description: {description}
+Hint: {hint}
 Input Format: {input_format}
 Output Format: {output_format}
-Student's Last Status: {last_submission_summary}
+Current Time: {current_time}
+Student's Last Submission: {last_submission_summary}
+Last Submission Error: {last_submission_error}
+Last Trial Result: {last_trial_summary}
 
 [Task]
 1. Act as the Vtuber character. Analyze the student's code/problem.
 2. Provide guidance (hints), NOT full solutions.
-3. Your final output must be a RAW JSON object.
+3. If the student has errors, help them understand what went wrong.
+4. Your final output must be a RAW JSON object.
 
 [Critical Constraints]
 1. The "text" field MUST contain **only the spoken dialogue**.
@@ -65,10 +70,15 @@ def build_vtuber_prompt(context: dict) -> str:
     prompt = VTUBER_SYSTEM_PROMPT_TEMPLATE.format(
         title=context.get('title', ''),
         description=context.get('description', ''),
+        hint=context.get('hint', '') or 'No hints available',
         input_format=context.get('input_format', ''),
         output_format=context.get('output_format', ''),
+        current_time=context.get('current_time', ''),
         last_submission_summary=context.get('last_submission_summary',
                                             'No record'),
+        last_submission_error=context.get('last_submission_error', '')
+        or 'None',
+        last_trial_summary=context.get('last_trial_summary', 'No record'),
         emotion_list_str=emotion_list_str)
 
     logger.debug(

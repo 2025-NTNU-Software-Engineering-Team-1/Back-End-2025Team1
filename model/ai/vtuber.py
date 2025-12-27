@@ -52,7 +52,8 @@ def process_vtuber_request(user,
                            course_name: str,
                            problem_id: str,
                            message: str,
-                           current_code: str = "") -> dict:
+                           current_code: str = "",
+                           language: str = "en") -> dict:
     """
     Process an AI Vtuber request from a student.
     
@@ -64,6 +65,7 @@ def process_vtuber_request(user,
         problem_id: The problem identifier.
         message: Student's message/question.
         current_code: Optional code submitted by student.
+        language: User's preferred language (e.g., 'en', 'zh-tw').
         
     Returns:
         Response dictionary with AI-generated content.
@@ -90,8 +92,10 @@ def process_vtuber_request(user,
                                            limit=10)
     history_for_ai = format_history_for_ai(raw_history)
 
-    # 4. Build system prompt
+    # 4. Build system prompt with language instruction
     system_prompt = build_vtuber_prompt(context)
+    if language:
+        system_prompt += f"\n\n[Language]\nPlease respond in {language}."
 
     # 5. Get model name
     model_name = get_model_for_course(course_name)

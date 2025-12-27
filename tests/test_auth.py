@@ -1150,7 +1150,7 @@ class TestCSRFSecurity:
         # Cache-Control should be no-store
         assert 'Cache-Control' in rv.headers
         assert rv.headers['Cache-Control'] == 'no-store'
-        
+
         assert 'X-Content-Type-Options' in rv.headers
         assert rv.headers['X-Content-Type-Options'] == 'nosniff'
         assert 'X-Frame-Options' in rv.headers

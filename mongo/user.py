@@ -330,17 +330,17 @@ def jwt_decode(token):
     """
     if not token:
         return None
-    
+
     # Allowed algorithms whitelist - only HS256 is allowed
     ALLOWED_ALGORITHMS = ['HS256']
-    
+
     try:
         # First, decode the header to check the algorithm before verification
         # This prevents alg: none attacks
         parts = token.split('.')
         if len(parts) != 3:
             return None
-        
+
         # Decode header (first part)
         header_data = parts[0]
         # JWT uses URL-safe base64 without padding
@@ -348,21 +348,21 @@ def jwt_decode(token):
         padding = 4 - len(header_data) % 4
         if padding != 4:
             header_data += '=' * padding
-        
+
         try:
             header_json = base64.urlsafe_b64decode(header_data)
             header = json.loads(header_json)
         except (ValueError, json.JSONDecodeError, TypeError, Exception):
             # Catch all exceptions during header decoding (base64 errors, JSON errors, etc.)
             return None
-        
+
         # Check algorithm in header
         alg = header.get('alg', '').upper()
-        
+
         # Explicitly reject alg: none and any algorithm not in whitelist
         if alg == 'NONE' or alg not in [a.upper() for a in ALLOWED_ALGORITHMS]:
             return None
-        
+
         # Now perform the actual JWT verification with algorithm whitelist
         decoded = jwt.decode(
             token,
