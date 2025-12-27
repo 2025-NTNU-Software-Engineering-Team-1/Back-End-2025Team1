@@ -92,6 +92,7 @@ def setup_minio():
         mongo.config.MINIO_HOST = cfg['endpoint']
         # TODO: Should we override this?
         mongo.config.FLASK_DEBUG = True
+        mongo.config.MINIO_SECURE = False
         minio.get_client().make_bucket(mongo.config.MINIO_BUCKET)
         yield
 
