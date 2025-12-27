@@ -29,6 +29,8 @@ def get_courses(user):
     data = [{
         'course': c.course_name,
         'teacher': c.teacher.info,
+        'color': c.color,
+        'emoji': c.emoji,
     } for c in Course.get_user_courses(user)]
     return HTTPResponse('Success.', data=data)
 
@@ -50,18 +52,18 @@ def get_courses_summary(user):
 
 
 @course_api.route('/', methods=['POST', 'PUT', 'DELETE'])
-@Request.json('course', 'new_course', 'teacher')
+@Request.json('course', 'new_course', 'teacher', 'color', 'emoji')
 @identity_verify(0, 1)
-def modify_courses(user, course, new_course, teacher):
+def modify_courses(user, course, new_course, teacher, color, emoji):
     r = None
     if user.role == 1:
         teacher = user.username
     try:
         if request.method == 'POST':
-            r = Course.add_course(course, teacher)
+            r = Course.add_course(course, teacher, color=color, emoji=emoji)
         if request.method == 'PUT':
             co = Course(course)
-            co.edit_course(user, new_course, teacher)
+            co.edit_course(user, new_course, teacher, color=color, emoji=emoji)
         if request.method == 'DELETE':
             co = Course(course)
             co.delete_course(user)
@@ -144,7 +146,9 @@ def get_course(user, course_name):
                 "teacher": course.teacher.info,
                 "TAs": [ta.info for ta in course.tas],
                 "students":
-                [User(name).info for name in course.student_nicknames]
+                [User(name).info for name in course.student_nicknames],
+                "color": course.color,
+                "emoji": course.emoji,
             },
         )
     else:

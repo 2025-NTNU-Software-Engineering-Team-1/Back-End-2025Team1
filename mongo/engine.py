@@ -285,6 +285,16 @@ class Course(Document):
                               null=True,
                               default=DEFAULT_AI_MODEL)
 
+    # Appearance
+    color = StringField(max_length=7,
+                        db_field='color',
+                        default=None,
+                        null=True)
+    emoji = StringField(max_length=8,
+                        db_field='emoji',
+                        default=None,
+                        null=True)
+
 
 class Number(Document):
     name = StringField(

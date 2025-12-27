@@ -88,7 +88,7 @@ class Course(MongoBase, engine=engine.Course):
             engine.Submission.objects(problem__in=problems).count(),
         }
 
-    def edit_course(self, user, new_course, teacher):
+    def edit_course(self, user, new_course, teacher, color=None, emoji=None):
         if re.match(r'^[a-zA-Z0-9._\- ]+$', new_course) is None:
             raise ValueError
 
@@ -101,7 +101,7 @@ class Course(MongoBase, engine=engine.Course):
             raise engine.DoesNotExist('User')
 
         # HACK: not sure why the unique index is not work during the test
-        if Course(new_course):
+        if new_course != self.course_name and Course(new_course):
             raise engine.NotUniqueError('Course')
 
         self.course_name = new_course
@@ -109,6 +109,16 @@ class Course(MongoBase, engine=engine.Course):
             self.remove_user(self.teacher)
             self.add_user(te.obj)
         self.teacher = te.obj
+
+        if color:
+            if not re.match(r'^#[0-9a-fA-F]{6}$', color):
+                raise ValueError('Invalid color format')
+            self.color = color
+        if emoji:
+            if len(emoji) > 8:
+                raise ValueError('Emoji too long')
+            self.emoji = emoji
+
         self.save()
         return True
 
@@ -266,7 +276,7 @@ class Course(MongoBase, engine=engine.Course):
         return True
 
     @classmethod
-    def add_course(cls, course, teacher):
+    def add_course(cls, course, teacher, color=None, emoji=None):
         if re.match(r'^[a-zA-Z0-9._\- ]+$', course) is None:
             raise ValueError
         teacher = User(teacher)
@@ -278,10 +288,18 @@ class Course(MongoBase, engine=engine.Course):
         # HACK: not sure why the unique index is not work during the test
         if cls(course):
             raise engine.NotUniqueError('Course')
+
+        if color and not re.match(r'^#[0-9a-fA-F]{6}$', color):
+            raise ValueError('Invalid color format')
+        if emoji and len(emoji) > 8:
+            raise ValueError('Emoji too long')
+
         co = cls.engine(
             course_name=course,
             teacher=teacher.obj,
             course_code=cls.generate_course_code(),
+            color=color,
+            emoji=emoji,
         ).save()
         cls(co).add_user(teacher.obj)
         return True
