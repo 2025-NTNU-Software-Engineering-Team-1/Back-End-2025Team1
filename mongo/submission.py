@@ -2209,6 +2209,12 @@ class TrialSubmission(MongoBase, BaseSubmission,
             raise PermissionError(
                 "Trial mode is not enabled for this problem.")
 
+        # Check quota (per-user per-problem)
+        if problem.trial_submission_quota > 0:
+            current_count = problem.trial_submission_counts.get(username, 0)
+            if current_count >= problem.trial_submission_quota:
+                raise PermissionError("Trial submission quota exceeded.")
+
         # Check if allowWrite is enabled (Trial not supported for allowWrite problems)
         problem_config = problem.config or {}
         if problem_config.get('allowWrite', False):

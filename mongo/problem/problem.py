@@ -630,6 +630,7 @@ class Problem(MongoBase, engine=engine.Problem):
             'quota': quota,
             'default_code': default_code,
             'config': full_config,
+            'trial_submission_quota': max_number_of_trial,
         })
         # Create ProblemDescription for the embedded document field
         if description_dict:
@@ -716,11 +717,15 @@ class Problem(MongoBase, engine=engine.Problem):
 
         if 'config' in kwargs or 'pipeline' in kwargs or 'Trial_Mode' in kwargs:
             full_config = problem.obj.config or {}
+            trial_quota_update = None
 
             if 'config' in kwargs and kwargs.get('config') is not None:
                 config_update = kwargs.pop('config')
                 full_config.update(config_update)
                 _sync_config_aliases(full_config)
+                if 'maxNumberOfTrial' in config_update and config_update.get(
+                        'maxNumberOfTrial') is not None:
+                    trial_quota_update = config_update.get('maxNumberOfTrial')
 
                 # Sync trial_mode_enabled from config.trialMode (frontend sends this)
                 if 'trialMode' in config_update:
@@ -779,6 +784,7 @@ class Problem(MongoBase, engine=engine.Problem):
                 if trial_mode.get('maxNumberOfTrial') is not None:
                     full_config['maxNumberOfTrial'] = trial_mode.get(
                         'maxNumberOfTrial')
+                    trial_quota_update = trial_mode.get('maxNumberOfTrial')
                 if trial_mode.get('trialResultVisible') is not None:
                     full_config['trialResultVisible'] = trial_mode.get(
                         'trialResultVisible')
@@ -788,6 +794,8 @@ class Problem(MongoBase, engine=engine.Problem):
 
             kwargs['config'] = full_config
             _sync_config_aliases(kwargs['config'])
+            if trial_quota_update is not None:
+                kwargs['trial_submission_quota'] = trial_quota_update
 
         if 'test_case_info' in kwargs and kwargs.get(
                 'test_case_info') is not None:

@@ -930,6 +930,8 @@ def delete_submission(user, submission: Submission):
                 )
 
     try:
+        # Clear submission list cache before deletion so list refreshes immediately
+        clear_submission_list_cache_for_submission(str(submission.id))
         # Delete code from MinIO if exists
         if submission.code_minio_path:
             try:
