@@ -601,7 +601,7 @@ class BaseSubmissionDocument(Document):
     last_send = DateTimeField(db_field='lastSend', default=datetime.now)
     ip_addr = StringField(default=None, null=True)
     sa_status = IntField(null=True, db_field='saStatus')
-    sa_message = StringField(max_length=1024, null=True, db_field='saMessage')
+    sa_message = StringField(max_length=65536, null=True, db_field='saMessage')
     sa_report = StringField(null=True, db_field='saReport')
     sa_report_path = StringField(max_length=256,
                                  null=True,
