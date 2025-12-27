@@ -1018,6 +1018,128 @@ def rejudge_all_submissions(user, problem_id: int):
         })
 
 
+@submission_api.route('/delete-all', methods=['DELETE'])
+@login_required
+@Request.json('filters')
+def delete_all_submissions(user, filters: dict = None):
+    """
+    Delete all submissions matching filters.
+    Admin/Teacher/TA with course permission can use this.
+    filters: {
+        problem_id: int (optional),
+        course: str (required),
+        username: str (optional),
+        status: int (optional),
+        language_type: int (optional)
+    }
+    """
+    if filters is None:
+        return HTTPError('filters is required.', 400)
+
+    course_name = filters.get('course')
+    if not course_name:
+        return HTTPError('course is required.', 400)
+
+    # Check permission
+    req_user = User(user.username)
+    if req_user.role not in (0, 1, 2):  # Admin, Teacher, TA
+        return HTTPError('Forbidden.', 403)
+
+    # For non-admin, check course permission
+    if req_user.role != 0:
+        if not Course(course_name).permission(req_user,
+                                              Course.Permission.GRADE):
+            return HTTPError(
+                'You do not have permission to delete submissions for this course.',
+                403)
+
+    # Use Submission.filter to get matching submissions (handles course filtering)
+    try:
+        # Map frontend filters to Submission.filter arguments
+        problem_id = None
+        if filters.get('problemId'):
+            try:
+                problem_id = int(filters['problemId'])
+            except ValueError:
+                pass
+
+        username = filters.get('username')
+
+        status = None
+        raw_status = filters.get('status')
+        if raw_status is not None:
+            status_map = {
+                'AC': 0,
+                'WA': 1,
+                'CE': 2,
+                'TLE': 3,
+                'MLE': 4,
+                'RE': 5,
+                'JE': 6,
+                'OLE': 7
+            }
+            if str(raw_status).upper() in status_map:
+                status = status_map[str(raw_status).upper()]
+            else:
+                try:
+                    status = int(raw_status)
+                except ValueError:
+                    pass
+
+        language_type = None
+        if filters.get('languageType'):
+            try:
+                language_type = int(filters['languageType'])
+            except ValueError:
+                pass
+
+        submissions = Submission.filter(
+            user=req_user,
+            offset=0,
+            count=-1,  # Get all
+            problem=problem_id,
+            q_user=username,
+            status=status,
+            language_type=language_type,
+            course=course_name,
+        )
+    except Exception as e:
+        current_app.logger.error(f"Error filtering submissions: {e}")
+        return HTTPError(f'Filter error: {e}', 400)
+
+    deleted_count = 0
+    skipped_count = 0
+
+    for sub in submissions:
+        try:
+            # Skip if currently judging (sub is wrapper)
+            if sub.status == -1:
+                last_send = getattr(sub.obj, 'last_send', None)
+                if last_send and (datetime.now() -
+                                  last_send).total_seconds() < 600:
+                    skipped_count += 1
+                    continue
+
+            # Clear cache for this submission
+            clear_submission_list_cache_for_submission(str(sub.id))
+
+            # Delete (wrapper handles file deletion)
+            sub.delete()
+            deleted_count += 1
+        except Exception as e:
+            current_app.logger.error(
+                f"Error deleting submission {sub.id}: {e}")
+            skipped_count += 1
+
+    return HTTPResponse(
+        f'Delete completed. Deleted: {deleted_count}, Skipped: {skipped_count}',
+        data={
+            'ok': True,
+            'deleted': deleted_count,
+            'skipped': skipped_count
+        })
+
+
 @submission_api.route('/config', methods=['GET', 'PUT'])
 @login_required
 @identity_verify(0)

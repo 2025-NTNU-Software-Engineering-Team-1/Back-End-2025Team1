@@ -915,6 +915,99 @@ def delete_trial(user, trial_id: str):
         return HTTPError(f"Delete failed: {e}", 500)
 
 
+@trial_submission_api.route("/delete-all/<int:problem_id>", methods=["DELETE"])
+@login_required
+def delete_all_trial_submissions(user, problem_id: int):
+    """
+    Delete all trial submissions for a problem.
+    Admin/Teacher/TA with course permission can use this.
+    """
+    from mongo.problem import Problem
+
+    # Check permission using same logic as rejudge-all
+    try:
+        problem = Problem(problem_id)
+        if not problem:
+            return HTTPError(f"Problem {problem_id} not found.", 404)
+
+        # Check if user has GRADE permission in any course containing this problem
+        from mongo.course import Course
+        problem_courses = map(Course, problem.courses)
+        has_permission = any(
+            c.own_permission(user) & Course.Permission.GRADE
+            for c in problem_courses)
+
+        if not has_permission:
+            return HTTPError("forbidden.", 403)
+    except Exception as e:
+        current_app.logger.error(
+            f"Error checking permission for delete-all trials: {e}")
+        return HTTPError("Permission check failed.", 500)
+
+    # Get all trial submissions for this problem
+    try:
+        submissions = engine.TrialSubmission.objects(problem=problem_id)
+
+        deleted_count = 0
+        skipped_count = 0
+
+        from mongo.utils import MinioClient
+
+        for sub_doc in submissions:
+            try:
+                # Same protection as single delete:
+                # Skip if currently judging (status -1) and sent recently (< 10 mins)
+                if sub_doc.status == -1:
+                    last_send = sub_doc.last_send
+                    if last_send and (datetime.now() -
+                                      last_send).total_seconds() < 600:
+                        skipped_count += 1
+                        continue
+
+                ts_id = str(sub_doc.id)
+
+                # Delete code from MinIO if exists
+                code_path = getattr(sub_doc, 'code_minio_path', None)
+                if code_path:
+                    try:
+                        minio_client = MinioClient()
+                        minio_client.client.remove_object(
+                            minio_client.bucket, code_path)
+                    except Exception:
+                        pass
+
+                # Delete custom input from MinIO if exists
+                custom_input_path = getattr(sub_doc, 'custom_input_minio_path',
+                                            None)
+                if custom_input_path:
+                    try:
+                        minio_client = MinioClient()
+                        minio_client.client.remove_object(
+                            minio_client.bucket, custom_input_path)
+                    except Exception:
+                        pass
+
+                # Delete document
+                sub_doc.delete()
+                deleted_count += 1
+
+            except Exception as e:
+                current_app.logger.error(
+                    f"Error deleting trial submission {sub_doc.id}: {e}")
+                skipped_count += 1
+
+        return HTTPResponse(
+            f"Delete all completed: {deleted_count} deleted, {skipped_count} skipped.",
+            data={
+                "deleted": deleted_count,
+                "skipped": skipped_count
+            })
+    except Exception as e:
+        current_app.logger.error(
+            f"Error deleting all trials for problem {problem_id}: {e}")
+        return HTTPError(f"Delete all failed: {e}", 500)
+
+
 @trial_submission_api.route("/rejudge-all/<int:problem_id>", methods=["POST"])
 @login_required
 def rejudge_all_trials(user, problem_id: int):
