@@ -36,7 +36,8 @@ def list_skins(user):
         result = [{
             'skin_id': 'builtin_hiyori',
             'name': 'Hiyori (Default)',
-            'thumbnail_path': '/live2d/hiyori_avatar.png',
+            'thumbnail_path':
+            '/api/ai/skins/builtin_hiyori/assets/hiyori_avatar.png',
             'is_builtin': True,
             'is_public': True,
             'uploaded_by': 'System',
@@ -221,9 +222,11 @@ def get_skin(user, skin_id):
                 data={
                     'skin_id': 'builtin_hiyori',
                     'name': 'Hiyori (Default)',
-                    'model_path': '/live2d/hiyori_pro_zh/runtime/',
+                    'model_path':
+                    '/api/ai/skins/builtin_hiyori/assets/runtime/',
                     'model_json_name': 'hiyori_pro_t11.model3.json',
-                    'thumbnail_path': '/live2d/hiyori_avatar.png',
+                    'thumbnail_path':
+                    '/api/ai/skins/builtin_hiyori/assets/hiyori_avatar.png',
                     'is_builtin': True,
                     'emotion_mappings': {
                         'smile': 'F05',
@@ -454,15 +457,15 @@ def get_skin_asset(user, skin_id, filename):
         from mongo.utils import MinioClient
         from mongo.ai import SKIN_MINIO_PREFIX
 
-        if skin_id.startswith('builtin_'):
-            return HTTPError('Use static path for built-in skins', 400)
-
-        skin = AiVtuberSkin.get_by_id(skin_id)
-        if not skin:
-            return HTTPError('Skin not found', 404)
-
-        # Construct MinIO path
-        minio_path = f"{SKIN_MINIO_PREFIX}/user-uploaded/{skin_id}/{filename}"
+        # Handle built-in skin assets from MinIO
+        if skin_id == 'builtin_hiyori':
+            minio_path = f"{SKIN_MINIO_PREFIX}/builtin/hiyori_pro_zh/{filename}"
+        else:
+            skin = AiVtuberSkin.get_by_id(skin_id)
+            if not skin:
+                return HTTPError('Skin not found', 404)
+            # Construct MinIO path for user-uploaded skins
+            minio_path = f"{SKIN_MINIO_PREFIX}/user-uploaded/{skin_id}/{filename}"
 
         # Download from MinIO
         minio_client = MinioClient()

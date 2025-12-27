@@ -4,7 +4,7 @@ from logging.config import dictConfig
 from flask import Flask
 from model import *
 from mongo import *
-from mongo.ai import migrate_ai_data
+from mongo.ai import migrate_ai_data, ensure_default_skin_uploaded
 from config import LOGGING_CONFIG, LOG_DIR
 
 
@@ -76,6 +76,7 @@ def app():
     # Initialize AI Models and Data
     try:
         AiModel.initialize_default_models()
+        ensure_default_skin_uploaded()
         migrate_ai_data()
     except Exception as e:
         app.logger.warning(f"AI initialization failed: {e}")

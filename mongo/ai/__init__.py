@@ -17,6 +17,7 @@ from .skins import (
     MAX_SKIN_FILE_SIZE,
     SKIN_MINIO_PREFIX,
 )
+from .init_default_skin import ensure_default_skin_uploaded
 
 __all__ = [
     'AiModel',
@@ -28,4 +29,5 @@ __all__ = [
     'UserSkinPreference',
     'SKIN_UPLOAD_LIMITS',
     'MAX_SKIN_FILE_SIZE',
+    'ensure_default_skin_uploaded',
 ]
