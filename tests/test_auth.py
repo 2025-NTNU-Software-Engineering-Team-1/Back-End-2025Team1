@@ -1015,9 +1015,8 @@ class TestJWTSecurity:
         client.set_cookie('piann', attack_token, domain='test.test')
         rv = client.get('/auth/me')
 
-        assert rv.status_code == 200, rv.get_json()
-        # Should fall back to guest instead of erroring out
-        assert rv.get_json()['data']['username'] == 'guest'
+        assert rv.status_code == 403, rv.get_json()
+        assert rv.get_json()['message'] == 'Invalid Token'
 
     def test_invalid_algorithm_rejection(self, client):
         '''Verify that tokens with unauthorized algorithms are rejected
@@ -1036,9 +1035,8 @@ class TestJWTSecurity:
         client.set_cookie('piann', invalid_token, domain='test.test')
         rv = client.get('/auth/me')
 
-        assert rv.status_code == 200, rv.get_json()
-        # Should fall back to guest
-        assert rv.get_json()['data']['username'] == 'guest'
+        assert rv.status_code == 403, rv.get_json()
+        assert rv.get_json()['message'] == 'Invalid Token'
 
     def test_valid_hs256_token(self, client):
         '''Verify that standard HS256 tokens still work

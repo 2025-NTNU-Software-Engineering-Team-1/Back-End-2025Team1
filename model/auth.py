@@ -73,7 +73,10 @@ def login_required(func=None, *, pat_scope=None):
             if user is None:
                 if token is None:
                     return HTTPError('Not Logged In', 403)
-                json = jwt_decode(token)
+                try:
+                    json = jwt_decode(token)
+                except ValueError:
+                    return HTTPError('Invalid Token', 403)
                 if json is None or not json.get('secret'):
                     return HTTPError('Invalid Token', 403)
                 user = User(json['data']['username'])
@@ -346,7 +349,10 @@ def active(token=None):
         '''
         if agreement is not True:
             return HTTPError('Not Confirm the Agreement', 403)
-        json = jwt_decode(token)
+        try:
+            json = jwt_decode(token)
+        except ValueError:
+            return HTTPError('Invalid Token', 403)
         if json is None or not json.get('secret'):
             return HTTPError('Invalid Token.', 403)
         user = User(json['data']['username'])
@@ -364,7 +370,10 @@ def active(token=None):
     def redir():
         '''Redirect user to active page.
         '''
-        json = jwt_decode(token)
+        try:
+            json = jwt_decode(token)
+        except ValueError:
+            return HTTPError('Invalid Token', 403)
         if json is None:
             return HTTPError('Invalid Token', 403)
         user = User(json['data']['username'])
@@ -460,6 +469,13 @@ def _get_user_from_token(token: Optional[str]) -> Optional[User]:
     if not token:
         return None
 
+    # Propagate ValueError to be handled by caller (e.g. get_me)
+    # to distinguish between invalid algorithm (attack) and just invalid token (expired/etc)
+    # However, existing calls might expect None.
+    # User instruction: "alg:none -> 403".
+    # _get_user_from_token is internal. If I let it raise, I must fix callers.
+    # Callers: get_me (only one?)
+    # Let's remove the try-catch block added in previous step and let it propagate.
     json = jwt_decode(token)
     if not json or not json.get('secret'):
         return None
@@ -481,7 +497,10 @@ def _get_user_from_token(token: Optional[str]) -> Optional[User]:
 @Request.values('fields')
 @Request.cookies(vars_dict={'token': 'piann'})
 def get_me(token: Optional[str], fields: Optional[str]):
-    user = _get_user_from_token(token)
+    try:
+        user = _get_user_from_token(token)
+    except ValueError:
+        return HTTPError('Invalid Token', 403)
 
     if user:
         default = [

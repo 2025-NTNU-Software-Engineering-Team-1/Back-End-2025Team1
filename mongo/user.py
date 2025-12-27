@@ -361,7 +361,7 @@ def jwt_decode(token):
 
         # Explicitly reject alg: none and any algorithm not in whitelist
         if alg == 'NONE' or alg not in [a.upper() for a in ALLOWED_ALGORITHMS]:
-            return None
+            raise ValueError('Invalid algorithm used')
 
         # Now perform the actual JWT verification with algorithm whitelist
         decoded = jwt.decode(
@@ -373,6 +373,8 @@ def jwt_decode(token):
         return decoded
     except jwt.exceptions.PyJWTError:
         return None
+    except ValueError:
+        raise
     except Exception:
         # Catch any other exceptions (base64 decode errors, etc.)
         return None
