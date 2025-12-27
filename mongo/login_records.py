@@ -225,10 +225,14 @@ class LoginRecords:
                 username = str(user_id)
 
         return {
-            'id': str(record.id),
-            'username': username or 'N/A',
-            'ipAddress': getattr(record, 'ip_addr', ''),
-            'success': getattr(record, 'success', False),
-            'timestamp': getattr(record, 'timestamp',
-                                 datetime.now()).isoformat(),
+            'id':
+            str(record.id),
+            'username':
+            username or 'N/A',
+            'ipAddress':
+            getattr(record, 'ip_addr', ''),
+            'success':
+            getattr(record, 'success', False),
+            'timestamp':
+            getattr(record, 'timestamp', engine.utc8_now()).isoformat(),
         }

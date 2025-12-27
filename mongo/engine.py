@@ -10,6 +10,7 @@ from zipfile import ZipFile, BadZipFile
 __all__ = [*mongoengine.__all__]
 
 TAIPEI_TIMEZONE = timezone(timedelta(hours=8))
+UTC8_OFFSET = timedelta(hours=8)
 DEFAULT_AI_MODEL = 'gemini-flash-lite-latest'
 RPD_RESET_INTERVAL = timedelta(hours=24)
 
@@ -44,6 +45,11 @@ def handler(event):
         return fn
 
     return decorator
+
+
+def utc8_now():
+    # Keep naive datetime storage while shifting to UTC+8.
+    return datetime.now() + UTC8_OFFSET
 
 
 @handler(signals.pre_save)
@@ -777,7 +783,7 @@ class LoginRecords(Document):
     user_id = StringField(required=True)
     ip_addr = StringField(required=True)
     success = BooleanField(required=True, default=False)
-    timestamp = DateTimeField(required=True, default=datetime.now)
+    timestamp = DateTimeField(required=True, default=utc8_now)
 
 
 class PersonalAccessToken(Document):
