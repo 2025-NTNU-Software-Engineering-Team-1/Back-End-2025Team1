@@ -18,16 +18,24 @@ profile_api = Blueprint('profile_api', __name__)
 @profile_api.route('/<username>', methods=['GET'])
 @login_required
 def view_profile(user, username=None):
-    user = user if username is None else User(username)
-    if not user:
+    # If username is provided, check authorization
+    if username is not None and username != user.username:
+        # Only Admin can view other users' profiles
+        if user.role != Role.ADMIN:
+            return HTTPError('Permission denied.', 403)
+        target_user = User(username)
+    else:
+        target_user = user
+    
+    if not target_user:
         return HTTPError('Profile not exist.', 404)
 
     data = {
-        'email': user.obj.email,
-        'displayedName': user.obj.profile.displayed_name,
-        'bio': user.obj.profile.bio
+        'email': target_user.obj.email,
+        'displayedName': target_user.obj.profile.displayed_name,
+        'bio': target_user.obj.profile.bio
     }
-    data.update(user.info)
+    data.update(target_user.info)
 
     return HTTPResponse('Profile exist.', data=data)
 
