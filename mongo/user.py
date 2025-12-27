@@ -13,6 +13,8 @@ import hashlib
 import jwt
 import os
 import re
+import base64
+import json
 
 if TYPE_CHECKING:
     from .course import Course  # pragma: no cover
@@ -321,13 +323,56 @@ class User(MongoBase, engine=engine.User):
 
 
 def jwt_decode(token):
+    """
+    Decode and verify JWT token with strict algorithm validation.
+    
+    Security: Explicitly rejects alg: none and any algorithm not in whitelist.
+    """
+    if not token:
+        return None
+    
+    # Allowed algorithms whitelist - only HS256 is allowed
+    ALLOWED_ALGORITHMS = ['HS256']
+    
     try:
-        json = jwt.decode(
+        # First, decode the header to check the algorithm before verification
+        # This prevents alg: none attacks
+        parts = token.split('.')
+        if len(parts) != 3:
+            return None
+        
+        # Decode header (first part)
+        header_data = parts[0]
+        # JWT uses URL-safe base64 without padding
+        # Add padding if needed for base64 decoding
+        padding = 4 - len(header_data) % 4
+        if padding != 4:
+            header_data += '=' * padding
+        
+        try:
+            header_json = base64.urlsafe_b64decode(header_data)
+            header = json.loads(header_json)
+        except (ValueError, json.JSONDecodeError, TypeError, Exception):
+            # Catch all exceptions during header decoding (base64 errors, JSON errors, etc.)
+            return None
+        
+        # Check algorithm in header
+        alg = header.get('alg', '').upper()
+        
+        # Explicitly reject alg: none and any algorithm not in whitelist
+        if alg == 'NONE' or alg not in [a.upper() for a in ALLOWED_ALGORITHMS]:
+            return None
+        
+        # Now perform the actual JWT verification with algorithm whitelist
+        decoded = jwt.decode(
             token,
             JWT_SECRET,
             issuer=JWT_ISS,
-            algorithms=['HS256'],
+            algorithms=ALLOWED_ALGORITHMS,  # Strict whitelist
         )
+        return decoded
     except jwt.exceptions.PyJWTError:
         return None
-    return json
+    except Exception:
+        # Catch any other exceptions (base64 decode errors, etc.)
+        return None

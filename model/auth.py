@@ -234,9 +234,13 @@ def session():
         # Rate limit check
         allowed, wait_time = login_limiter.check(ip_addr)
         if not allowed:
-            return HTTPError(
-                f'Too many login attempts. Please try again in {int(wait_time)} seconds.',
+            retry_after = int(wait_time)
+            err = HTTPError(
+                f'Too many login attempts. Please try again in {retry_after} seconds.',
                 429)
+            # Add Retry-After header to the response object in the tuple
+            err[0].headers['Retry-After'] = str(retry_after)
+            return err
 
         try:
             user = User.login(username, password, ip_addr)

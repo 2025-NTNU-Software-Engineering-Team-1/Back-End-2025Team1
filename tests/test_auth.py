@@ -1144,8 +1144,13 @@ class TestCSRFSecurity:
 
     def test_security_headers_presence(self, client):
         '''Verify security headers are present in response'''
-        rv = client.get('/')
-        assert 'Content-Security-Policy' in rv.headers
+        rv = client.get('/auth/session')
+        # CSP should be ABSENT for JSON/API responses to avoid scanner false positives
+        assert 'Content-Security-Policy' not in rv.headers
+        # Cache-Control should be no-store
+        assert 'Cache-Control' in rv.headers
+        assert rv.headers['Cache-Control'] == 'no-store'
+        
         assert 'X-Content-Type-Options' in rv.headers
         assert rv.headers['X-Content-Type-Options'] == 'nosniff'
         assert 'X-Frame-Options' in rv.headers

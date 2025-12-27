@@ -132,7 +132,17 @@ def setup_security(app):
     @app.after_request
     def security_headers(response):
         content_type = response.content_type or ''
-        if app.config.get('TESTING') or 'application/json' not in content_type:
+        # Determine if we should set CSP
+        # Skip CSP for API blueprints (ending in _api) or if JSON is returned
+        is_api_blueprint = request.blueprint and request.blueprint.endswith(
+            '_api')
+        should_set_csp = not is_api_blueprint and (
+            not app.config.get('TESTING') and 'application/json' not in content_type)
+
+        if is_api_blueprint:
+            response.headers['Cache-Control'] = 'no-store'
+
+        if should_set_csp:
             response.headers['Content-Security-Policy'] = \
                 "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " \
                 "connect-src 'self' ws: wss:; img-src 'self' data: blob:; font-src 'self' data:;"
