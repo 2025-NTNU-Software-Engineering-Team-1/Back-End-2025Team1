@@ -10,7 +10,6 @@ from zipfile import ZipFile, BadZipFile
 __all__ = [*mongoengine.__all__]
 
 TAIPEI_TIMEZONE = timezone(timedelta(hours=8))
-UTC8_OFFSET = timedelta(hours=8)
 DEFAULT_AI_MODEL = 'gemini-flash-lite-latest'
 RPD_RESET_INTERVAL = timedelta(hours=24)
 
@@ -48,8 +47,8 @@ def handler(event):
 
 
 def utc8_now():
-    # Keep naive datetime storage while shifting to UTC+8.
-    return datetime.now() + UTC8_OFFSET
+    # Use timezone-aware datetime in Asia/Taipei (UTC+8).
+    return datetime.now(TAIPEI_TIMEZONE)
 
 
 @handler(signals.pre_save)
