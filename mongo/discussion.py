@@ -446,10 +446,7 @@ class Discussion:
 
         # 檢查用戶是否按讚過這個貼文
         post_like = engine.DiscussionLike.objects(
-            user=user.obj,
-            target_type='post',
-            target_id=post.post_id
-        ).first()
+            user=user.obj, target_type='post', target_id=post.post_id).first()
         is_post_liked = post_like is not None
 
         data = {

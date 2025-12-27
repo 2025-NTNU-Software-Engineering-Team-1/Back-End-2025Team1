@@ -78,7 +78,8 @@ class TestProfile(BaseTester):
         assert json['status'] == 'err'
         assert json['message'] == 'Permission denied.'
 
-    def test_admin_can_view_other_user_profile(self, client_admin, client_student):
+    def test_admin_can_view_other_user_profile(self, client_admin,
+                                               client_student):
         # Setup student profile first
         client_student.post('/profile',
                             json={

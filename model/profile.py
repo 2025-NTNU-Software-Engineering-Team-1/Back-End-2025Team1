@@ -26,7 +26,7 @@ def view_profile(user, username=None):
         target_user = User(username)
     else:
         target_user = user
-    
+
     if not target_user:
         return HTTPError('Profile not exist.', 404)
 
