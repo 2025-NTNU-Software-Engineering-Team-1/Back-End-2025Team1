@@ -531,7 +531,7 @@ def set_user_preference(user, skin_id):
 def get_storage_stats(user):
     """Get storage statistics (admin only)."""
     try:
-        if user.role != 0:  # 0 is ADMIN
+        if user.role != Role.ADMIN:  # Role.ADMIN is 0
             return HTTPError('Permission denied', 403)
 
         stats = AiVtuberSkin.get_storage_stats()

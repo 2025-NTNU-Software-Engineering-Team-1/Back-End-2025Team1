@@ -49,7 +49,7 @@ def get_courses_summary(user):
 @identity_verify(0, 1)
 def modify_courses(user, course, new_course, teacher, color, emoji):
     r = None
-    if user.role == 1:
+    if user.role == Role.TEACHER:
         teacher = user.username
     try:
         if request.method == 'POST':
@@ -236,7 +236,7 @@ def manage_course_code(user, course_name):
     if not course:
         return HTTPError('Course not found.', 404)
 
-    if not course.permission(user, Course.Permission.MODIFY):
+    if not course.permission(user, Course.Permission.GRADE):
         return HTTPError('Permission denied.', 403)
 
     if request.method == 'GET':

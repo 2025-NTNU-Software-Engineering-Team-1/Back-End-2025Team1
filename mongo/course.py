@@ -79,7 +79,7 @@ class Course(MongoBase, engine=engine.Course):
 
     @classmethod
     def get_user_courses(cls, user):
-        if user.role != 0:
+        if user.role != Role.ADMIN:
             return user.courses
         else:
             return cls.get_all()
@@ -352,7 +352,7 @@ class Course(MongoBase, engine=engine.Course):
         teacher = User(teacher)
         if not teacher:
             raise engine.DoesNotExist('User')
-        if teacher.role >= 2:
+        if teacher.role >= Role.STUDENT:
             raise PermissionError(
                 f'{teacher} is not permitted to create a course')
         # HACK: not sure why the unique index is not work during the test

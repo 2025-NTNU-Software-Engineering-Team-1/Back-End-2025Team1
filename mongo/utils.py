@@ -33,16 +33,29 @@ def hash_id(salt, text):
 
 
 def perm(course, user):
-    '''4: admin, 3: teacher, 2: TA, 1: student, 0: not found
     '''
-    return 4 - [
-        user.role == Role.ADMIN,
-        bool((course.teacher and user.pk == course.teacher.pk) or
-             (user.role == Role.TEACHER
-              and user.pk in [ta.pk for ta in course.tas])), user.pk in [
-                  ta.pk for ta in course.tas
-              ], user.username in course.student_nicknames.keys(), True
-    ].index(True)
+    Return permission level:
+    4: admin / owner
+    3: teacher
+    2: TA
+    1: student
+    0: guest / not found
+    '''
+    if user.role == Role.ADMIN:
+        return 4
+
+    # Check if user is the course teacher
+    if course.teacher and user.pk == course.teacher.pk:
+        return 3
+
+    # Check if user is in TAs list
+    if user.pk in [ta.pk for ta in course.tas]:
+        return 2
+
+    if user.username in course.student_nicknames.keys():
+        return 1
+
+    return 0
 
 
 class Cache(abc.ABC):

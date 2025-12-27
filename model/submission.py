@@ -224,7 +224,7 @@ def get_submission_list(
                     400,
                 )
         # students can only get their own submissions
-        if user.role == User.engine.Role.STUDENT:
+        if user.role == Role.STUDENT:
             username = user.username
         try:
             params = drop_none({

@@ -1367,7 +1367,7 @@ def clone_problem(
 @Request.json('problem_id')
 @Request.doc('problem_id', 'problem', Problem)
 def publish_problem(user, problem: Problem):
-    if user.role == 1 and problem.owner != user.username:
+    if user.role == Role.TEACHER and problem.owner != user.username:
         return HTTPError('Not the owner.', 403)
     Problem.release_problem(problem.problem_id)
     return HTTPResponse('Success.')
