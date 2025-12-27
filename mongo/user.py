@@ -113,6 +113,7 @@ class User(MongoBase, engine=engine.User):
                         f'[username={username}, role={role}]', )
         # Register
         registered_users = []
+        skipped = []
         for u in new_users:
             try:
                 new_user = cls.signup(
@@ -129,13 +130,30 @@ class User(MongoBase, engine=engine.User):
                     new_user.update(role=role)
                     new_user.reload('role')
             except engine.NotUniqueError:
+                # Determine whether conflict is on username or email
+                reason = 'unknown'
                 try:
                     new_user = cls.get_by_username(u['username'])
+                    reason = 'username'
                 except engine.DoesNotExist:
-                    new_user = cls.get_by_email(u['email'])
-                if force:
+                    try:
+                        new_user = cls.get_by_email(u['email'])
+                        reason = 'email'
+                    except engine.DoesNotExist:
+                        # Fallback: mark as unknown conflict
+                        new_user = None
+                if new_user is not None and force:
                     new_user.force_update(u, course)
-            registered_users.append(new_user)
+                else:
+                    # Record skipped entry for frontend to present to the user
+                    skipped.append({
+                        'username': u.get('username'),
+                        'email': u.get('email'),
+                        'reason': reason,
+                    })
+            # Only append if we have a User instance
+            if isinstance(new_user, cls) or new_user is not None:
+                registered_users.append(new_user)
         if course is not None:
             new_student_nicknames = {
                 **course.student_nicknames,
@@ -145,7 +163,8 @@ class User(MongoBase, engine=engine.User):
                 }
             }
             course.update_student_namelist(new_student_nicknames)
-        return new_users
+        # Return both registered users and skipped entries (if any)
+        return {'registered': registered_users, 'skipped': skipped}
 
     def force_update(self, new_user: Dict[str, Any], course: Optional[Course]):
         '''

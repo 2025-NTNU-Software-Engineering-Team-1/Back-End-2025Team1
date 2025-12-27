@@ -436,13 +436,19 @@ def batch_signup(
     if force is None:
         force = False
     try:
-        new_users = User.batch_signup(
+        result = User.batch_signup(
             new_users=new_users,
             course=course,
             force=force,
         )
     except ValueError as e:
         return HTTPError(str(e), 400)
+
+    # If any entries were skipped because username/email already existed,
+    # return them in the response so the frontend can show a clear message.
+    if isinstance(result, dict) and result.get('skipped'):
+        return HTTPResponse(data={'skipped': result.get('skipped')})
+
     return HTTPResponse()
 
 

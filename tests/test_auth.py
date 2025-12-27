@@ -835,6 +835,20 @@ class TestBatchSignup:
             assert login == User.get_by_username(u.username)
             assert u.username in course.student_nicknames
 
+    def test_signup_with_duplicates_reports_skipped(self, forge_client):
+        # Duplicate rows (same username) should be accepted but also reported as skipped entries
+        u = self.signup_input()
+        client = forge_client('first_admin')
+        csv = 'username,password,email\n' + u.row() + '\n' + u.row()
+        rv = client.post(
+            '/auth/batch-signup',
+            json={'newUsers': csv},
+        )
+        assert rv.status_code == 200, rv.get_json()
+        data = rv.get_json().get('data', {})
+        skipped = data.get('skipped', [])
+        assert any(s.get('username') == u.username for s in skipped)
+
     def test_signup_with_displayed_name(self, forge_client):
         excepted_users = [
             self.signup_input(displayed_name=True) for _ in range(10)
