@@ -75,6 +75,12 @@ SMTP server is required for sending emails, such as password reset and signup ne
 - `SMTP_NOREPLY`: email account used to send emails, e.g. `noreply@noj.tw`
 - `SMTP_NOREPLY_PASSWORD`: password of `SMTP_NOREPLY` (optional)
 
+### MOSS Configuration (Plagiarism Detection)
+
+MOSS is used for source-code similarity / plagiarism detection. You can skip this if you will not develop features related to plagiarism / similarity checking.
+
+- `MOSS_USERID`: your Stanford MOSS user id (numeric). Required to enable MOSS-related features.
+
 ### Optional
 
 These variables have default values, you can skip them if you want to use the default values.
