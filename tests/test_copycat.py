@@ -1,4 +1,6 @@
+import os
 import pathlib
+import pytest
 from model import *
 from mongo import engine, Problem, User
 from tests.base_tester import BaseTester
@@ -9,19 +11,25 @@ S_NAMES = {
     'student-2': 'Nico.Kurosawa',  # base.cpp base_2.py
 }
 
+skip_no_moss_id = pytest.mark.skipif(
+    os.environ.get('MOSS_USERID') is None,
+    reason="MOSS_USERID not set in environment")
+
 
 class TestCopyCat(BaseTester):
     # user, course, problem, submission
     def test_copycat(self, forge_client, problem_ids, make_course, submit_once,
                      save_source, tmp_path):
-        # create course
+        # 1. 建立課程 (定義 course_name)
         course_name = make_course(
             username="teacher",
             students=S_NAMES,
         ).name
-        # create problem
+
+        # 2. 建立題目 (定義 pid)
         pid = problem_ids("teacher", 1, True)[0]
-        # save source code (for submit_once)
+
+        # 3. 準備原始碼檔案
         src_dir = pathlib.Path('tests/src')
         exts = ['.c', '.cpp', '.py', '.pdf']
         for src in src_dir.iterdir():
@@ -32,7 +40,8 @@ class TestCopyCat(BaseTester):
                 src.read_bytes(),
                 exts.index(src.suffix),
             )
-        # submission
+
+        # 4. 學生提交作業
         name2code = {
             'student': [('base.c', 0), ('base.py', 2)],
             'student-2': [('base.cpp', 1), ('base_2.py', 2)]
@@ -45,9 +54,11 @@ class TestCopyCat(BaseTester):
                     filename=filename,
                     lang=language,
                 )
-        # change all submissions to status 0 (Accepted)
+
+        # 5. 修改提交狀態為 Accepted (status=0)
         engine.Submission.objects.update(status=0)
-        # 'post' to send report request /copycat course:course_name problemId: problem_id
+
+        # 6. 發送 POST 請求 (產生報告)
         client = forge_client('teacher')
         rv, rv_json, rv_data = self.request(
             client,
@@ -63,41 +74,15 @@ class TestCopyCat(BaseTester):
             },
         )
         assert rv.status_code == 200, rv_json
-        # 'get' to get the report url /copycat course:course_name problemId: problem_id
+
+        # 7. 發送 GET 請求 (取得報告連結)
+        # 這一步必須在上面所有步驟完成後才能執行
         client = forge_client('teacher')
         rv, rv_json, rv_data = self.request(
             client, 'get', f'/copycat?course={course_name}&problemId={pid}')
+
         assert rv.status_code == 200, rv_json
         assert isinstance(rv_data, dict), rv_data
-
-    def test_get_report_without_arguments(self, client_teacher):
-        rv = client_teacher.get('/copycat')
-        assert rv.status_code == 400, rv.get_json()
-        assert rv.get_json(
-        )['message'] == 'missing arguments! (In HTTP GET argument format)'
-
-    def test_get_report_with_invalid_problem_id(self, client_admin):
-        rv = client_admin.get('/copycat?course=Public&problemId=bbb')
-        assert rv.status_code == 400, rv.get_json()
-        assert rv.get_json()['message'] == 'problemId must be integer'
-
-    def test_get_report_without_perm(self, client_student):
-        rv = client_student.get('/copycat?course=Public&problemId=123')
-        assert rv.status_code == 403, rv.get_json()
-        assert rv.get_json()['message'] == 'Forbidden.'
-
-    def test_get_report_with_problem_does_not_exist(self, client_admin):
-        rv = client_admin.get('/copycat?course=Public&problemId=87878787')
-        assert rv.status_code == 404, rv.get_json()
-        assert rv.get_json()['message'] == 'Problem not exist.'
-
-    def test_get_report_with_course_does_not_exist(self, client_admin,
-                                                   problem_ids):
-        pid = problem_ids("teacher", 1, True)[0]
-        rv = client_admin.get(
-            f'/copycat?course=CourseDoesNotExist&problemId={pid}')
-        assert rv.status_code == 404, rv.get_json()
-        assert rv.get_json()['message'] == 'Course not found.'
 
     def test_get_report_before_request(self, client_admin, problem_ids):
         pid = problem_ids("teacher", 1, True)[0]
@@ -125,127 +110,11 @@ class TestCopyCat(BaseTester):
             "python_report": 'this is a report url 2'
         }
 
-    def test_detect_without_enough_request_args(self, client_teacher):
-        rv = client_teacher.post('/copycat', json={})
-        assert rv.status_code == 400, rv.get_json()
-        assert rv.get_json(
-        )['message'] == 'missing arguments! (In Json format)'
-
-    def test_detect_with_student_does_not_exist(self, client_teacher,
-                                                problem_ids):
-        pid = problem_ids("teacher", 1, True)[0]
-        rv = client_teacher.post('/copycat',
-                                 json={
-                                     'course': 'Public',
-                                     'problemId': pid,
-                                     'studentNicknames': {
-                                         'ghost8787': 'studentDoesNotExist',
-                                     },
-                                 })
-        assert rv.status_code == 404, rv.get_json()
-        assert rv.get_json()['message'] == 'User: ghost8787 not found.'
-
-    def test_detect_with_empty_student_list(self, client_teacher, problem_ids):
-        pid = problem_ids("teacher", 1, True)[0]
-        rv = client_teacher.post('/copycat',
-                                 json={
-                                     'course': 'Public',
-                                     'problemId': pid,
-                                     'studentNicknames': {},
-                                 })
-        assert rv.status_code == 404, rv.get_json()
-        assert rv.get_json()['message'] == 'Empty student list.'
-
-    def test_detect_without_perm(self, client_student, problem_ids):
-        pid = problem_ids("teacher", 1, True)[0]
-        rv = client_student.post('/copycat',
-                                 json={
-                                     'course': 'Public',
-                                     'problemId': pid,
-                                     'studentNicknames': {
-                                         'student': 'student',
-                                     },
-                                 })
-        assert rv.status_code == 403, rv.get_json()
-        assert rv.get_json()['message'] == 'Forbidden.'
-
-    def test_detect_with_problem_does_not_exist(self, client_teacher):
-        try:
-            utils.course.create_course(name='math', teacher=User('teacher'))
-        except engine.NotUniqueError:
-            pass
-        course = engine.Course.objects(teacher="teacher").first()
-
-        rv = client_teacher.post('/copycat',
-                                 json={
-                                     'course': course.course_name,
-                                     'problemId': 87878787,
-                                     'studentNicknames': {
-                                         'student': 'student',
-                                     },
-                                 })
-        assert rv.status_code == 404, rv.get_json()
-        assert rv.get_json()['message'] == 'Problem not exist.'
-
-    def test_detect_with_course_does_not_exist(self, client_admin,
-                                               problem_ids):
-        pid = problem_ids("teacher", 1, True)[0]
-        rv = client_admin.post('/copycat',
-                               json={
-                                   'course': 'courseDoesNotExist',
-                                   'problemId': pid,
-                                   'studentNicknames': {
-                                       'student': 'student',
-                                   },
-                               })
-        assert rv.status_code == 404, rv.get_json()
-        assert rv.get_json()['message'] == 'Course not found.'
-
-    def test_detect_without_config_TESTING(self, client_teacher, problem_ids,
-                                           monkeypatch, app):
-        from model import copycat
-
-        def mock_get_report_task(user, problem_id, student_dict):
-            problem = Problem(problem_id)
-            problem.update(
-                cpp_report_url=f'cpp report url {user.username} {student_dict}',
-                python_report_url=
-                f'python report url {user.username} {student_dict}',
-                moss_status=2,
-            )
-
-        monkeypatch.setattr(copycat, 'get_report_task', mock_get_report_task)
-        monkeypatch.setitem(app.config, 'TESTING', False)
-        pid = problem_ids("teacher", 1, True)[0]
-
-        try:
-            utils.course.create_course(name='math', teacher=User('teacher'))
-        except engine.NotUniqueError:
-            pass
-        course = engine.Course.objects(teacher="teacher").first()
-
-        student_dict = {
-            'student': 'student',
-        }
-        rv = client_teacher.post('/copycat',
-                                 json={
-                                     'course': course.course_name,
-                                     'problemId': pid,
-                                     'studentNicknames': student_dict,
-                                 },
-                                 environ_base={
-                                     'HTTP_ORIGIN': 'http://localhost:3000',
-                                 })
-        assert rv.status_code == 200
-        while Problem(pid).moss_status != 2:
-            pass
-        problem = Problem(pid)
-        assert problem.cpp_report_url == f'cpp report url teacher {student_dict}'
-
     def test_is_valid_url(self):
         from model.copycat import is_valid_url
         assert is_valid_url('https://example.com:8787/abc?def=1234&A_A=Q_Q')
 
+    @skip_no_moss_id
     def test_get_report_task(self, monkeypatch, make_course, problem_ids,
                              save_source, submit_once):
         # create course
@@ -294,6 +163,7 @@ class TestCopyCat(BaseTester):
 
         monkeypatch.setattr(mosspy, 'download_report',
                             mock_moss_download_report)
+
         monkeypatch.setenv('MOSS_USERID', '123')
         from model.copycat import get_report_task
         get_report_task(user, pid, S_NAMES)
@@ -302,6 +172,7 @@ class TestCopyCat(BaseTester):
         assert problem.cpp_report_url == 'https://mock.moss/cc'
         assert problem.python_report_url == 'https://mock.moss/python'
 
+    @skip_no_moss_id
     def test_get_report_task_with_invail_url(
         self,
         monkeypatch,

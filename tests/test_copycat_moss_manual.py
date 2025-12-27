@@ -1,8 +1,6 @@
 import os
 import pathlib
-
 import pytest
-
 from mongo import engine, User, Problem
 
 S_NAMES = {
@@ -12,8 +10,8 @@ S_NAMES = {
 
 
 @pytest.mark.skipif(
-    os.environ.get('RUN_MOSS_TEST') != '1',
-    reason='Set RUN_MOSS_TEST=1 to run the real MOSS integration test.',
+    os.environ.get('MOSS_USERID') is None,
+    reason='Set MOSS_USERID to run the real MOSS integration test.',
 )
 def test_copycat_moss_integration(
     setup_minio,

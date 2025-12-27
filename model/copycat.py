@@ -1,4 +1,5 @@
 from typing import Dict
+from mongo import Problem
 from flask import Blueprint, request, current_app
 from mongo.copycat_service import (
     build_student_dict,

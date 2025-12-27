@@ -1,4 +1,5 @@
 from flask import Blueprint, current_app
+from mongo import Problem
 from .auth import login_required
 from .utils import Request, HTTPResponse, HTTPError
 from mongo.discussion import Discussion
