@@ -210,7 +210,7 @@ class MinioClient:
                 config.MINIO_HOST,
                 access_key=config.MINIO_ACCESS_KEY,
                 secret_key=config.MINIO_SECRET_KEY,
-                secure=not config.FLASK_DEBUG,
+                secure=config.MINIO_SECURE,
             )
         except Exception as e:
             raise ValueError(
