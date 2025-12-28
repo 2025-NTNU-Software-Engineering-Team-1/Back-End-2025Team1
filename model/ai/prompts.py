@@ -93,7 +93,7 @@ Each test case should cover different scenarios (e.g., basic case, edge case, la
 
 def build_testcase_prompt(context: dict,
                           user_hint: str = "",
-                          language: str = "en") -> str:
+                          language: str = "zh-tw") -> str:
     """
     Build prompt for testcase generation.
     
@@ -107,7 +107,7 @@ def build_testcase_prompt(context: dict,
     """
     hint_text = user_hint.strip(
     ) if user_hint else "Generate a representative test case."
-    lang_instruction = f"in {language}" if language else "in English"
+    lang_instruction = f"in {language}" if language else "in 繁體中文"
 
     prompt = TESTCASE_GENERATOR_PROMPT.format(
         title=context.get('title', ''),
