@@ -36,7 +36,7 @@ class TestAdminCourse(BaseTester):
         rv = client_admin.post(
             '/course',
             json={
-                'course': '體育',
+                'course': '!@#$',
                 'teacher': 'admin',
             },
         )

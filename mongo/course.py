@@ -97,7 +97,7 @@ class Course(MongoBase, engine=engine.Course):
         }
 
     def edit_course(self, user, new_course, teacher, color=None, emoji=None):
-        if re.match(r'^[a-zA-Z0-9._\- ]+$', new_course) is None:
+        if re.match(r'^[\w._\- ]+$', new_course) is None:
             raise ValueError
 
         if not self:
@@ -347,7 +347,7 @@ class Course(MongoBase, engine=engine.Course):
 
     @classmethod
     def add_course(cls, course, teacher, color=None, emoji=None):
-        if re.match(r'^[a-zA-Z0-9._\- ]+$', course) is None:
+        if re.match(r'^[\w._\- ]+$', course) is None:
             raise ValueError
         teacher = User(teacher)
         if not teacher:
