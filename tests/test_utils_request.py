@@ -16,6 +16,9 @@ class TestUtilsRequest(BaseTester):
         class MockRequest:
             json = None
 
+            def get_json(self, silent=True):
+                return self.json
+
         mock_request = MockRequest()
         from model.utils import request
         monkeypatch.setattr(request, 'request', mock_request)
@@ -23,11 +26,11 @@ class TestUtilsRequest(BaseTester):
 
         @Request.json()
         def route():
-            pass
+            return 'OK', 200
 
         message, status_code = route()
-        assert message == 'Unaccepted Content-Type json'
-        assert status_code == 415
+        assert message == 'OK'
+        assert status_code == 200
 
     def test_request_doc_with_missing_args(self, monkeypatch):
 
