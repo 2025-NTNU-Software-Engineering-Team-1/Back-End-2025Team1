@@ -550,6 +550,35 @@ class TestAiManagement(BaseAiTest):
         assert len(target_key['problem_usages']) == 1
         assert target_key['problem_usages'][0]['total_token'] == 200
 
+    def test_ai_checker_assigned_problem_counts(self, client_teacher):
+        """
+        AI Checker assigned problems should appear in usage even with zero tokens.
+        """
+        engine.AiTokenUsage.objects(course_name=self.course).delete()
+
+        problem_doc = engine.Problem.objects(pk=self.pid).first()
+        assert problem_doc is not None
+        problem_doc.update(set__courses=[self.course],
+                           set__config={
+                               "aiChecker": {
+                                   "enabled": True,
+                                   "apiKeyId": str(self.api_key.id),
+                                   "model": "gemini-2.5-flash",
+                               },
+                           })
+
+        rv = client_teacher.get(f'/course/{self.course_name}/aisetting/usage')
+        assert rv.status_code == 200
+
+        data = rv.get_json()['data']
+        keys = data['keys']
+        target_key = next((k for k in keys if k['id'] == str(self.api_key.id)),
+                          None)
+        assert target_key is not None
+        assert any(
+            u.get('problem_id') == str(self.pid)
+            for u in target_key.get('problem_usages', []))
+
 
 from datetime import timedelta
 from mongo.ai import AiModel
