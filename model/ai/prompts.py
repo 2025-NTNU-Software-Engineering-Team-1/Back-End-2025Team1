@@ -69,7 +69,7 @@ Output Format: {output_format}
 {user_hint}
 
 [Task]
-Generate 3 test cases that match the problem's input/output format.
+Generate up to 20 test cases (minimum 3) that match the problem's input/output format.
 Each test case should cover different scenarios (e.g., basic case, edge case, larger input).
 
 [Critical Constraints]

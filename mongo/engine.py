@@ -10,7 +10,7 @@ from zipfile import ZipFile, BadZipFile
 __all__ = [*mongoengine.__all__]
 
 TAIPEI_TIMEZONE = timezone(timedelta(hours=8))
-DEFAULT_AI_MODEL = 'gemini-flash-lite-latest'
+DEFAULT_AI_MODEL = 'gemini-flash-latest'
 RPD_RESET_INTERVAL = timedelta(hours=24)
 
 MONGO_HOST = os.environ.get('MONGO_HOST', 'mongomock://localhost')
