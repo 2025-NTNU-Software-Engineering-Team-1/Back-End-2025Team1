@@ -1,5 +1,4 @@
 from functools import wraps
-from random import SystemRandom
 from typing import Set, Callable, Any, Optional
 import csv
 import io
@@ -7,12 +6,9 @@ from datetime import timezone, datetime
 from flask import Blueprint, request, current_app, url_for
 from mongo import *
 from mongo import engine, Role
-from mongo.utils import hash_id
 from .utils import *
 from .utils.rate_limit import RateLimiter, login_limiter
 from mongo.pat import PersonalAccessToken
-
-import string
 
 __all__ = (
     'auth_api',
@@ -249,14 +245,10 @@ def session():
             err[0].headers['Retry-After'] = str(retry_after)
             return err
 
-        try:
-            user = User.login(username, password, ip_addr)
-        except DoesNotExist:
+        user, error_msg = User.authenticate(username, password, ip_addr)
+        if error_msg:
             login_limiter.record_failure(ip_addr)
-            return HTTPError('Login Failed', 403)
-
-        if not user.active:
-            return HTTPError('Invalid User', 403)
+            return HTTPError(error_msg, 403)
 
         # Clear rate limit on successful login
         login_limiter.clear(ip_addr)
@@ -345,9 +337,8 @@ def check(item, username=None, email=None):
 @auth_api.route('/resend-email', methods=['POST'])
 @Request.json('email: str')
 def resend_email(email):
-    try:
-        user = User.get_by_email(email)
-    except DoesNotExist:
+    user = User.get_user_safely(email)
+    if not user:
         return HTTPError('User Not Exists', 400)
     if user.active:
         return HTTPError('User Has Been Actived', 400)
@@ -370,25 +361,19 @@ def active(token=None):
         if agreement is not True:
             return HTTPError('Not Confirm the Agreement', 403)
         try:
-            json = jwt_decode(token)
+            json_data = jwt_decode(token)
         except ValueError:
-            return HTTPError('Invalid Token', 403)
-        if json is None or not json.get('secret'):
             return HTTPError('Invalid Token.', 403)
-        user = User(json['data']['username'])
-        if not user:
-            return HTTPError('User Not Exists', 400)
-        if user.active:
-            return HTTPError('User Has Been Actived', 400)
-        allowed_profile_keys = {'displayed_name', 'bio', 'editor_config'}
-        sanitized_profile = {
-            k: v
-            for k, v in (profile or {}).items() if k in allowed_profile_keys
-        }
-        try:
-            user.activate(sanitized_profile)
-        except engine.DoesNotExist as e:
-            return HTTPError(str(e), 404)
+        if json_data is None or not json_data.get('secret'):
+            return HTTPError('Invalid Token.', 403)
+        username = json_data.get('data', {}).get('username')
+        user, error_msg = User.activate_by_username(username, profile)
+        if error_msg:
+            if error_msg == 'User Not Exists':
+                return HTTPError('User Not Exists', 400)
+            if 'Public Course Not Exists' in error_msg:
+                return HTTPError(error_msg, 404)
+            return HTTPError(error_msg, 400)
         cookies = {'jwt': user.cookie}
         return HTTPResponse('User Is Now Active', cookies=cookies)
 
@@ -423,15 +408,9 @@ def password_recovery(email):
             err[0].headers['Retry-After'] = str(retry_after)
             return err
         recovery_limiter.record_failure(ip_addr)
-    try:
-        user = User.get_by_email(email)
-    except DoesNotExist:
+    user, new_password = User.reset_password(email)
+    if not user:
         return HTTPError('User Not Exists', 400)
-    new_password = (lambda r: ''.join(
-        r.choice(string.hexdigits)
-        for i in range(r.randint(12, 24))))(SystemRandom())
-    user_id2 = hash_id(user.username, new_password)
-    user.update(user_id2=user_id2)
     send_noreply(
         [email], '[N-OJ] Password Recovery',
         f'Your alternative password is {new_password}.\nPlease login and change your password.'
@@ -538,17 +517,17 @@ def _get_user_from_token(token: Optional[str]) -> Optional[User]:
     if not json or not json.get('secret'):
         return None
 
-    try:
-        user = User(json['data']['username'])
-        # Check for ID mismatch
-        if json['data'].get('userId') != user.user_id:
-            return None
-        # Check active status
-        if not user.active:
-            return None
-        return user
-    except Exception:
+    username = json.get('data', {}).get('username')
+    if not username:
         return None
+    user = User.get_user_safely(username)
+    if not user:
+        return None
+    if json['data'].get('userId') != user.user_id:
+        return None
+    if not user.active:
+        return None
+    return user
 
 
 @auth_api.route('/me', methods=['GET'])

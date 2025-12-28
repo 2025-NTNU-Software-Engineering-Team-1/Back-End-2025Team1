@@ -1,5 +1,6 @@
 from __future__ import annotations
 from datetime import datetime, timedelta
+from random import SystemRandom
 from hmac import compare_digest
 from typing import Any, Dict, List, TYPE_CHECKING, Optional
 
@@ -15,6 +16,7 @@ import os
 import re
 import base64
 import json
+import string
 
 if TYPE_CHECKING:
     from .course import Course  # pragma: no cover
@@ -87,6 +89,64 @@ class User(MongoBase, engine=engine.User):
                 return True
 
         raise ValueError(f'Invalid check item: {item}')
+
+    @classmethod
+    def get_user_safely(cls, username_or_email: str) -> Optional['User']:
+        """
+        Safely get a user object without raising engine.DoesNotExist.
+        """
+        try:
+            try:
+                return cls.get_by_username(username_or_email)
+            except engine.DoesNotExist:
+                return cls.get_by_email(username_or_email)
+        except engine.DoesNotExist:
+            return None
+
+    @classmethod
+    def authenticate(cls, username: str, password: str, ip_addr: str):
+        """
+        Encapsulate login logic. Returns (user, error_message).
+        """
+        try:
+            user = cls.login(username, password, ip_addr)
+            if not user.active:
+                return None, 'Invalid User'
+            return user, None
+        except engine.DoesNotExist:
+            return None, 'Login Failed'
+
+    @classmethod
+    def reset_password(cls, email: str):
+        """
+        Reset password for a user by email.
+        Returns (user, new_password) or (None, None) if not found.
+        """
+        user = cls.get_user_safely(email)
+        if not user:
+            return None, None
+        new_password = (lambda r: ''.join(
+            r.choice(string.hexdigits)
+            for i in range(r.randint(12, 24))))(SystemRandom())
+        user_id2 = hash_id(user.username, new_password)
+        user.update(user_id2=user_id2)
+        return user, new_password
+
+    @classmethod
+    def activate_by_username(cls, username: str, profile: Optional[dict]):
+        """
+        Activate user by username, returning (user, error_message).
+        """
+        user = cls.get_user_safely(username)
+        if not user:
+            return None, 'User Not Exists'
+        if user.active:
+            return None, 'User Has Been Actived'
+        try:
+            user.activate(profile)
+        except engine.DoesNotExist as e:
+            return None, str(e)
+        return user, None
 
     @classmethod
     def signup(
