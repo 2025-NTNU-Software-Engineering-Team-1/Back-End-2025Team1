@@ -459,7 +459,7 @@ class TestCheckUser:
     def test_invalid_type(self, client):
         rv = client.post('/auth/check/invalid')
         assert rv.status_code == 400, rv.get_json()
-        assert rv.get_json()['message'] == 'Ivalid Checking Type'
+        assert rv.get_json()['message'] == 'Invalid Checking Type'
 
 
 class TestResendEmail:

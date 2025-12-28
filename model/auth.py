@@ -316,6 +316,9 @@ def check(item):
 
     @Request.json('username: str')
     def check_username(username):
+        if not isinstance(request.json, dict) or set(
+                request.json.keys()) != {'username'}:
+            return HTTPError('Extra fields not allowed', 400)
         try:
             User.get_by_username(username)
         except DoesNotExist:
@@ -324,6 +327,10 @@ def check(item):
 
     @Request.json('email: str')
     def check_email(email):
+        if not isinstance(request.json, dict) or set(
+                request.json.keys()) != {'email'}:
+            return HTTPError('Invalid request payload: extra fields detected',
+                             400)
         try:
             User.get_by_email(email)
         except DoesNotExist:
@@ -331,7 +338,7 @@ def check(item):
         return HTTPResponse('Email Has Been Used', data={'valid': 0})
 
     method = {'username': check_username, 'email': check_email}.get(item)
-    return method() if method else HTTPError('Ivalid Checking Type', 400)
+    return method() if method else HTTPError('Invalid Checking Type', 400)
 
 
 @auth_api.route('/resend-email', methods=['POST'])
