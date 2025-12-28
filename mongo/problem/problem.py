@@ -362,6 +362,14 @@ class Problem(MongoBase, engine=engine.Problem):
                     raise BadZipFile(
                         f'Invalid public_testdata.zip file: {str(e)}')
 
+                # macOS zip 檢測
+                from model.utils.file import zip_sanitize
+                public_testdata_file.seek(0)
+                zip_bytes = public_testdata_file.read()
+                is_valid, sanitize_error = zip_sanitize(zip_bytes)
+                if not is_valid:
+                    raise ValueError(sanitize_error)
+
                 public_testdata_file.seek(0)
                 file_data = public_testdata_file.read()
                 file_size = len(file_data)
@@ -449,6 +457,15 @@ class Problem(MongoBase, engine=engine.Problem):
                 ZipFile(file_obj).testzip()
             except Exception as e:
                 raise BadZipFile(f'Invalid zip file {filename}: {str(e)}')
+
+            # macOS zip 檢測
+            from model.utils.file import zip_sanitize
+            file_obj.seek(0)
+            zip_bytes = file_obj.read()
+            is_valid, sanitize_error = zip_sanitize(zip_bytes)
+            if not is_valid:
+                raise ValueError(sanitize_error)
+            file_obj.seek(0)
 
         path = f'problem/{self.problem_id}/{asset_type}/{filename}'
 
@@ -845,6 +862,15 @@ class Problem(MongoBase, engine=engine.Problem):
             ValueError: if test case is None or problem_id is invalid
             engine.DoesNotExist
         '''
+        # macOS zip 檢測
+        from model.utils.file import zip_sanitize
+        test_case.seek(0)
+        zip_bytes = test_case.read()
+        is_valid, sanitize_error = zip_sanitize(zip_bytes)
+        if not is_valid:
+            raise ValueError(sanitize_error)
+        test_case.seek(0)
+
         self._validate_test_case(test_case)
         test_case.seek(0)
         self._save_test_case_zip(test_case)

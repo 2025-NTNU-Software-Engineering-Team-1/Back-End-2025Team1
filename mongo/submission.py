@@ -630,6 +630,21 @@ class BaseSubmission(abc.ABC):
             file.seek(0)
         except (OSError, AttributeError):
             pass
+
+        # macOS zip 檢測
+        from model.utils.file import zip_sanitize
+        try:
+            file.seek(0)
+            zip_bytes = file.read()
+            is_valid, sanitize_error = zip_sanitize(zip_bytes)
+            if not is_valid:
+                return sanitize_error
+        finally:
+            try:
+                file.seek(0)
+            except (OSError, AttributeError):
+                pass
+
         if self.is_zip_mode:
             return self._check_zip_submission_payload(file)
         return self._check_standard_submission_payload(file)

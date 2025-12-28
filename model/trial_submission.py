@@ -165,6 +165,14 @@ def upload_trial_files(user, trial_id: str):
             f"Invalid zip format for code file. trial_id: {trial_id}")
         return HTTPError("Code file must be a valid zip.", 400)
 
+    # macOS zip 檢測
+    is_valid, sanitize_error = zip_sanitize(code_bytes)
+    if not is_valid:
+        current_app.logger.warning(
+            f"Code file rejected by sanitize: {sanitize_error}. trial_id: {trial_id}"
+        )
+        return HTTPError(sanitize_error, 400)
+
     # compressed size limit
     if len(code_bytes) > 10 * 1024 * 1024:
         current_app.logger.warning(
@@ -198,6 +206,14 @@ def upload_trial_files(user, trial_id: str):
                 f"Invalid zip format for custom testcases. trial_id: {trial_id}"
             )
             return HTTPError("Custom testcases must be a valid zip.", 400)
+
+        # macOS zip 檢測
+        is_valid, sanitize_error = zip_sanitize(custom_bytes)
+        if not is_valid:
+            current_app.logger.warning(
+                f"Custom testcases rejected by sanitize: {sanitize_error}. trial_id: {trial_id}"
+            )
+            return HTTPError(sanitize_error, 400)
 
         # compressed limit
         if len(custom_bytes) > 5 * 1024 * 1024:

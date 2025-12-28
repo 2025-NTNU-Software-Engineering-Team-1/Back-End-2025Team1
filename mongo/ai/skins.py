@@ -174,6 +174,15 @@ class AiVtuberSkin(MongoBase, engine=engine.AiVtuberSkin):
         try:
             import json
             file_obj.seek(0)
+
+            # macOS zip 檢測
+            from model.utils.file import zip_sanitize
+            zip_bytes = file_obj.read()
+            is_valid, sanitize_error = zip_sanitize(zip_bytes)
+            if not is_valid:
+                return (False, sanitize_error)
+            file_obj.seek(0)
+
             with zipfile.ZipFile(file_obj, 'r') as zf:
                 names = zf.namelist()
                 model_files = [n for n in names if n.endswith('.model3.json')]
