@@ -14,6 +14,12 @@ def _err(msg, code=400):
     return HTTPError(msg, code, data={'Status': 'ERR'})
 
 
+def _filter_response_data(data, allowed_keys):
+    if not isinstance(data, dict):
+        return {}
+    return {k: data[k] for k in allowed_keys if k in data}
+
+
 def format_discussion_post(post):
     # (保持你目前的 format_discussion_post 邏輯)
     author_display = ""
@@ -73,7 +79,7 @@ def list_discussion_posts(user, Limit, Page, Problem_Id, Mode, Course_Id):
         'Mode': mode,
         'Limit': limit,
         'Page': page,
-        **data
+        **_filter_response_data(data, {'Total', 'Posts'})
     }
     if Problem_Id:
         resp_data.update({
@@ -99,14 +105,15 @@ def list_discussion_problems(user, Limit, Page, Mode, Course_Id):
         return _err('Invalid Mode. Available values: All.', 400)
 
     data = Discussion.get_problems(user, 'All', limit, page, Course_Id)
-    return HTTPResponse('Success.',
-                        data={
-                            'Status': 'OK',
-                            'Mode': 'All',
-                            'Limit': limit,
-                            'Page': page,
-                            **data
-                        })
+    return HTTPResponse(
+        'Success.',
+        data={
+            'Status': 'OK',
+            'Mode': 'All',
+            'Limit': limit,
+            'Page': page,
+            **_filter_response_data(data, {'Total', 'Problems'})
+        })
 
 
 @discussion_api.route('/search', methods=['GET'])
@@ -146,7 +153,11 @@ def create_discussion_post(user, Title, Content, Problem_id, Category,
         code = 403 if 'permission' in err.lower() or 'allowed' in err.lower(
         ) else 400
         return _err(err, code)
-    return HTTPResponse('Success.', data={'Status': 'OK', **data})
+    return HTTPResponse('Success.',
+                        data={
+                            'Status': 'OK',
+                            **_filter_response_data(data, {'Post_ID'})
+                        })
 
 
 @discussion_api.route('/posts/<int:post_id>/reply', methods=['POST'])
@@ -162,7 +173,11 @@ def create_discussion_reply(user, post_id, Content, Reply_To, Contains_Code):
     if err:
         code = 404 if 'not found' in err.lower() else 403
         return _err(err, code)
-    return HTTPResponse('Success.', data={'Status': 'OK', **data})
+    return HTTPResponse('Success.',
+                        data={
+                            'Status': 'OK',
+                            **_filter_response_data(data, {'Reply_ID'})
+                        })
 
 
 @discussion_api.route('/posts/<int:post_id>/like', methods=['POST'])
@@ -174,7 +189,12 @@ def like_discussion_target(user, post_id, ID, Action):
     if err:
         code = 404 if 'not found' in err.lower() else 403
         return _err(err, code)
-    return HTTPResponse('Success.', data={'Status': 'OK', **data})
+    return HTTPResponse(
+        'Success.',
+        data={
+            'Status': 'OK',
+            **_filter_response_data(data, {'Like_Count', 'Like_Status'})
+        })
 
 
 @discussion_api.route('/posts/<int:post_id>/status', methods=['POST'])
@@ -186,7 +206,11 @@ def update_discussion_post_status(user, post_id, Action):
     if err:
         code = 400 if 'unsupported' in err.lower() else 403
         return _err(err, code)
-    return HTTPResponse('Success.', data={'Status': 'OK', **data})
+    return HTTPResponse('Success.',
+                        data={
+                            'Status': 'OK',
+                            **_filter_response_data(data, {'New_Status'})
+                        })
 
 
 @discussion_api.route('/posts/<int:post_id>/delete', methods=['DELETE'])
@@ -200,7 +224,11 @@ def delete_discussion_entity(user, post_id, Type, Id):
         code = 404 if 'not found' in err.lower() else (
             400 if 'type' in err.lower() else 403)
         return _err(err, code)
-    return HTTPResponse('Success.', data={'Status': 'OK', **data})
+    return HTTPResponse('Success.',
+                        data={
+                            'Status': 'OK',
+                            **_filter_response_data(data, {'Message'})
+                        })
 
 
 @discussion_api.route('/problems/<problem_id>/meta', methods=['GET'])
@@ -208,7 +236,12 @@ def delete_discussion_entity(user, post_id, Type, Id):
 def get_discussion_problem_meta(user, problem_id):
     data, err = Discussion.get_problem_meta(user, problem_id)
     if err: return _err(err, 404)
-    return HTTPResponse('Success.', data={'Status': 'OK', **data})
+    return HTTPResponse(
+        'Success.',
+        data={
+            'Status': 'OK',
+            **_filter_response_data(data, {'Role', 'Deadline', 'Code_Allowed'})
+        })
 
 
 @discussion_api.route('/posts/<int:post_id>', methods=['GET'])

@@ -11,6 +11,7 @@ from flask import (
 )
 from datetime import datetime, timedelta
 from mongo import *
+from mongo import Role
 from mongo import engine
 from mongo import sandbox
 from mongo.utils import (
@@ -281,7 +282,7 @@ def get_submission_list(
                     400,
                 )
         # students can only get their own submissions
-        if user.role == User.engine.Role.STUDENT:
+        if user.role == Role.STUDENT:
             username = user.username
         try:
             params = drop_none({
@@ -1113,15 +1114,13 @@ def delete_all_submissions(user, filters: dict = None):
                 'You do not have permission to delete submissions for this course.',
                 403)
 
-    # Use Submission.filter to get matching submissions (handles course filtering)
     try:
-        # Map frontend filters to Submission.filter arguments
         problem_id = None
         if filters.get('problemId'):
             try:
                 pid = int(filters['problemId'])
                 if pid < 1 or pid > DB_INT_MAX:
-                    raise ValueError  # 超出 MongoDB 處理範圍
+                    raise ValueError
                 problem_id = pid
             except ValueError:
                 pass
@@ -1165,7 +1164,7 @@ def delete_all_submissions(user, filters: dict = None):
         submissions = Submission.filter(
             user=req_user,
             offset=0,
-            count=-1,  # Get all
+            count=-1,
             problem=problem_id,
             q_user=username,
             status=status,
@@ -1181,7 +1180,6 @@ def delete_all_submissions(user, filters: dict = None):
 
     for sub in submissions:
         try:
-            # Skip if currently judging (sub is wrapper)
             if sub.status == -1:
                 last_send = getattr(sub.obj, 'last_send', None)
                 if last_send and (datetime.now() -
@@ -1189,10 +1187,8 @@ def delete_all_submissions(user, filters: dict = None):
                     skipped_count += 1
                     continue
 
-            # Clear cache for this submission
             clear_submission_list_cache_for_submission(str(sub.id))
 
-            # Delete (wrapper handles file deletion)
             sub.delete()
             deleted_count += 1
         except Exception as e:

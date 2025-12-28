@@ -314,6 +314,8 @@ def manage_course_code(user, course_name):
     elif request.method == 'POST':
         # Check if creating new global code or auth code
         data = request.json or {}
+        if not isinstance(data, dict):
+            return HTTPError('Invalid payload.', 400)
         max_usage = data.get('max_usage')
 
         if max_usage is not None:

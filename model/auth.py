@@ -9,6 +9,7 @@ from mongo import *
 from mongo import engine, Role
 from mongo.utils import hash_id
 from .utils import *
+from .utils.rate_limit import RateLimiter, login_limiter
 from mongo.pat import PersonalAccessToken
 
 import string
@@ -22,6 +23,8 @@ __all__ = (
 )
 
 auth_api = Blueprint('auth_api', __name__)
+signup_limiter = RateLimiter()
+recovery_limiter = RateLimiter()
 
 VERIFY_TEXT = '''\
 Welcome! you've signed up successfully!
@@ -230,8 +233,6 @@ def session():
             - 403 Login Failed
             - 429 Too Many Attempts
         '''
-        from .utils.rate_limit import login_limiter
-
         ip_addr = request.headers.get('cf-connecting-ip', request.remote_addr)
 
         # Rate limit check
@@ -268,6 +269,17 @@ def session():
 @auth_api.route('/signup', methods=['POST'])
 @Request.json('username: str', 'password: str', 'email: str')
 def signup(username, password, email):
+    ip_addr = request.headers.get('cf-connecting-ip', request.remote_addr)
+    if not current_app.config.get('TESTING', False):
+        allowed, wait_time = signup_limiter.check(ip_addr)
+        if not allowed:
+            retry_after = int(wait_time)
+            err = HTTPError(
+                f'Too many signup attempts. Please try again in {retry_after} seconds.',
+                429)
+            err[0].headers['Retry-After'] = str(retry_after)
+            return err
+        signup_limiter.record_failure(ip_addr)
     try:
         user = User.signup(username, password, email)
     except ValidationError as ve:
@@ -360,8 +372,13 @@ def active(token=None):
             return HTTPError('User Not Exists', 400)
         if user.active:
             return HTTPError('User Has Been Actived', 400)
+        allowed_profile_keys = {'displayed_name', 'bio', 'editor_config'}
+        sanitized_profile = {
+            k: v
+            for k, v in (profile or {}).items() if k in allowed_profile_keys
+        }
         try:
-            user.activate(profile)
+            user.activate(sanitized_profile)
         except engine.DoesNotExist as e:
             return HTTPError(str(e), 404)
         cookies = {'jwt': user.cookie}
@@ -387,6 +404,17 @@ def active(token=None):
 @auth_api.route('/password-recovery', methods=['POST'])
 @Request.json('email: str')
 def password_recovery(email):
+    ip_addr = request.headers.get('cf-connecting-ip', request.remote_addr)
+    if not current_app.config.get('TESTING', False):
+        allowed, wait_time = recovery_limiter.check(ip_addr)
+        if not allowed:
+            retry_after = int(wait_time)
+            err = HTTPError(
+                f'Too many password recovery attempts. Please try again in {retry_after} seconds.',
+                429)
+            err[0].headers['Retry-After'] = str(retry_after)
+            return err
+        recovery_limiter.record_failure(ip_addr)
     try:
         user = User.get_by_email(email)
     except DoesNotExist:
@@ -453,10 +481,10 @@ def batch_signup(
             return HTTPError('Permission Denied', 403)
     try:
         new_users = [*csv.DictReader(io.StringIO(new_users))]
-        # Security check: Non-admins cannot create Admins
         if user.role != Role.ADMIN:
             for u_entry in new_users:
-                # 'role' field in CSV, check if it tries to set Admin (0)
+                u_entry.pop('role', None)
+                u_entry.pop('active', None)
                 role_val = u_entry.get('role')
                 if role_val:
                     try:

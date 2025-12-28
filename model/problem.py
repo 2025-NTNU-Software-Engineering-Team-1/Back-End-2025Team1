@@ -309,6 +309,8 @@ def upload_problem_assets(user: User, problem: Problem):
 )
 def create_problem(user: User, **ks):
     data = request.json or {}
+    if not isinstance(data, dict):
+        return HTTPError('Invalid payload.', 400)
 
     # Handle Trial_Mode alias
     if 'Trial_Mode' in data:
@@ -484,6 +486,8 @@ def manage_problem(user: User, problem: Problem):
             full_config = problem.obj.config or {}
 
         data = request.json or {}
+        if not isinstance(data, dict):
+            return HTTPError('Invalid payload.', 400)
 
         config_payload = data.get('config') or {}
         pipeline_payload = data.get('pipeline') or {}
@@ -1163,6 +1167,8 @@ def update_problem_meta(user: User, problem: Problem):
             data={'contentType': request.content_type},
         )
     data = request.json or {}
+    if not isinstance(data, dict):
+        return HTTPError('Invalid payload.', 400)
     config_payload = data.get('config') or {}
     pipeline_payload = data.get('pipeline') or {}
 
