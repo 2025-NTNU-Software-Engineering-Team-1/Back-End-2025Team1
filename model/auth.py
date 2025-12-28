@@ -6,7 +6,7 @@ import io
 from datetime import timezone, datetime
 from flask import Blueprint, request, current_app, url_for
 from mongo import *
-from mongo import engine
+from mongo import engine, Role
 from mongo.utils import hash_id
 from .utils import *
 from mongo.pat import PersonalAccessToken
@@ -434,15 +434,37 @@ def add_user(
 @auth_api.route('/batch-signup', methods=['POST'])
 @Request.json('new_users: str', 'course', 'force')
 @Request.doc('course', 'course', Course, src_none_allowed=True)
-@identity_verify(0)
+@login_required
 def batch_signup(
     user,
     new_users: str,
     course: Optional[Course],
     force: Optional[bool],
 ):
+    # Check permissions
+    if user.role != Role.ADMIN:
+        if user.role == Role.TEACHER:
+            if course is None:
+                return HTTPError('Teachers cannot add users globally', 403)
+            # Check if user is the teacher of the course
+            if course.teacher.username != user.username:
+                return HTTPError('Permission Denied', 403)
+        else:
+            return HTTPError('Permission Denied', 403)
     try:
         new_users = [*csv.DictReader(io.StringIO(new_users))]
+        # Security check: Non-admins cannot create Admins
+        if user.role != Role.ADMIN:
+            for u_entry in new_users:
+                # 'role' field in CSV, check if it tries to set Admin (0)
+                role_val = u_entry.get('role')
+                if role_val:
+                    try:
+                        if int(role_val) == User.Role.ADMIN:
+                            return HTTPError(
+                                'Permission Denied: Cannot create Admin', 403)
+                    except ValueError:
+                        pass  # Invalid role format will be handled by User.batch_signup
     except csv.Error as e:
         current_app.logger.info(f'Error parse csv file [err={e}]')
         return HTTPError('Invalid file content', 400)
