@@ -27,11 +27,7 @@ skin_api = Blueprint('skin_api', __name__)
 def list_skins(user):
     """Get all available skins for the current user."""
     try:
-        current_app.logger.info(
-            f"[Skin List] User {user.username} listing skins")
         skins = AiVtuberSkin.get_available_skins(user.username)
-        current_app.logger.info(
-            f"[Skin List] Found {len(skins)} skins from DB")
 
         result = [{
             'skin_id': 'builtin_hiyori',
@@ -45,8 +41,6 @@ def list_skins(user):
         }]
 
         for skin in skins:
-            current_app.logger.debug(
-                f"[Skin List] Processing skin: {skin.skin_id}, {skin.name}")
             result.append({
                 'skin_id':
                 skin.skin_id,

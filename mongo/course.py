@@ -73,6 +73,19 @@ class Course(MongoBase, engine=engine.Course):
         user.update(pull__courses=self.id)
         user.reload('courses')
 
+    def get_member_usernames(self) -> set:
+        '''
+        Get all member usernames (teacher, TAs, students)
+        '''
+        member_usernames = set()
+        if self.teacher:
+            member_usernames.add(self.teacher.username)
+        for ta in (self.tas or []):
+            member_usernames.add(ta.username)
+        for username in (self.student_nicknames or {}).keys():
+            member_usernames.add(username)
+        return member_usernames
+
     @classmethod
     def get_all(cls):
         return engine.Course.objects
@@ -97,11 +110,17 @@ class Course(MongoBase, engine=engine.Course):
         }
 
     def edit_course(self, user, new_course, teacher, color=None, emoji=None):
-        if re.match(r'^[a-zA-Z0-9._\- ]+$', new_course) is None:
+        if re.match(r'^[\w._\- ]+$', new_course) is None:
             raise ValueError
 
         if not self:
             raise engine.DoesNotExist('Course')
+
+        if self.course_name == 'Public' and new_course != 'Public':
+            raise PermissionError('Cannot rename Public course.')
+        if self.course_name != 'Public' and new_course == 'Public':
+            raise ValueError('Cannot rename course to Public.')
+
         if not perm(self, user):
             raise PermissionError
         te = User(teacher)
@@ -347,7 +366,7 @@ class Course(MongoBase, engine=engine.Course):
 
     @classmethod
     def add_course(cls, course, teacher, color=None, emoji=None):
-        if re.match(r'^[a-zA-Z0-9._\- ]+$', course) is None:
+        if re.match(r'^[\w._\- ]+$', course) is None:
             raise ValueError
         teacher = User(teacher)
         if not teacher:

@@ -40,12 +40,16 @@ def get_user_list(
     role: Optional[str],
 ):
     try:
+        DB_INT_MAX = 9223372036854775807
         if offset is not None:
             offset = int(offset)
+            if offset < 0 or offset > DB_INT_MAX: offset = 0
         if count is not None:
             count = int(count)
+            if count < 0 or count > 100: count = 100
         if role is not None:
             role = int(role)
+            if role < 0 or role > 10: role = None
     except (TypeError, ValueError):
         return HTTPError(
             'offset, count and role must be integer',
@@ -120,15 +124,33 @@ def update_user(
     displayed_name,
     role,
 ):
+    if user.role > target_user.role:
+        return HTTPError(
+            'Permission denied: Cannot update user with higher role', 403)
     # TODO: notify admin & user (by email, SMS, etc.)
     if password is not None:
         target_user.change_password(password)
         current_app.logger.info(
             'admin changed user password '
             f'[actor={user.username}, user={target_user.username}]', )
+
+    sanitized_role = target_user.role
+    if role is not None:
+        try:
+            role_int = int(role)
+            # 確保指派的 role 數值必須大於或等於操作者自己的 role 等級 (數值越大權限越小)
+            if role_int >= user.role:
+                sanitized_role = role_int
+            else:
+                return HTTPError(
+                    'Permission denied: Cannot assign a role higher than yours',
+                    403)
+        except (ValueError, TypeError):
+            return HTTPError('Invalid role format', 400)
+
     payload = drop_none({
         'profile__displayed_name': displayed_name,
-        'role': role,
+        'role': sanitized_role,
     })
     if len(payload):
         fields = [*payload.keys()]

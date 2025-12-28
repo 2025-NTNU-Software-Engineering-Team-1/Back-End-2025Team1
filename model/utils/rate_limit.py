@@ -98,6 +98,41 @@ class RateLimiter:
             if key in self._attempts:
                 del self._attempts[key]
 
+    def get_banned_ips(self) -> list:
+        """
+        Get all currently banned IPs with their remaining lockout time.
+        
+        Returns:
+            list: List of dicts with 'ip' and 'remaining_seconds'
+        """
+        if not self.enabled:
+            return []
+
+        banned = []
+        now = time.time()
+        with self._lock:
+            for key, (failures, lockout_until) in self._attempts.items():
+                if lockout_until and now < lockout_until:
+                    banned.append({
+                        'ip': key,
+                        'remaining_seconds': int(lockout_until - now),
+                        'failure_count': failures
+                    })
+        return banned
+
+    def unban(self, key: str) -> bool:
+        """
+        Manually unban a specific IP.
+        
+        Returns:
+            bool: True if IP was found and unbanned, False otherwise
+        """
+        with self._lock:
+            if key in self._attempts:
+                del self._attempts[key]
+                return True
+            return False
+
 
 # Global instance for use across the application
 login_limiter = RateLimiter()

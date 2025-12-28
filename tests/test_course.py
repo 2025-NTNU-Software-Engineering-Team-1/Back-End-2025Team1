@@ -36,7 +36,7 @@ class TestAdminCourse(BaseTester):
         rv = client_admin.post(
             '/course',
             json={
-                'course': '體育',
+                'course': '!@#$',
                 'teacher': 'admin',
             },
         )
@@ -647,7 +647,7 @@ class TestScoreBoard(BaseTester):
         )
         assert rv.status_code == 200, rv.json
 
-    def test_student_cannot_view_scoreboard(
+    def test_student_can_view_scoreboard(
         self,
         forge_client: ForgeClient,
     ):
@@ -655,7 +655,7 @@ class TestScoreBoard(BaseTester):
         course = utils.course.create_course(students=[user])
         client = forge_client(user.username)
         rv = client.get(f'/course/{course.course_name}/scoreboard?pids=1,2,3')
-        assert rv.status_code == 403, rv.json
+        assert rv.status_code == 200, rv.json
 
     def test_teacher_role_cannot_view_scoreboard(
         self,
@@ -706,7 +706,8 @@ class TestMongoCourse(BaseTester):
                                role=engine.User.Role.ADMIN)
         utils.user.create_user(username='admin', role=engine.User.Role.ADMIN)
         course = Course.get_public()
-        course.edit_course(User('admin'), 'OldPublic', 'admin')
+        with pytest.raises(PermissionError):
+            course.edit_course(User('admin'), 'OldPublic', 'admin')
         assert Course.get_public().course_name == 'Public'
 
 

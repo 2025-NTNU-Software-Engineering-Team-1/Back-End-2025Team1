@@ -262,6 +262,7 @@ class AiApiKey(MongoBase, engine=engine.AiApiKey):
             'config.api_key_id',
             'config.ai_key_id',
             'config.key_id',
+            'config.aiChecker.apiKeyId',
         ]
 
         zero_usages = []

@@ -29,7 +29,7 @@ def add_homework_route(user, course_name, name, markdown, start, end,
             end=end,
             penalty=penalty,
         )
-    except NameError:
+    except PermissionError:
         return HTTPError('user must be the teacher or ta of this course', 403)
     except FileExistsError:
         return HTTPError('homework exists in this course', 400)
@@ -68,6 +68,11 @@ def homework_operation_route(user, homework_id):
 
     def get_homework():
         homework = Homework.get_by_id(homework_id)
+        course = Course(homework.course_id)
+        if not course:
+            return HTTPError('course not exists', 404)
+        if not course.permission(user, Course.Permission.VIEW):
+            return HTTPError('Permission denied', 403)
         ret = {
             'id':
             str(homework.id),
@@ -110,6 +115,13 @@ def get_homework_list(user, course_name):
     get a list of homework
     '''
     try:
+        course = Course(course_name)
+        if not course:
+            return HTTPError('course not exists',
+                             404,
+                             data={'courseName': course_name})
+        if not course.permission(user, Course.Permission.VIEW):
+            return HTTPError('Permission denied', 403)
         homeworks = Homework.get_homeworks(course_name=course_name)
         data = []
         for homework in homeworks:

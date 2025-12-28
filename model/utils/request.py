@@ -33,7 +33,13 @@ class _Request(type):
                 @wraps(func)
                 def wrapper(*args, **kwargs):
                     # 1. Acquiring the [Request] data
-                    request_data = getattr(request, content_type)
+                    if content_type == 'json':
+                        request_data = request.get_json(silent=True)
+                        if request_data is None:
+                            request_data = {}
+                    else:
+                        request_data = getattr(request, content_type)
+
                     if request_data is None:
                         return HTTPError(
                             f'Unaccepted Content-Type {content_type}', 415)

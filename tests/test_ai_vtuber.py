@@ -466,13 +466,13 @@ class TestAiManagement(BaseAiTest):
         }
         self.course.save()
 
-        # RPM=10, Effective=5. Students=5 => ceil(5/5)=1
+        # RPM=5 (gemini-2.5-flash default), Effective=2.5. Students=5 => ceil(5/2.5)=2
         rv = client_teacher.get(
             f'/course/{self.course_name}/ai/key/suggestion')
         assert rv.status_code == 200
         data = rv.get_json()['data']
         assert data['student_count'] == 5
-        assert data['suggested_key_count'] == 1
+        assert data['suggested_key_count'] == 2
 
         # Increase students
         self.course.student_nicknames = {
@@ -481,12 +481,12 @@ class TestAiManagement(BaseAiTest):
         }
         self.course.save()
 
-        # RPM=10 (Flash Lite), Effective=5 (10*0.5).
-        # Students=60 => ceil(60/5)=12
+        # RPM=5, Effective=2.5.
+        # Students=60 => ceil(60/2.5)=24
         rv = client_teacher.get(
             f'/course/{self.course_name}/ai/key/suggestion')
         assert rv.status_code == 200
-        assert rv.get_json()['data']['suggested_key_count'] == 12
+        assert rv.get_json()['data']['suggested_key_count'] == 24
 
     def test_course_ai_key_lifecycle(self, client_teacher):
         """
@@ -549,6 +549,35 @@ class TestAiManagement(BaseAiTest):
         assert target_key is not None
         assert len(target_key['problem_usages']) == 1
         assert target_key['problem_usages'][0]['total_token'] == 200
+
+    def test_ai_checker_assigned_problem_counts(self, client_teacher):
+        """
+        AI Checker assigned problems should appear in usage even with zero tokens.
+        """
+        engine.AiTokenUsage.objects(course_name=self.course).delete()
+
+        problem_doc = engine.Problem.objects(pk=self.pid).first()
+        assert problem_doc is not None
+        problem_doc.update(set__courses=[self.course],
+                           set__config={
+                               "aiChecker": {
+                                   "enabled": True,
+                                   "apiKeyId": str(self.api_key.id),
+                                   "model": "gemini-2.5-flash",
+                               },
+                           })
+
+        rv = client_teacher.get(f'/course/{self.course_name}/aisetting/usage')
+        assert rv.status_code == 200
+
+        data = rv.get_json()['data']
+        keys = data['keys']
+        target_key = next((k for k in keys if k['id'] == str(self.api_key.id)),
+                          None)
+        assert target_key is not None
+        assert any(
+            u.get('problem_id') == str(self.pid)
+            for u in target_key.get('problem_usages', []))
 
 
 from datetime import timedelta
@@ -666,7 +695,7 @@ class TestAiFeatures(BaseAiTest):
         # 3. Verify Course
         raw_course.reload()
         assert raw_course.is_ai_vt_enabled is True
-        assert raw_course.ai_model.name == 'gemini-flash-lite-latest'
+        assert raw_course.ai_model.name == 'gemini-flash-latest'
 
         # 4. Verify Key
         raw_key.reload()

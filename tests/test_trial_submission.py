@@ -336,6 +336,42 @@ class TestTrialSubmissionAPI(BaseTester):
         assert rv.status_code == 400
         assert 'valid zip' in rv.get_json()['message'].lower()
 
+    def test_trial_history_scope_and_user_label(self, forge_client,
+                                                setup_problem_with_testcases):
+        problem, course = setup_problem_with_testcases
+
+        other_student = User('student-2')
+        course.obj.student_nicknames[
+            other_student.username] = other_student.username
+        course.obj.save()
+        course.reload()
+
+        TrialSubmission.add(problem_id=problem.problem_id,
+                            username='student',
+                            lang=2,
+                            use_default_case=True)
+        TrialSubmission.add(problem_id=problem.problem_id,
+                            username='student-2',
+                            lang=2,
+                            use_default_case=True)
+
+        student_client = forge_client('student')
+        rv = student_client.get(f'/problem/{problem.problem_id}/trial/history')
+        assert rv.status_code == 200
+        data = rv.get_json()['data']
+        history = data['history']
+        assert data['total_count'] == 1
+        assert len(history) == 1
+        assert history[0]['user']['username'] == 'student'
+
+        teacher_client = forge_client('teacher')
+        rv = teacher_client.get(f'/problem/{problem.problem_id}/trial/history')
+        assert rv.status_code == 200
+        data = rv.get_json()['data']
+        history = data['history']
+        usernames = {item['user']['username'] for item in history}
+        assert usernames == {'student', 'student-2'}
+
     def test_trial_send_failure_marks_je(self, setup_problem_with_testcases,
                                          monkeypatch):
         problem, _ = setup_problem_with_testcases

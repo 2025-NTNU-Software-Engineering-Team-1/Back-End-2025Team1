@@ -11,6 +11,8 @@ __all__ = [
     'VTUBER_SYSTEM_PROMPT_TEMPLATE',
     'build_vtuber_prompt',
     'get_vtuber_response_schema',
+    'TESTCASE_GENERATOR_PROMPT',
+    'build_testcase_prompt',
 ]
 
 # Valid emotions for Vtuber responses
@@ -53,6 +55,78 @@ Last Trial Result: {last_trial_summary}
   ]
 }}
 """
+
+# Prompt template for test case generation
+TESTCASE_GENERATOR_PROMPT = """You are a test case generator for programming problems.
+
+[Problem Info]
+Title: {title}
+Description: {description}
+Input Format: {input_format}
+Output Format: {output_format}
+
+[User's Request]
+{user_hint}
+
+[Task]
+Generate up to 20 test cases (minimum 3) that match the problem's input/output format.
+Each test case should cover different scenarios (e.g., basic case, edge case, larger input).
+
+[Critical Constraints]
+1. The input MUST strictly follow the Input Format specified above.
+2. The output MUST be what a correct solution would produce.
+3. Generate diverse test cases covering different scenarios.
+4. Output strict JSON only.
+
+[JSON Schema]
+{{
+  "testcases": [
+    {{
+      "input": "test case input as a string",
+      "expected_output": "expected output as a string",
+      "explanation": "brief explanation"
+    }}
+  ]
+}}
+"""
+
+
+def build_testcase_prompt(context: dict,
+                          user_hint: str = "",
+                          language: str = "zh-tw") -> str:
+    """
+    Build prompt for testcase generation.
+    
+    Args:
+        context: Problem context with title, description, input_format, output_format.
+        user_hint: User's hint about what kind of testcase to generate.
+        language: Language for explanation field.
+        
+    Returns:
+        Formatted prompt string.
+    """
+    hint_text = user_hint.strip(
+    ) if user_hint else "Generate a representative test case."
+    lang_instruction = f"in {language}" if language else "in 繁體中文"
+
+    prompt = TESTCASE_GENERATOR_PROMPT.format(
+        title=context.get('title', ''),
+        description=context.get('description', ''),
+        input_format=context.get('input_format', ''),
+        output_format=context.get('output_format', ''),
+        user_hint=hint_text)
+
+    # Inject language requirement
+    prompt = prompt.replace(
+        "Generate 3 test cases",
+        f"Generate 3 test cases. The explanation field MUST be {lang_instruction}."
+    ).replace('"explanation": "brief explanation"',
+              f'"explanation": "brief explanation {lang_instruction}"')
+
+    logger.debug(
+        f"Built testcase prompt for problem: {context.get('title', 'Unknown')}"
+    )
+    return prompt
 
 
 def build_vtuber_prompt(context: dict) -> str:

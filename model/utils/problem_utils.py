@@ -25,6 +25,11 @@ def build_config_and_pipeline(problem: Problem) -> Tuple[Dict, Dict]:
                               config_payload.get('compilation', False))
     config_payload.setdefault('resourceData', False)
     config_payload.setdefault('resourceDataTeacher', False)
+    ai_checker = config_payload.get('aiChecker')
+    if ai_checker is None:
+        config_payload['aiChecker'] = {'enabled': False}
+    elif isinstance(ai_checker, dict):
+        ai_checker.setdefault('enabled', False)
     config_payload['trialMode'] = config_payload.get(
         'trialMode', config_payload.get('testMode', False))
     config_payload['maxNumberOfTrial'] = config_payload.get(

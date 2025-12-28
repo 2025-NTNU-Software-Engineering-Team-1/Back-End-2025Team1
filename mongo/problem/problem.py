@@ -101,47 +101,45 @@ class Problem(MongoBase, engine=engine.Problem):
     @property
     def trial_mode_enabled(self) -> bool:
         """Check if trial mode is enabled for this problem."""
-        # First, check database field directly (most reliable)
-        # This handles cases where the field exists in DB but not as Python attribute
+        # Check database field first (most reliable)
         if hasattr(self.obj, '_data'):
             db_data = self.obj._data
             if 'trial_mode_enabled' in db_data:
-                value = db_data.get('trial_mode_enabled', False)
-                # Sync to Python attribute if not already set
-                if value and not hasattr(self.obj, 'trial_mode_enabled'):
-                    self.obj.trial_mode_enabled = True
-                    self.obj.save()
-                return bool(value)
-            # Backward compatibility: check old DB field
+                return bool(db_data.get('trial_mode_enabled', False))
             if 'test_mode_enabled' in db_data:
-                old_value = db_data.get('test_mode_enabled', False)
-                # Migrate old field to new field
-                if old_value:
-                    self.obj.trial_mode_enabled = True
-                    self.obj.save()
-                return bool(old_value)
+                return bool(db_data.get('test_mode_enabled', False))
 
         # Check Python attribute (may not exist if field was set directly in DB)
         if hasattr(self.obj, 'trial_mode_enabled'):
-            value = getattr(self.obj, 'trial_mode_enabled', False)
-            return bool(value)
+            return bool(getattr(self.obj, 'trial_mode_enabled', False))
         # Backward compatibility: check old field name
         if hasattr(self.obj, 'test_mode_enabled'):
-            old_value = getattr(self.obj, 'test_mode_enabled', False)
-            # Migrate old field to new field
-            if old_value:
-                self.obj.trial_mode_enabled = True
-                self.obj.save()
-            return bool(old_value)
+            return bool(getattr(self.obj, 'test_mode_enabled', False))
 
-        # Fallback: check config.trialMode (frontend sets this)
-        # This ensures compatibility even if DB field is not synced
+        # Fallback: check config.trialMode/testMode without side effects
         config = getattr(self.obj, 'config', None) or {}
-        trial_val = config.get('trialMode') or config.get('testMode')
-        if trial_val:
-            return True
+        trial_mode = config.get('trialMode')
+        if trial_mode is None:
+            trial_mode = config.get('testMode', False)
+        return bool(trial_mode)
 
-        return False
+    def get_samples(self, limit: int = 2) -> List[Dict]:
+        """
+        Get sample test cases from problem description.
+        """
+        desc = getattr(self, 'description', None)
+        if not desc or not hasattr(desc,
+                                   'sample_input') or not desc.sample_input:
+            return []
+
+        sample_output = getattr(desc, 'sample_output', []) or []
+        samples = [{
+            "input": s_in,
+            "output": s_out
+        } for i, (s_in,
+                  s_out) in enumerate(zip(desc.sample_input, sample_output))
+                   if i < limit]
+        return samples
 
     @property
     def trial_submission_quota(self) -> int:
@@ -362,6 +360,17 @@ class Problem(MongoBase, engine=engine.Problem):
                     raise BadZipFile(
                         f'Invalid public_testdata.zip file: {str(e)}')
 
+                # macOS zip 檢測
+                from model.utils.file import zip_sanitize
+                public_testdata_file.seek(0)
+                zip_bytes = public_testdata_file.read()
+                try:
+                    is_valid, sanitize_error = zip_sanitize(zip_bytes)
+                    if not is_valid:
+                        raise ValueError(sanitize_error)
+                except Exception as e:
+                    raise ValueError(f'Zip validation failed: {str(e)}')
+
                 public_testdata_file.seek(0)
                 file_data = public_testdata_file.read()
                 file_size = len(file_data)
@@ -449,6 +458,18 @@ class Problem(MongoBase, engine=engine.Problem):
                 ZipFile(file_obj).testzip()
             except Exception as e:
                 raise BadZipFile(f'Invalid zip file {filename}: {str(e)}')
+
+            # macOS zip 檢測
+            from model.utils.file import zip_sanitize
+            file_obj.seek(0)
+            zip_bytes = file_obj.read()
+            try:
+                is_valid, sanitize_error = zip_sanitize(zip_bytes)
+                if not is_valid:
+                    raise ValueError(sanitize_error)
+            except Exception as e:
+                raise ValueError(f'Zip validation failed: {str(e)}')
+            file_obj.seek(0)
 
         path = f'problem/{self.problem_id}/{asset_type}/{filename}'
 
@@ -630,6 +651,7 @@ class Problem(MongoBase, engine=engine.Problem):
             'quota': quota,
             'default_code': default_code,
             'config': full_config,
+            'trial_mode_enabled': trial_mode_enabled,
             'trial_submission_quota': max_number_of_trial,
         })
         # Create ProblemDescription for the embedded document field
@@ -845,6 +867,18 @@ class Problem(MongoBase, engine=engine.Problem):
             ValueError: if test case is None or problem_id is invalid
             engine.DoesNotExist
         '''
+        # macOS zip 檢測
+        from model.utils.file import zip_sanitize
+        test_case.seek(0)
+        zip_bytes = test_case.read()
+        try:
+            is_valid, sanitize_error = zip_sanitize(zip_bytes)
+            if not is_valid:
+                raise ValueError(sanitize_error)
+        except Exception as e:
+            raise ValueError(f'Zip validation failed: {str(e)}')
+        test_case.seek(0)
+
         self._validate_test_case(test_case)
         test_case.seek(0)
         self._save_test_case_zip(test_case)

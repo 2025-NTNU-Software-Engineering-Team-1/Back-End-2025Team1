@@ -2,7 +2,6 @@ import json
 import hashlib
 import statistics
 import logging
-from dataclasses import asdict
 from io import BytesIO
 import zipfile
 import io
@@ -14,7 +13,6 @@ from mongo import *
 from mongo import engine
 from mongo import sandbox
 from mongo.utils import drop_none, MinioClient, RedisCache
-import hashlib
 from mongo.problem import *
 from mongo.submission import TrialSubmission
 from .utils.problem_utils import build_config_and_pipeline as _build_config_and_pipeline
@@ -29,6 +27,10 @@ PUBLIC_TESTCASES_TTL = 3600  # 1 hour Time-to-Live for Redis cache
 __all__ = ['problem_api']
 
 problem_api = Blueprint('problem_api', __name__)
+from .problem_io import init_problem_io as _init_problem_io
+
+# Register import/export routes implemented in problem_io.
+_init_problem_io(problem_api)
 
 
 def permission_error_response():
@@ -309,6 +311,8 @@ def upload_problem_assets(user: User, problem: Problem):
 )
 def create_problem(user: User, **ks):
     data = request.json or {}
+    if not isinstance(data, dict):
+        return HTTPError('Invalid payload.', 400)
 
     # Handle Trial_Mode alias
     if 'Trial_Mode' in data:
@@ -436,6 +440,23 @@ def delete_problem(user: User, problem: Problem):
         return permission_error_response()
     if not problem.permission(user=user, req=problem.Permission.ONLINE):
         return online_error_response()
+    pid = int(problem.problem_id)
+    for hw_ref in problem.homeworks or []:
+        homework = engine.Homework.objects(id=hw_ref.id).first()
+        if not homework:
+            continue
+        if pid in (homework.problem_ids or []):
+            homework.update(pull__problem_ids=pid)
+        student_status = homework.student_status or {}
+        if student_status:
+            pid_key = str(pid)
+            removed = False
+            for status in student_status.values():
+                if pid_key in status:
+                    status.pop(pid_key, None)
+                    removed = True
+            if removed:
+                homework.update(student_status=student_status)
     problem.delete()
     return HTTPResponse('Success.', data={'ok': True})
 
@@ -484,6 +505,8 @@ def manage_problem(user: User, problem: Problem):
             full_config = problem.obj.config or {}
 
         data = request.json or {}
+        if not isinstance(data, dict):
+            return HTTPError('Invalid payload.', 400)
 
         config_payload = data.get('config') or {}
         pipeline_payload = data.get('pipeline') or {}
@@ -498,6 +521,7 @@ def manage_problem(user: User, problem: Problem):
                 'aiVTuber',
                 'aiVTuberMaxToken',
                 'aiVTuberMode',
+                'aiChecker',
                 'acceptedFormat',
                 'artifactCollection',
                 'maxStudentZipSizeMB',
@@ -625,6 +649,8 @@ def manage_problem(user: User, problem: Problem):
         )
     except engine.DoesNotExist:
         return HTTPError('Course not found.', 404)
+    except ValueError as e:
+        return HTTPError(str(e), 400)
 
 
 @problem_api.post('/<int:problem>/initiate-test-case-upload')
@@ -1161,6 +1187,8 @@ def update_problem_meta(user: User, problem: Problem):
             data={'contentType': request.content_type},
         )
     data = request.json or {}
+    if not isinstance(data, dict):
+        return HTTPError('Invalid payload.', 400)
     config_payload = data.get('config') or {}
     pipeline_payload = data.get('pipeline') or {}
 
@@ -1170,6 +1198,7 @@ def update_problem_meta(user: User, problem: Problem):
             'aiVTuber',
             'aiVTuberMaxToken',
             'aiVTuberMode',
+            'aiChecker',
             'acceptedFormat',
             'artifactCollection',
             'maxStudentZipSizeMB',

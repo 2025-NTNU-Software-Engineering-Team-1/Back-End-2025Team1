@@ -9,6 +9,7 @@ from flask import Blueprint, current_app
 from mongo import AiApiLog, Problem
 from model.auth import login_required
 from .utils import Request, HTTPError, HTTPResponse
+from .utils.ai import is_course_teacher_or_ta, prepare_testcase_generation
 
 # Import from new AI module
 from .ai import (
@@ -126,7 +127,7 @@ def generate_testcase_endpoint(user=None,
     Returns:
         JSON with input, expected_output, explanation
     """
-    from .ai.key_manager import check_rate_limit
+    from .ai.key_manager import get_available_key
     from .ai.logging import get_logger
 
     logger = get_logger('testcase_api')
@@ -151,7 +152,7 @@ def generate_testcase_endpoint(user=None,
             return HTTPError('Problem not found', 404)
 
         # Get API key using same logic as chatbot
-        key, error_msg = check_rate_limit(course_name)
+        key, error_msg = get_available_key(course_name)
         if not key:
             logger.warning(f"[TestcaseGen] No API key available: {error_msg}")
             return HTTPError('No API key configured for this course', 400)
@@ -194,4 +195,121 @@ def generate_testcase_endpoint(user=None,
     except Exception as e:
         logger.error(f"[TestcaseGen] Unexpected error: {e}", exc_info=True)
         current_app.logger.error(f"Testcase generation error: {e}")
+        return HTTPError('Failed to generate test case', 500)
+
+
+@ai_api.route('/generate-testcase/teacher', methods=['POST'])
+@login_required
+@Request.json('problem_id', 'course_name', 'api_key_id', 'hint', 'language',
+              'include_output', 'problem_context')
+def generate_testcase_for_teacher(user=None,
+                                  problem_id=None,
+                                  course_name=None,
+                                  api_key_id=None,
+                                  hint='',
+                                  language='en',
+                                  include_output=True,
+                                  problem_context=None):
+    """
+    Generate test cases for teachers with course-level permission check.
+    POST /api/ai/generate-testcase/teacher
+    
+    Args (JSON body):
+        problem_id: The problem ID (optional if problem_context is provided)
+        course_name: The course name
+        api_key_id: Optional specific API key ID to use
+        hint: Optional hint about what kind of test case to generate
+        language: User's language setting (e.g., 'en', 'zh-tw')
+        include_output: Whether to include expected_output (default True)
+        problem_context: Optional context for new problems (dict with title, 
+                         description, input_format, output_format)
+        
+    Returns:
+        JSON with testcases array containing input, expected_output, explanation
+    """
+    from .ai.logging import get_logger
+    from .ai.key_manager import get_available_key, get_model_for_course
+
+    logger = get_logger('testcase_teacher_api')
+
+    logger.info(
+        f"[TestcaseGenTeacher] Request from {user.username}: "
+        f"problem={problem_id}, course={course_name}, key={api_key_id}, "
+        f"has_context={bool(problem_context)}")
+
+    # Validate input - either problem_id or problem_context is required
+    if not problem_id and not problem_context:
+        return HTTPError('Missing problem_id or problem_context', 400)
+    if not course_name:
+        return HTTPError('Missing course_name', 400)
+
+    # Check course-level permission (teacher or TA)
+    if not is_course_teacher_or_ta(user, course_name):
+        logger.warning(
+            f"[TestcaseGenTeacher] Permission denied for {user.username}")
+        return HTTPError('Permission denied. Must be course teacher or TA.',
+                         403)
+
+    # Get API key and model
+    if problem_id:
+        # Prepare generation context from existing problem
+        key, problem, model, error_msg = prepare_testcase_generation(
+            course_name, problem_id, api_key_id)
+        if error_msg:
+            logger.warning(
+                f"[TestcaseGenTeacher] Preparation failed: {error_msg}")
+            return HTTPError(error_msg, 400)
+    else:
+        # For new problems, just get the key
+        if api_key_id:
+            from mongo import AiApiKey
+            try:
+                key = AiApiKey(api_key_id)
+                if not key or not getattr(key, 'is_active', False):
+                    return HTTPError('API key not found or inactive', 400)
+            except Exception:
+                return HTTPError('API key not found', 400)
+        else:
+            key, error_msg = get_available_key(course_name)
+            if not key:
+                return HTTPError(error_msg or 'No API key available', 400)
+        model = get_model_for_course(course_name)
+
+    api_key = key.key_value
+    logger.info(f"[TestcaseGenTeacher] Using API key: {key.key_name}")
+    logger.info(f"[TestcaseGenTeacher] Using model: {model}")
+
+    try:
+        # Generate test case
+        result = generate_testcase(
+            problem_id=str(problem_id) if problem_id else None,
+            user=user,
+            user_hint=hint or '',
+            api_key=api_key,
+            model=model,
+            language=language or 'en',
+            problem_context=problem_context)
+
+        logger.info(
+            f"[TestcaseGenTeacher] Generated testcase for problem {problem_id or 'new'}"
+        )
+        return HTTPResponse(data=result)
+
+    except ContextNotFoundError as e:
+        logger.error(f"[TestcaseGenTeacher] Context not found: {e}")
+        return HTTPError(str(e), 404)
+    except AIError as e:
+        logger.warning(f"[TestcaseGenTeacher] AI service error: {e}")
+        status_code = getattr(e, 'status_code', 500)
+        if status_code == 429:
+            return HTTPError('API quota exceeded. Please try again later.',
+                             429)
+        return HTTPError(str(e), status_code)
+    except ValueError as e:
+        logger.error(f"[TestcaseGenTeacher] ValueError: {e}")
+        return HTTPError(str(e), 400)
+    except Exception as e:
+        logger.error(f"[TestcaseGenTeacher] Unexpected error: {e}",
+                     exc_info=True)
+        current_app.logger.error(f"Teacher testcase generation error: {e}")
         return HTTPError('Failed to generate test case', 500)

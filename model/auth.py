@@ -1,17 +1,14 @@
 from functools import wraps
-from random import SystemRandom
 from typing import Set, Callable, Any, Optional
 import csv
 import io
 from datetime import timezone, datetime
 from flask import Blueprint, request, current_app, url_for
 from mongo import *
-from mongo import engine
-from mongo.utils import hash_id
+from mongo import engine, Role
 from .utils import *
+from .utils.rate_limit import RateLimiter, login_limiter
 from mongo.pat import PersonalAccessToken
-
-import string
 
 __all__ = (
     'auth_api',
@@ -22,6 +19,8 @@ __all__ = (
 )
 
 auth_api = Blueprint('auth_api', __name__)
+signup_limiter = RateLimiter()
+recovery_limiter = RateLimiter()
 
 VERIFY_TEXT = '''\
 Welcome! you've signed up successfully!
@@ -230,8 +229,9 @@ def session():
             - 403 Login Failed
             - 429 Too Many Attempts
         '''
-        from .utils.rate_limit import login_limiter
-
+        if not isinstance(request.json, dict) or len(request.json) > 2:
+            return HTTPError(
+                'Mass Assignment detected: extra fields not allowed', 400)
         ip_addr = request.headers.get('cf-connecting-ip', request.remote_addr)
 
         # Rate limit check
@@ -245,14 +245,10 @@ def session():
             err[0].headers['Retry-After'] = str(retry_after)
             return err
 
-        try:
-            user = User.login(username, password, ip_addr)
-        except DoesNotExist:
+        user, error_msg = User.authenticate(username, password, ip_addr)
+        if error_msg:
             login_limiter.record_failure(ip_addr)
-            return HTTPError('Login Failed', 403)
-
-        if not user.active:
-            return HTTPError('Invalid User', 403)
+            return HTTPError(error_msg, 403)
 
         # Clear rate limit on successful login
         login_limiter.clear(ip_addr)
@@ -268,6 +264,17 @@ def session():
 @auth_api.route('/signup', methods=['POST'])
 @Request.json('username: str', 'password: str', 'email: str')
 def signup(username, password, email):
+    ip_addr = request.headers.get('cf-connecting-ip', request.remote_addr)
+    if not current_app.config.get('TESTING', False):
+        allowed, wait_time = signup_limiter.check(ip_addr)
+        if not allowed:
+            retry_after = int(wait_time)
+            err = HTTPError(
+                f'Too many signup attempts. Please try again in {retry_after} seconds.',
+                429)
+            err[0].headers['Retry-After'] = str(retry_after)
+            return err
+        signup_limiter.record_failure(ip_addr)
     try:
         user = User.signup(username, password, email)
     except ValidationError as ve:
@@ -298,36 +305,40 @@ def change_password(user, old_password, new_password):
 
 
 @auth_api.route('/check/<item>', methods=['POST'])
-def check(item):
+@Request.json(vars_dict={'username': 'username', 'email': 'email'})
+def check(item, username=None, email=None):
     '''Checking when the user is registing.
     '''
+    if not isinstance(request.json, dict) or len(request.json) > 1:
+        return HTTPError('Extra fields not allowed', 400)
 
-    @Request.json('username: str')
-    def check_username(username):
-        try:
-            User.get_by_username(username)
-        except DoesNotExist:
-            return HTTPResponse('Username Can Be Used', data={'valid': 1})
-        return HTTPResponse('User Exists', data={'valid': 0})
+    try:
+        if item == 'username':
+            if not username:
+                return HTTPError('Missing username', 400)
+            valid = User.check_availability('username', username)
+            return HTTPResponse(
+                'Username Can Be Used' if valid else 'User Exists',
+                data={'valid': int(valid)})
 
-    @Request.json('email: str')
-    def check_email(email):
-        try:
-            User.get_by_email(email)
-        except DoesNotExist:
-            return HTTPResponse('Email Can Be Used', data={'valid': 1})
-        return HTTPResponse('Email Has Been Used', data={'valid': 0})
+        if item == 'email':
+            if not email:
+                return HTTPError('Missing email', 400)
+            valid = User.check_availability('email', email)
+            return HTTPResponse(
+                'Email Can Be Used' if valid else 'Email Has Been Used',
+                data={'valid': int(valid)})
+    except ValueError as e:
+        return HTTPError(str(e), 400)
 
-    method = {'username': check_username, 'email': check_email}.get(item)
-    return method() if method else HTTPError('Ivalid Checking Type', 400)
+    return HTTPError('Invalid Checking Type', 400)
 
 
 @auth_api.route('/resend-email', methods=['POST'])
 @Request.json('email: str')
 def resend_email(email):
-    try:
-        user = User.get_by_email(email)
-    except DoesNotExist:
+    user = User.get_user_safely(email)
+    if not user:
         return HTTPError('User Not Exists', 400)
     if user.active:
         return HTTPError('User Has Been Actived', 400)
@@ -350,20 +361,19 @@ def active(token=None):
         if agreement is not True:
             return HTTPError('Not Confirm the Agreement', 403)
         try:
-            json = jwt_decode(token)
+            json_data = jwt_decode(token)
         except ValueError:
-            return HTTPError('Invalid Token', 403)
-        if json is None or not json.get('secret'):
             return HTTPError('Invalid Token.', 403)
-        user = User(json['data']['username'])
-        if not user:
-            return HTTPError('User Not Exists', 400)
-        if user.active:
-            return HTTPError('User Has Been Actived', 400)
-        try:
-            user.activate(profile)
-        except engine.DoesNotExist as e:
-            return HTTPError(str(e), 404)
+        if json_data is None or not json_data.get('secret'):
+            return HTTPError('Invalid Token.', 403)
+        username = json_data.get('data', {}).get('username')
+        user, error_msg = User.activate_by_username(username, profile)
+        if error_msg:
+            if error_msg == 'User Not Exists':
+                return HTTPError('User Not Exists', 400)
+            if 'Public Course Not Exists' in error_msg:
+                return HTTPError(error_msg, 404)
+            return HTTPError(error_msg, 400)
         cookies = {'jwt': user.cookie}
         return HTTPResponse('User Is Now Active', cookies=cookies)
 
@@ -387,15 +397,20 @@ def active(token=None):
 @auth_api.route('/password-recovery', methods=['POST'])
 @Request.json('email: str')
 def password_recovery(email):
-    try:
-        user = User.get_by_email(email)
-    except DoesNotExist:
+    ip_addr = request.headers.get('cf-connecting-ip', request.remote_addr)
+    if not current_app.config.get('TESTING', False):
+        allowed, wait_time = recovery_limiter.check(ip_addr)
+        if not allowed:
+            retry_after = int(wait_time)
+            err = HTTPError(
+                f'Too many password recovery attempts. Please try again in {retry_after} seconds.',
+                429)
+            err[0].headers['Retry-After'] = str(retry_after)
+            return err
+        recovery_limiter.record_failure(ip_addr)
+    user, new_password = User.reset_password(email)
+    if not user:
         return HTTPError('User Not Exists', 400)
-    new_password = (lambda r: ''.join(
-        r.choice(string.hexdigits)
-        for i in range(r.randint(12, 24))))(SystemRandom())
-    user_id2 = hash_id(user.username, new_password)
-    user.update(user_id2=user_id2)
     send_noreply(
         [email], '[N-OJ] Password Recovery',
         f'Your alternative password is {new_password}.\nPlease login and change your password.'
@@ -434,15 +449,37 @@ def add_user(
 @auth_api.route('/batch-signup', methods=['POST'])
 @Request.json('new_users: str', 'course', 'force')
 @Request.doc('course', 'course', Course, src_none_allowed=True)
-@identity_verify(0)
+@login_required
 def batch_signup(
     user,
     new_users: str,
     course: Optional[Course],
     force: Optional[bool],
 ):
+    # Check permissions
+    if user.role != Role.ADMIN:
+        if user.role == Role.TEACHER:
+            if course is None:
+                return HTTPError('Teachers cannot add users globally', 403)
+            # Check if user is the teacher of the course
+            if course.teacher.username != user.username:
+                return HTTPError('Permission Denied', 403)
+        else:
+            return HTTPError('Permission Denied', 403)
     try:
         new_users = [*csv.DictReader(io.StringIO(new_users))]
+        if user.role != Role.ADMIN:
+            for u_entry in new_users:
+                u_entry.pop('role', None)
+                u_entry.pop('active', None)
+                role_val = u_entry.get('role')
+                if role_val:
+                    try:
+                        if int(role_val) == User.Role.ADMIN:
+                            return HTTPError(
+                                'Permission Denied: Cannot create Admin', 403)
+                    except ValueError:
+                        pass  # Invalid role format will be handled by User.batch_signup
     except csv.Error as e:
         current_app.logger.info(f'Error parse csv file [err={e}]')
         return HTTPError('Invalid file content', 400)
@@ -480,17 +517,17 @@ def _get_user_from_token(token: Optional[str]) -> Optional[User]:
     if not json or not json.get('secret'):
         return None
 
-    try:
-        user = User(json['data']['username'])
-        # Check for ID mismatch
-        if json['data'].get('userId') != user.user_id:
-            return None
-        # Check active status
-        if not user.active:
-            return None
-        return user
-    except Exception:
+    username = json.get('data', {}).get('username')
+    if not username:
         return None
+    user = User.get_user_safely(username)
+    if not user:
+        return None
+    if json['data'].get('userId') != user.user_id:
+        return None
+    if not user.active:
+        return None
+    return user
 
 
 @auth_api.route('/me', methods=['GET'])
@@ -535,3 +572,32 @@ def get_me(token: Optional[str], fields: Optional[str]):
             'userId': '',
             'md5': '',
         })
+
+
+@auth_api.route('/banned-ips', methods=['GET'])
+@identity_verify(Role.ADMIN)
+def get_banned_ips(user):
+    """
+    Get all currently banned IPs.
+    Admin only.
+    """
+    from .utils.rate_limit import login_limiter
+
+    banned = login_limiter.get_banned_ips()
+    return HTTPResponse('Success', data={'banned_ips': banned})
+
+
+@auth_api.route('/banned-ips/<path:ip>', methods=['DELETE'])
+@identity_verify(Role.ADMIN)
+def unban_ip(user, ip):
+    """
+    Manually unban a specific IP.
+    Admin only.
+    """
+    from .utils.rate_limit import login_limiter
+
+    if login_limiter.unban(ip):
+        current_app.logger.info(f'Admin {user.username} unbanned IP: {ip}')
+        return HTTPResponse('IP unbanned successfully')
+    else:
+        return HTTPError('IP not found in banned list', 404)

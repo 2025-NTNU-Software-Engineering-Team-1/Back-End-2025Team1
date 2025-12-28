@@ -17,7 +17,7 @@ from .exceptions import (
     ContextNotFoundError,
 )
 from .service import call_ai_service
-from .key_manager import check_rate_limit
+from .key_manager import get_available_key
 from .context import get_problem_context
 from .conversation import get_conversation_history, reset_conversation_history
 from .prompts import build_vtuber_prompt, EMOTION_KEYWORDS
@@ -32,7 +32,7 @@ __all__ = [
     # Service
     'call_ai_service',
     # Key Management
-    'check_rate_limit',
+    'get_available_key',
     # Context
     'get_problem_context',
     # Conversation

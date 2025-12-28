@@ -28,7 +28,7 @@ import base64
 
 from . import engine
 from .base import MongoBase
-from .user import User
+from .user import User, Role
 from .problem import Problem
 from .homework import Homework
 from .course import Course
@@ -160,6 +160,19 @@ class BaseSubmission(abc.ABC):
             'AE': 8,  # Analysis Error (Static Analysis failed)
         }
 
+    STATUS_MAP = {
+        0: "Accepted",
+        -1: "Wrong Answer",
+        -2: "Compile Error",
+        1: "Time Limit Exceeded",
+        3: "Runtime Error",
+        4: "Memory Limit Exceeded",
+        5: "Runtime Error",
+        6: "Judge Error",
+        7: "Output Limit Exceeded",
+        8: "Analysis Error"
+    }
+
     @property
     def handwritten(self):
         return self.language == 3
@@ -218,6 +231,10 @@ class BaseSubmission(abc.ABC):
     @property
     def is_function_only_mode(self) -> bool:
         return self.execution_mode == 'functionOnly'
+
+    @property
+    def status_str(self) -> str:
+        return self.STATUS_MAP.get(getattr(self, 'status', -1), "Unknown")
 
     def _validate_execution_mode_constraints(self):
         if self.is_function_only_mode and self.is_zip_mode:
@@ -278,6 +295,43 @@ class BaseSubmission(abc.ABC):
         except AttributeError:
             raise AttributeError('The submission is still in pending')
         return ret
+
+    def get_error_detail(self) -> str:
+        """
+        Get error details for non-AC submissions (Compile Error or first failed case).
+        """
+        status_code = getattr(self, 'status', -1)
+        if status_code == 0:
+            return ""
+
+        try:
+            # Compile Error
+            if status_code == -2:
+                ce_msg = getattr(self, 'stderr', '') or ''
+                if ce_msg:
+                    return f"Compile Error: {ce_msg[:500]}"
+
+            # Runtime Error / Wrong Answer etc.
+            first_failed = self._find_first_failed_case()
+            if first_failed:
+                return f"First failed case status: {self.STATUS_MAP.get(first_failed.status, 'Error')}"
+
+        except Exception as e:
+            current_app.logger.debug(f"Could not get error details: {e}")
+        return ""
+
+    def _find_first_failed_case(self) -> Optional[Any]:
+        """Helper to find the first failed test case."""
+        if not hasattr(self, 'tasks') or not self.tasks:
+            return None
+
+        for task in self.tasks:
+            if not hasattr(task, 'cases'):
+                continue
+            for case in task.cases:
+                if getattr(case, 'status', 0) != 0:
+                    return case
+        return None
 
     def get_case_artifact_files(
         self,
@@ -630,6 +684,24 @@ class BaseSubmission(abc.ABC):
             file.seek(0)
         except (OSError, AttributeError):
             pass
+
+        # macOS zip 檢測
+        from model.utils.file import zip_sanitize
+        try:
+            file.seek(0)
+            zip_bytes = file.read()
+            try:
+                is_valid, sanitize_error = zip_sanitize(zip_bytes)
+                if not is_valid:
+                    return sanitize_error
+            except Exception as e:
+                return f'Zip validation failed: {str(e)}'
+        finally:
+            try:
+                file.seek(0)
+            except (OSError, AttributeError):
+                pass
+
         if self.is_zip_mode:
             return self._check_zip_submission_payload(file)
         return self._check_standard_submission_payload(file)
@@ -657,7 +729,8 @@ class BaseSubmission(abc.ABC):
         file.seek(0)
         return None
 
-    def _check_zip_submission_payload(self, file):
+    @staticmethod
+    def _check_zip_submission_payload(file):
         limit = 1024 * 1024 * 1024  # 1GB
         try:
             file.seek(0, os.SEEK_END)
@@ -694,7 +767,8 @@ class BaseSubmission(abc.ABC):
         )
         return True
 
-    def _generate_code_minio_path(self):
+    @staticmethod
+    def _generate_code_minio_path():
         return f'submissions/{generate_ulid()}.zip'
 
     def _put_code(self, code_file) -> str:
@@ -998,7 +1072,8 @@ class BaseSubmission(abc.ABC):
         self.finish_judging()  # Call subclass's finish_judging
         return True
 
-    def _generate_output_minio_path(self, task_no: int, case_no: int) -> str:
+    @staticmethod
+    def _generate_output_minio_path(task_no: int, case_no: int) -> str:
         '''
         generate a output file path for minio
         '''
@@ -1311,9 +1386,24 @@ class Submission(MongoBase, BaseSubmission, engine=engine.Submission):
                 continue
             if self.handwritten:
                 continue
+            submission_id = str(self.id)
+            submission_ids = [
+                str(sid) for sid in (stat.get('submissionIds') or []) if sid
+            ]
+            if submission_ids:
+                seen = set()
+                deduped = []
+                for sid in submission_ids:
+                    if sid in seen:
+                        continue
+                    seen.add(sid)
+                    deduped.append(sid)
+                submission_ids = deduped
             if 'rawScore' not in stat:
                 stat['rawScore'] = 0
-            stat['submissionIds'].append(self.id)
+            stat['submissionIds'] = submission_ids
+            if submission_id not in stat['submissionIds']:
+                stat['submissionIds'].append(submission_id)
             # handwritten problem will only keep the last submission
             if self.handwritten:
                 stat['submissionIds'] = stat['submissionIds'][-1:]
@@ -1382,9 +1472,13 @@ class Submission(MongoBase, BaseSubmission, engine=engine.Submission):
             return False
         if current_app.config['TESTING']:
             return True
-        # TODO: Ensure problem is ready to submitted
-        # if not Problem(self.problem).is_test_case_ready():
-        #     raise TestCaseNotFound(self.problem.problem_id)
+        problem = Problem(self.problem)
+        if not problem.is_test_case_ready():
+            error_msg = str(TestCaseNotFound(problem.problem_id))
+            self.logger.warning(f'Failed to send {self}: {error_msg}')
+            self._mark_sandbox_error(error_msg,
+                                     status_code=self.status2code.get('JE', 6))
+            raise TestCaseNotFound(problem.problem_id)
         # setup post body
         files = {
             'src': io.BytesIO(b"".join(self._get_code_raw())),
@@ -1392,7 +1486,10 @@ class Submission(MongoBase, BaseSubmission, engine=engine.Submission):
         # look for the target sandbox
         tar = self.target_sandbox()
         if tar is None:
-            self.logger.error(f'can not target a sandbox for {repr(self)}')
+            error_msg = 'No available sandbox instance.'
+            self.logger.error(f'{error_msg} {repr(self)}')
+            self._mark_sandbox_error(error_msg,
+                                     status_code=self.status2code.get('JE', 6))
             return False
         # save token for validation
         Submission.assign_token(self.id, tar.token)
@@ -1405,13 +1502,147 @@ class Submission(MongoBase, BaseSubmission, engine=engine.Submission):
         judge_url = f'{tar.url}/submit/{self.id}'
         # send submission to sandbox for judgement
         self.logger.info(f'send {self} to {tar.name}')
-        resp = rq.post(
-            judge_url,
-            data=post_data,
-            files=files,
+        resp = None
+        try:
+            resp = rq.post(
+                judge_url,
+                data=post_data,
+                files=files,
+            )
+            self.logger.info(
+                f'recieve {self} resp from sandbox: {resp.status_code}')
+            if self.sandbox_resp_handler(resp):
+                return True
+            raise ValueError('Unhandled sandbox response')
+        except JudgeQueueFullError:
+            raise
+        except ValueError as exc:
+            error_msg = None
+            status_code = self.status2code.get('JE', 6)
+            if resp is not None:
+                error_msg = self._format_sandbox_error(resp)
+                status_code = self._status_for_sandbox_response(resp)
+            if not error_msg:
+                error_msg = str(exc) or 'Sandbox error'
+            self.logger.error(f'Failed to send {self} to sandbox: {error_msg}')
+            self._mark_sandbox_error(error_msg, status_code=status_code)
+            raise ValueError(error_msg)
+        except rq.exceptions.RequestException as exc:
+            error_msg = f'Sandbox communication error: {exc}'
+            self.logger.error(f'Failed to send {self} to sandbox: {exc}')
+            self._mark_sandbox_error(error_msg,
+                                     status_code=self.status2code.get('JE', 6))
+            raise ValueError(error_msg)
+        except Exception as exc:
+            error_msg = f'Sandbox unexpected error: {exc}'
+            self.logger.error(f'Failed to send {self} to sandbox: {exc}')
+            self._mark_sandbox_error(error_msg,
+                                     status_code=self.status2code.get('JE', 6))
+            raise ValueError(error_msg)
+
+    def _format_sandbox_error(self, resp) -> str:
+        message = None
+        try:
+            payload = resp.json()
+            if isinstance(payload, dict):
+                message = payload.get('message') or payload.get(
+                    'msg') or payload.get('error')
+        except ValueError:
+            message = None
+        if not message:
+            message = (resp.text or '').strip()
+        if not message:
+            message = f'Sandbox error (HTTP {resp.status_code})'
+        return message
+
+    def _status_for_sandbox_response(self, resp) -> int:
+        if resp.status_code == 400:
+            return self.status2code.get('CE', 2)
+        return self.status2code.get('JE', 6)
+
+    def _build_error_tasks(
+            self, error_status: int, output_path: Optional[str],
+            output_data: Optional[bytes]) -> List[engine.TaskResult]:
+        problem = Problem(self.problem)
+        tasks_meta = []
+        if problem and getattr(problem, 'test_case', None):
+            tasks_meta = list(problem.test_case.tasks or [])
+        if not tasks_meta:
+            tasks_meta = [None]
+        tasks = []
+        for task_meta in tasks_meta:
+            case_count = getattr(task_meta, 'case_count', 1) or 1
+            cases = []
+            for _ in range(case_count):
+                cases.append(
+                    engine.CaseResult(
+                        status=error_status,
+                        exec_time=0,
+                        memory_usage=0,
+                        output=output_data if output_path is None else None,
+                        output_minio_path=output_path,
+                    ))
+            tasks.append(
+                engine.TaskResult(
+                    status=error_status,
+                    exec_time=0,
+                    memory_usage=0,
+                    score=0,
+                    cases=cases,
+                ))
+        return tasks
+
+    def _mark_sandbox_error(self,
+                            error_message: str,
+                            status_code: Optional[int] = None):
+        error_status = status_code if status_code is not None else self.status2code.get(
+            'JE', 6)
+
+        output_zip = io.BytesIO()
+        with ZipFile(output_zip, 'w') as zf:
+            zf.writestr('stdout', '')
+            zf.writestr('stderr', error_message)
+        output_zip.seek(0)
+        zip_data = output_zip.read()
+        output_zip.seek(0)
+
+        output_path = f'submissions/{self.id}_error_{generate_ulid()}.zip'
+        try:
+            minio_client = MinioClient()
+            minio_client.upload_file_object(output_zip, output_path,
+                                            len(zip_data))
+        except Exception as exc:
+            self.logger.warning(
+                f'Failed to upload sandbox error output: {exc}')
+            output_path = None
+
+        tasks = self._build_error_tasks(
+            error_status,
+            output_path=output_path,
+            output_data=zip_data if output_path is None else None,
         )
-        self.logger.info(f'recieve {self} resp from sandbox')
-        return self.sandbox_resp_handler(resp)
+
+        self.obj.update(
+            status=error_status,
+            score=0,
+            tasks=tasks,
+            exec_time=0,
+            memory_usage=0,
+            output_fields_initialized=True,
+        )
+        self.obj.status = error_status
+        self.obj.score = 0
+        self.obj.tasks = tasks
+        self.obj.exec_time = 0
+        self.obj.memory_usage = 0
+        self.obj.output_fields_initialized = True
+        try:
+            self.finish_judging()
+        except Exception as exc:
+            self.logger.error(f'Failed to finalize judging for {self}: {exc}',
+                              exc_info=True)
+        self.logger.info(
+            f'Marked {self} as error due to sandbox issue: {error_message}')
 
     def own_permission(self, user) -> BaseSubmission.Permission:
         key = f'SUBMISSION_PERMISSION_{self.id}_{user.id}_{self.problem.id}'
@@ -1689,9 +1920,6 @@ class Submission(MongoBase, BaseSubmission, engine=engine.Submission):
         problem = Problem(problem_id)
         if not problem:
             raise engine.DoesNotExist(f'{problem} dose not exist')
-        # TODO: Ensure problem is ready to submitted
-        # if not problem.is_test_case_ready():
-        #     raise TestCaseNotFound(problem_id)
         if timestamp is None:
             timestamp = datetime.now()
         # create a new submission
@@ -1725,7 +1953,8 @@ class TrialSubmission(MongoBase, BaseSubmission,
 
     # --- Implement Abstract Methods ---
 
-    def _calculate_task_score(self, task_index: int, status: int) -> int:
+    @staticmethod
+    def _calculate_task_score(task_index: int, status: int) -> int:
         '''
         Test submissions do not have a "score" in the traditional sense.
         The pass/fail status of cases is what matters.
@@ -1733,7 +1962,8 @@ class TrialSubmission(MongoBase, BaseSubmission,
         '''
         return 0
 
-    def _generate_output_minio_path(self, task_no: int, case_no: int) -> str:
+    @staticmethod
+    def _generate_output_minio_path(task_no: int, case_no: int) -> str:
         '''
         generate a output file path for minio (Trial)
         '''
@@ -2280,10 +2510,25 @@ class TrialSubmission(MongoBase, BaseSubmission,
             f"Getting trial submission history for user {user.username} on problem id-{problem.problem_id}"
         )
         try:
+            can_view_all = False
+            try:
+                if user.role == Role.ADMIN:
+                    can_view_all = True
+                else:
+                    problem_courses = map(Course, problem.courses)
+                    can_view_all = any(
+                        c.own_permission(user) & Course.Permission.GRADE
+                        for c in problem_courses)
+            except Exception as e:
+                current_app.logger.warning(
+                    f"Failed to evaluate trial history permission: {e}")
+
+            q_user = None if can_view_all else user
+
             # 1. 使用 filter 查詢資料
             submissions, total_count = cls.filter(
                 user=user,
-                q_user=user,
+                q_user=q_user,
                 problem=problem,
                 offset=offset,
                 count=count,
@@ -2301,6 +2546,20 @@ class TrialSubmission(MongoBase, BaseSubmission,
                 elif sub.status == -2:
                     status_str = 'Pending'
 
+                user_info = None
+                try:
+                    user_obj = getattr(sub, 'user', None)
+                    if user_obj is not None:
+                        displayed_name = getattr(
+                            getattr(user_obj, 'profile', None),
+                            'displayed_name', '') or ''
+                        user_info = {
+                            "username": getattr(user_obj, 'username', ''),
+                            "displayedName": displayed_name,
+                        }
+                except Exception:
+                    user_info = None
+
                 history_list.append({
                     "trial_submission_id":
                     str(sub.id),
@@ -2316,7 +2575,9 @@ class TrialSubmission(MongoBase, BaseSubmission,
                     int(sub.timestamp.timestamp() *
                         1000),  # 回傳毫秒級 Unix Timestamp 方便前端處理
                     "use_default_case":
-                    sub.use_default_case  # 前端用來判斷 public/custom 類型
+                    sub.use_default_case,  # 前端用來判斷 public/custom 類型
+                    "user":
+                    user_info,
                 })
 
             return {"total_count": total_count, "history": history_list}
@@ -2325,12 +2586,14 @@ class TrialSubmission(MongoBase, BaseSubmission,
                 f"Error getting trial submission history: {e}")
             raise e
 
-    def get_trial_api_info(self) -> Dict[str, Any]:
+    def get_trial_api_info(self,
+                           include_case_output: bool = True) -> Dict[str, Any]:
         """
             Format the trial submission data for API response.
             Returns proper task-case hierarchy: each task contains an array of cases.
             Includes Truncated Stdout/Stderr text for each case.
             Also includes input and expected output from custom testcases if available.
+            Set include_case_output=False to omit stdout/stderr/input/answer.
             """
         # Convert status code
         status_str = self.code2status.get(self.status, 'Judging')
@@ -2341,38 +2604,39 @@ class TrialSubmission(MongoBase, BaseSubmission,
         # Format: TTCC.in and TTCC.out where TT=task index, CC=case index
         testcase_data = {
         }  # {(task_idx, case_idx): {'input': ..., 'answer': ...}}
-        custom_path = getattr(self.obj, 'custom_input_minio_path', None)
-        if custom_path:
-            try:
-                minio_client = MinioClient()
-                data = minio_client.download_file(custom_path)
-                with ZipFile(io.BytesIO(data)) as zf:
-                    for name in zf.namelist():
-                        # Parse filename like "0000.in" or "0000.out" or "0100.in"
-                        base = name.split('/')[-1]  # Handle nested paths
-                        if len(base) >= 7 and base[4] == '.':
-                            try:
-                                task_idx = int(base[0:2])
-                                case_idx = int(base[2:4])
-                                ext = base[5:]  # 'in' or 'out'
-                                key = (task_idx, case_idx)
-                                if key not in testcase_data:
-                                    testcase_data[key] = {
-                                        'input': None,
-                                        'answer': None
-                                    }
-                                content = zf.read(name).decode(
-                                    'utf-8', errors='replace')
-                                if ext == 'in':
-                                    testcase_data[key]['input'] = content
-                                elif ext == 'out':
-                                    testcase_data[key]['answer'] = content
-                            except (ValueError, IndexError):
-                                continue
-            except Exception as e:
-                current_app.logger.warning(
-                    f"Failed to read custom testcases for trial {self.id}: {e}"
-                )
+        if include_case_output:
+            custom_path = getattr(self.obj, 'custom_input_minio_path', None)
+            if custom_path:
+                try:
+                    minio_client = MinioClient()
+                    data = minio_client.download_file(custom_path)
+                    with ZipFile(io.BytesIO(data)) as zf:
+                        for name in zf.namelist():
+                            # Parse filename like "0000.in" or "0000.out" or "0100.in"
+                            base = name.split('/')[-1]  # Handle nested paths
+                            if len(base) >= 7 and base[4] == '.':
+                                try:
+                                    task_idx = int(base[0:2])
+                                    case_idx = int(base[2:4])
+                                    ext = base[5:]  # 'in' or 'out'
+                                    key = (task_idx, case_idx)
+                                    if key not in testcase_data:
+                                        testcase_data[key] = {
+                                            'input': None,
+                                            'answer': None
+                                        }
+                                    content = zf.read(name).decode(
+                                        'utf-8', errors='replace')
+                                    if ext == 'in':
+                                        testcase_data[key]['input'] = content
+                                    elif ext == 'out':
+                                        testcase_data[key]['answer'] = content
+                                except (ValueError, IndexError):
+                                    continue
+                except Exception as e:
+                    current_app.logger.warning(
+                        f"Failed to read custom testcases for trial {self.id}: {e}"
+                    )
 
         tasks_data = []
         for i, task in enumerate(self.tasks):
@@ -2382,42 +2646,47 @@ class TrialSubmission(MongoBase, BaseSubmission,
             # Build cases array for this task
             cases_data = []
             for j, case in enumerate(task.cases):
-                # Get Stdout/Stderr and input/answer from artifact
-                try:
-                    # Use get_case_artifact_files to get all fields including input and answer
-                    output_content = self.get_case_artifact_files(i, j)
-                    stdout_text = output_content.get('stdout', '') or ''
-                    stderr_text = output_content.get('stderr', '') or ''
-                    # Get input/answer from artifact (set by sandbox)
-                    input_text = output_content.get('input', '') or ''
-                    answer_text = output_content.get('answer', '') or ''
-                except (FileNotFoundError, AttributeError):
-                    stdout_text = ''
-                    stderr_text = ''
-                    input_text = ''
-                    answer_text = ''
+                stdout_text = ''
+                stderr_text = ''
+                input_text = ''
+                answer_text = ''
+                if include_case_output:
+                    # Get Stdout/Stderr and input/answer from artifact
+                    try:
+                        # Use get_case_artifact_files to get all fields including input and answer
+                        output_content = self.get_case_artifact_files(i, j)
+                        stdout_text = output_content.get('stdout', '') or ''
+                        stderr_text = output_content.get('stderr', '') or ''
+                        # Get input/answer from artifact (set by sandbox)
+                        input_text = output_content.get('input', '') or ''
+                        answer_text = output_content.get('answer', '') or ''
+                    except (FileNotFoundError, AttributeError):
+                        stdout_text = ''
+                        stderr_text = ''
+                        input_text = ''
+                        answer_text = ''
 
-                # Fallback to custom testcases if artifact didn't have input/answer
-                if not input_text or not answer_text:
-                    tc_data = testcase_data.get((i, j), {})
-                    if not input_text:
-                        input_text = tc_data.get('input', '') or ''
-                    if not answer_text:
-                        answer_text = tc_data.get('answer', '') or ''
+                    # Fallback to custom testcases if artifact didn't have input/answer
+                    if not input_text or not answer_text:
+                        tc_data = testcase_data.get((i, j), {})
+                        if not input_text:
+                            input_text = tc_data.get('input', '') or ''
+                        if not answer_text:
+                            answer_text = tc_data.get('answer', '') or ''
 
-                # === Apply Truncate Logic ===
-                # Truncate if exceeds OUTPUT_TRUNCATE_SIZE
-                if len(stdout_text) > OUTPUT_TRUNCATE_SIZE:
-                    stdout_text = stdout_text[:OUTPUT_TRUNCATE_SIZE] + OUTPUT_TRUNCATE_MSG
+                    # === Apply Truncate Logic ===
+                    # Truncate if exceeds OUTPUT_TRUNCATE_SIZE
+                    if len(stdout_text) > OUTPUT_TRUNCATE_SIZE:
+                        stdout_text = stdout_text[:OUTPUT_TRUNCATE_SIZE] + OUTPUT_TRUNCATE_MSG
 
-                if len(stderr_text) > OUTPUT_TRUNCATE_SIZE:
-                    stderr_text = stderr_text[:OUTPUT_TRUNCATE_SIZE] + OUTPUT_TRUNCATE_MSG
+                    if len(stderr_text) > OUTPUT_TRUNCATE_SIZE:
+                        stderr_text = stderr_text[:OUTPUT_TRUNCATE_SIZE] + OUTPUT_TRUNCATE_MSG
 
-                if input_text and len(input_text) > OUTPUT_TRUNCATE_SIZE:
-                    input_text = input_text[:OUTPUT_TRUNCATE_SIZE] + OUTPUT_TRUNCATE_MSG
+                    if input_text and len(input_text) > OUTPUT_TRUNCATE_SIZE:
+                        input_text = input_text[:OUTPUT_TRUNCATE_SIZE] + OUTPUT_TRUNCATE_MSG
 
-                if answer_text and len(answer_text) > OUTPUT_TRUNCATE_SIZE:
-                    answer_text = answer_text[:OUTPUT_TRUNCATE_SIZE] + OUTPUT_TRUNCATE_MSG
+                    if answer_text and len(answer_text) > OUTPUT_TRUNCATE_SIZE:
+                        answer_text = answer_text[:OUTPUT_TRUNCATE_SIZE] + OUTPUT_TRUNCATE_MSG
 
                 case_status_str = self.code2status.get(case.status, 'Unknown')
 
