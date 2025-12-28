@@ -15,6 +15,7 @@ from mongo.utils import MinioClient
 from .base_tester import BaseTester
 from .utils import *
 from tests import utils
+from tests.utils import problem as problem_utils
 
 pytestmark = pytest.mark.usefixtures("setup_minio")
 
@@ -874,6 +875,45 @@ class TestCreateSubmission(SubmissionTester):
         )
         assert rv.status_code == 403, rv_json
         assert 'has been uploaded' in str(rv_json['message'])
+
+
+class TestSubmissionSendErrors(SubmissionTester):
+
+    def test_send_missing_testdata_marks_je(self, app):
+        test_case_info = problem_utils.create_test_case_info(
+            language=2,
+            task_len=1,
+            case_count_range=(1, 1),
+            memory_limit_range=(65536, 65536),
+            time_limit_range=(1, 1),
+        )
+        problem = problem_utils.create_problem(
+            owner='teacher',
+            test_case_info=test_case_info,
+        )
+        submission = Submission.add(
+            problem_id=problem.problem_id,
+            username='student',
+            lang=2,
+            timestamp=datetime.now(),
+            ip_addr='127.0.0.1',
+        )
+        code_buffer = io.BytesIO()
+        with zipfile.ZipFile(code_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr('main.py', 'print("hello")')
+        code_buffer.seek(0)
+        submission.update(code_minio_path=submission._put_code(code_buffer))
+        submission.reload()
+
+        with app.app_context():
+            app.config['TESTING'] = False
+            with pytest.raises(TestCaseNotFound):
+                submission.send()
+
+        submission.reload()
+        assert submission.status == submission.status2code['JE']
+        output = submission.get_single_output(0, 0)
+        assert 'testcase is not found' in output['stderr']
 
 
 @pytest.mark.skip(reason='handwritten submissions will be deprecated')

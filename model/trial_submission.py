@@ -7,6 +7,7 @@ from .auth import *
 from mongo.submission import TrialSubmission
 from mongo.user import User, Role
 from mongo.utils import MinioClient
+from mongo.problem import Problem
 from mongo import engine
 from mongo import sandbox
 from werkzeug.datastructures import FileStorage
@@ -347,7 +348,12 @@ def get_trial_record(user, trial_id: str):
 
     # 回傳格式化後的資料
     try:
-        data = ts.get_trial_api_info()
+        include_case_output = True
+        if is_owner and not is_staff:
+            problem = Problem(ts.problem_id)
+            if (problem.config or {}).get('trialResultVisible') is False:
+                include_case_output = False
+        data = ts.get_trial_api_info(include_case_output=include_case_output)
         return HTTPResponse("Success", data=data)
     except Exception as e:
         current_app.logger.error(f"Error retrieval trial info: {e}")
@@ -412,6 +418,14 @@ def get_trial_output(user, trial_id: str, task_no: int, case_no: int):
 
     if not (is_owner or is_staff):
         return HTTPError("Forbidden.", 403)
+
+    # Check trialResultVisible for students
+    if is_owner and not is_staff:
+        problem = Problem(ts.problem_id)
+        if (problem.config or {}).get('trialResultVisible') is False:
+            return HTTPError(
+                "Trial results are currently unavailable; visibility has not been enabled by the instructor.",
+                403)
 
     try:
         output = ts.get_single_output(task_no, case_no)
@@ -603,7 +617,9 @@ def get_trial_case_artifact_files(user, trial_id: str, task_no: int,
     if is_owner and not is_staff:
         problem = Problem(ts.problem_id)
         if (problem.config or {}).get('trialResultVisible') is False:
-            return HTTPError("Trial result is not visible.", 403)
+            return HTTPError(
+                "Trial results are currently unavailable; visibility has not been enabled by the instructor.",
+                403)
 
     try:
         artifact_files = ts.get_case_artifact_files(task_no, case_no)

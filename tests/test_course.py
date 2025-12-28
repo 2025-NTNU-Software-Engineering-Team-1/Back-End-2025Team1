@@ -647,7 +647,7 @@ class TestScoreBoard(BaseTester):
         )
         assert rv.status_code == 200, rv.json
 
-    def test_student_cannot_view_scoreboard(
+    def test_student_can_view_scoreboard(
         self,
         forge_client: ForgeClient,
     ):
@@ -655,7 +655,7 @@ class TestScoreBoard(BaseTester):
         course = utils.course.create_course(students=[user])
         client = forge_client(user.username)
         rv = client.get(f'/course/{course.course_name}/scoreboard?pids=1,2,3')
-        assert rv.status_code == 403, rv.json
+        assert rv.status_code == 200, rv.json
 
     def test_teacher_role_cannot_view_scoreboard(
         self,

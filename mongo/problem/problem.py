@@ -101,47 +101,27 @@ class Problem(MongoBase, engine=engine.Problem):
     @property
     def trial_mode_enabled(self) -> bool:
         """Check if trial mode is enabled for this problem."""
-        # First, check database field directly (most reliable)
-        # This handles cases where the field exists in DB but not as Python attribute
+        # Check database field first (most reliable)
         if hasattr(self.obj, '_data'):
             db_data = self.obj._data
             if 'trial_mode_enabled' in db_data:
-                value = db_data.get('trial_mode_enabled', False)
-                # Sync to Python attribute if not already set
-                if value and not hasattr(self.obj, 'trial_mode_enabled'):
-                    self.obj.trial_mode_enabled = True
-                    self.obj.save()
-                return bool(value)
-            # Backward compatibility: check old DB field
+                return bool(db_data.get('trial_mode_enabled', False))
             if 'test_mode_enabled' in db_data:
-                old_value = db_data.get('test_mode_enabled', False)
-                # Migrate old field to new field
-                if old_value:
-                    self.obj.trial_mode_enabled = True
-                    self.obj.save()
-                return bool(old_value)
+                return bool(db_data.get('test_mode_enabled', False))
 
         # Check Python attribute (may not exist if field was set directly in DB)
         if hasattr(self.obj, 'trial_mode_enabled'):
-            value = getattr(self.obj, 'trial_mode_enabled', False)
-            return bool(value)
+            return bool(getattr(self.obj, 'trial_mode_enabled', False))
         # Backward compatibility: check old field name
         if hasattr(self.obj, 'test_mode_enabled'):
-            old_value = getattr(self.obj, 'test_mode_enabled', False)
-            # Migrate old field to new field
-            if old_value:
-                self.obj.trial_mode_enabled = True
-                self.obj.save()
-            return bool(old_value)
+            return bool(getattr(self.obj, 'test_mode_enabled', False))
 
-        # Fallback: check config.trialMode (frontend sets this)
-        # This ensures compatibility even if DB field is not synced
+        # Fallback: check config.trialMode/testMode without side effects
         config = getattr(self.obj, 'config', None) or {}
-        trial_val = config.get('trialMode') or config.get('testMode')
-        if trial_val:
-            return True
-
-        return False
+        trial_mode = config.get('trialMode')
+        if trial_mode is None:
+            trial_mode = config.get('testMode', False)
+        return bool(trial_mode)
 
     def get_samples(self, limit: int = 2) -> List[Dict]:
         """
@@ -671,6 +651,7 @@ class Problem(MongoBase, engine=engine.Problem):
             'quota': quota,
             'default_code': default_code,
             'config': full_config,
+            'trial_mode_enabled': trial_mode_enabled,
             'trial_submission_quota': max_number_of_trial,
         })
         # Create ProblemDescription for the embedded document field

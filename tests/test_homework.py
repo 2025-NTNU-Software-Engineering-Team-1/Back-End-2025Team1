@@ -163,6 +163,26 @@ class TestHomework(BaseTester):
         for key in ('name', 'start', 'end', 'problemIds'):
             assert key in rv_data
 
+    def test_get_single_homework_student_can_view(self, forge_client,
+                                                  course_data):
+        client = forge_client('Bo-Chieh-Chuang')
+        rv, rv_json, rv_data = self.request(
+            client,
+            'get',
+            f'/homework/{course_data.homework_ids[0]}',
+        )
+        assert rv.status_code == 200, rv_json
+        assert isinstance(rv_data.get('studentStatus'), dict)
+        assert 'Bo-Chieh-Chuang' not in rv_data['studentStatus']
+
+    def test_get_single_homework_permission_denied(self, forge_client,
+                                                   course_data):
+        client = forge_client('student')
+        rv = client.get(f'/homework/{course_data.homework_ids[0]}')
+        rv_json = rv.get_json()
+        assert rv.status_code == 403, rv_json
+        assert rv_json['message'] == 'Permission denied'
+
     def test_get_list_of_homewrok(self, forge_client, course_data):
         c_data = course_data
         client = forge_client(c_data.teacher)
@@ -171,6 +191,27 @@ class TestHomework(BaseTester):
         rv_data = rv_json['data']
         assert rv.status_code == 200, rv_json
         assert len(rv_data) == len(c_data.homework_ids), rv_data
+
+    def test_get_list_of_homework_student_can_view(self, forge_client,
+                                                   course_data):
+        client = forge_client('Bo-Chieh-Chuang')
+        rv, rv_json, rv_data = self.request(
+            client,
+            'get',
+            f'/course/{course_data.name}/homework',
+        )
+        assert rv.status_code == 200, rv_json
+        assert rv_data, rv_json
+        assert isinstance(rv_data[0].get('studentStatus'), dict)
+        assert 'Bo-Chieh-Chuang' not in rv_data[0]['studentStatus']
+
+    def test_get_list_of_homework_permission_denied(self, forge_client,
+                                                    course_data):
+        client = forge_client('student')
+        rv = client.get(f'/course/{course_data.name}/homework')
+        rv_json = rv.get_json()
+        assert rv.status_code == 403, rv_json
+        assert rv_json['message'] == 'Permission denied'
 
     def test_get_list_of_homework_from_not_exist_course(
             self, forge_client, course_data):
@@ -208,15 +249,8 @@ class TestHomework(BaseTester):
         assert rv.status_code == 200
         assert after_len == before_len + 1
 
-    def test_create_homework_name_error(self, forge_client, course_data,
-                                        monkeypatch):
-        # It seems that the homework.add doesn't raise NameError
-        def mock_homework_add(*args, **kwargs):
-            raise NameError('user must be the teacher or ta of this course')
-
-        monkeypatch.setattr(Homework, 'add', mock_homework_add)
-
-        client = forge_client('student')
+    def test_create_homework_permission_error(self, forge_client, course_data):
+        client = forge_client('Bo-Chieh-Chuang')
         rv, rv_json, rv_data = self.request(
             client, 'get', f'/course/{course_data.name}/homework')
         assert rv.status_code == 200, rv_json
@@ -251,7 +285,7 @@ class TestHomework(BaseTester):
 
         monkeypatch.setattr(Homework, 'add', mock_homework_add)
 
-        client = forge_client('student')
+        client = forge_client(course_data.teacher)
         rv, rv_json, rv_data = self.request(
             client, 'get', f'/course/{course_data.name}/homework')
         assert rv.status_code == 200, rv_json
@@ -318,6 +352,28 @@ class TestHomework(BaseTester):
         print(course.obj.student_nicknames)
         status = next(iter(homework.student_status.values()))
         assert sorted(status.keys()) == sorted(map(str, pids))
+
+    def test_update_homework_permission_denied(self, forge_client,
+                                               course_data):
+        client = forge_client('Bo-Chieh-Chuang')
+        homework = Homework.get_by_id(course_data.homework_ids[0])
+        new_data = {
+            'name': homework.homework_name,
+            'markdown': homework.markdown,
+            'start': int(homework.duration.start.timestamp()),
+            'end': int(homework.duration.end.timestamp()),
+            'problemIds': homework.problem_ids,
+            'scoreboardStatus': homework.scoreboard_status,
+            'penalty': homework.penalty,
+        }
+        rv, rv_json, rv_data = self.request(
+            client,
+            'put',
+            f'/homework/{course_data.homework_ids[0]}',
+            json=new_data,
+        )
+        assert rv.status_code == 403, rv_json
+        assert rv_json['message'] == 'user is not teacher or ta'
 
     def test_update_student_status(
         self,

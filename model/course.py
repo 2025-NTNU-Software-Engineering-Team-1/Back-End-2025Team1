@@ -588,7 +588,7 @@ def get_course_scoreboard(
         except:
             return HTTPError('Type of `end` should be float.', 400)
 
-    if not course.permission(user, Course.Permission.GRADE):
+    if not course.permission(user, Course.Permission.VIEW):
         return HTTPError('Permission denied', 403)
 
     ret = course.get_scoreboard(pids, start, end)
