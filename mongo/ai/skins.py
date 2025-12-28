@@ -178,9 +178,12 @@ class AiVtuberSkin(MongoBase, engine=engine.AiVtuberSkin):
             # macOS zip 檢測
             from model.utils.file import zip_sanitize
             zip_bytes = file_obj.read()
-            is_valid, sanitize_error = zip_sanitize(zip_bytes)
-            if not is_valid:
-                return (False, sanitize_error)
+            try:
+                is_valid, sanitize_error = zip_sanitize(zip_bytes)
+                if not is_valid:
+                    return (False, sanitize_error)
+            except Exception as e:
+                return (False, f'Zip validation failed: {str(e)}')
             file_obj.seek(0)
 
             with zipfile.ZipFile(file_obj, 'r') as zf:

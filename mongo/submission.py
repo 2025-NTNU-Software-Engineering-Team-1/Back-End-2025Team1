@@ -690,9 +690,12 @@ class BaseSubmission(abc.ABC):
         try:
             file.seek(0)
             zip_bytes = file.read()
-            is_valid, sanitize_error = zip_sanitize(zip_bytes)
-            if not is_valid:
-                return sanitize_error
+            try:
+                is_valid, sanitize_error = zip_sanitize(zip_bytes)
+                if not is_valid:
+                    return sanitize_error
+            except Exception as e:
+                return f'Zip validation failed: {str(e)}'
         finally:
             try:
                 file.seek(0)

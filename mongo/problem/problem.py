@@ -384,9 +384,12 @@ class Problem(MongoBase, engine=engine.Problem):
                 from model.utils.file import zip_sanitize
                 public_testdata_file.seek(0)
                 zip_bytes = public_testdata_file.read()
-                is_valid, sanitize_error = zip_sanitize(zip_bytes)
-                if not is_valid:
-                    raise ValueError(sanitize_error)
+                try:
+                    is_valid, sanitize_error = zip_sanitize(zip_bytes)
+                    if not is_valid:
+                        raise ValueError(sanitize_error)
+                except Exception as e:
+                    raise ValueError(f'Zip validation failed: {str(e)}')
 
                 public_testdata_file.seek(0)
                 file_data = public_testdata_file.read()
@@ -480,9 +483,12 @@ class Problem(MongoBase, engine=engine.Problem):
             from model.utils.file import zip_sanitize
             file_obj.seek(0)
             zip_bytes = file_obj.read()
-            is_valid, sanitize_error = zip_sanitize(zip_bytes)
-            if not is_valid:
-                raise ValueError(sanitize_error)
+            try:
+                is_valid, sanitize_error = zip_sanitize(zip_bytes)
+                if not is_valid:
+                    raise ValueError(sanitize_error)
+            except Exception as e:
+                raise ValueError(f'Zip validation failed: {str(e)}')
             file_obj.seek(0)
 
         path = f'problem/{self.problem_id}/{asset_type}/{filename}'
@@ -884,9 +890,12 @@ class Problem(MongoBase, engine=engine.Problem):
         from model.utils.file import zip_sanitize
         test_case.seek(0)
         zip_bytes = test_case.read()
-        is_valid, sanitize_error = zip_sanitize(zip_bytes)
-        if not is_valid:
-            raise ValueError(sanitize_error)
+        try:
+            is_valid, sanitize_error = zip_sanitize(zip_bytes)
+            if not is_valid:
+                raise ValueError(sanitize_error)
+        except Exception as e:
+            raise ValueError(f'Zip validation failed: {str(e)}')
         test_case.seek(0)
 
         self._validate_test_case(test_case)

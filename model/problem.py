@@ -625,6 +625,8 @@ def manage_problem(user: User, problem: Problem):
         )
     except engine.DoesNotExist:
         return HTTPError('Course not found.', 404)
+    except ValueError as e:
+        return HTTPError(str(e), 400)
 
 
 @problem_api.post('/<int:problem>/initiate-test-case-upload')
