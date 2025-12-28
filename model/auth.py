@@ -585,3 +585,32 @@ def get_me(token: Optional[str], fields: Optional[str]):
             'userId': '',
             'md5': '',
         })
+
+
+@auth_api.route('/banned-ips', methods=['GET'])
+@identity_verify(Role.ADMIN)
+def get_banned_ips(user):
+    """
+    Get all currently banned IPs.
+    Admin only.
+    """
+    from .utils.rate_limit import login_limiter
+
+    banned = login_limiter.get_banned_ips()
+    return HTTPResponse('Success', data={'banned_ips': banned})
+
+
+@auth_api.route('/banned-ips/<path:ip>', methods=['DELETE'])
+@identity_verify(Role.ADMIN)
+def unban_ip(user, ip):
+    """
+    Manually unban a specific IP.
+    Admin only.
+    """
+    from .utils.rate_limit import login_limiter
+
+    if login_limiter.unban(ip):
+        current_app.logger.info(f'Admin {user.username} unbanned IP: {ip}')
+        return HTTPResponse('IP unbanned successfully')
+    else:
+        return HTTPError('IP not found in banned list', 404)

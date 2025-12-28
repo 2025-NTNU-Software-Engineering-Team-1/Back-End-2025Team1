@@ -71,7 +71,7 @@ def _upload_zip_contents(minio_client: MinioClient, zip_path: Path) -> bool:
                                                 minio_path,
                                                 len(content),
                                                 content_type=content_type)
-                logger.debug(f"[DefaultSkin] Uploaded: {name}")
+                # logger.debug(f"[DefaultSkin] Uploaded: {name}") (Removed to reduce noise)
 
         return True
     except Exception as e:
@@ -94,7 +94,7 @@ def _upload_avatar(minio_client: MinioClient, avatar_path: Path) -> bool:
                                         minio_path,
                                         len(content),
                                         content_type='image/png')
-        logger.debug(f"[DefaultSkin] Uploaded avatar: {minio_path}")
+        # logger.debug(f"[DefaultSkin] Uploaded avatar: {minio_path}") (Removed to reduce noise)
         return True
     except Exception as e:
         logger.error(f"[DefaultSkin] Error uploading avatar: {e}")

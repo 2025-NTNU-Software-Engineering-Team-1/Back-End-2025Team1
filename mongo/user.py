@@ -186,6 +186,14 @@ class User(MongoBase, engine=engine.User):
         self.reload()
 
     @classmethod
+    def search(cls, q: str, limit: int = 5):
+        '''
+        Search users by username or email
+        '''
+        query = engine.Q(username__icontains=q) | engine.Q(email__icontains=q)
+        return engine.User.objects(query).limit(limit)
+
+    @classmethod
     def login(cls, username, password, ip_addr):
         try:
             user = cls.get_by_username(username)

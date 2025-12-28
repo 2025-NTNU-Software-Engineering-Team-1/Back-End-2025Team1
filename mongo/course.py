@@ -73,6 +73,19 @@ class Course(MongoBase, engine=engine.Course):
         user.update(pull__courses=self.id)
         user.reload('courses')
 
+    def get_member_usernames(self) -> set:
+        '''
+        Get all member usernames (teacher, TAs, students)
+        '''
+        member_usernames = set()
+        if self.teacher:
+            member_usernames.add(self.teacher.username)
+        for ta in (self.tas or []):
+            member_usernames.add(ta.username)
+        for username in (self.student_nicknames or {}).keys():
+            member_usernames.add(username)
+        return member_usernames
+
     @classmethod
     def get_all(cls):
         return engine.Course.objects

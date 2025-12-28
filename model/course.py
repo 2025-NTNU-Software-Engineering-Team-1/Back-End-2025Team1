@@ -274,6 +274,119 @@ def remove_course_member(user, course_name, username):
                         data={'username': username})
 
 
+@course_api.route('/<course_name>/members', methods=['POST'])
+@login_required
+@Request.json('usernames: list')
+def add_existing_members(user, course_name, usernames):
+    """
+    Add existing users to the course as students.
+    Only teachers and admins can do this.
+    
+    Request body: { "usernames": ["user1", "user2"] }
+    """
+    course = Course(course_name)
+
+    if not course:
+        return HTTPError('Course not found.', 404)
+
+    # Only course teacher or admin can add members
+    is_course_teacher = (course.obj.teacher.pk == user.pk)
+    is_admin = (user.role == Role.ADMIN)
+
+    if not (is_course_teacher or is_admin):
+        return HTTPError('Only course teacher or admin can add members.', 403)
+
+    if not usernames or not isinstance(usernames, list):
+        return HTTPError('usernames must be a non-empty list.', 400)
+
+    added = []
+    already_in = []
+    not_found = []
+
+    for username in usernames:
+        target_user = User(username)
+        if not target_user:
+            not_found.append(username)
+            continue
+
+        # Check if user is already in the course
+        is_ta = target_user.obj in course.tas
+        is_student = username in course.student_nicknames
+        is_teacher = target_user.obj == course.teacher
+
+        if is_ta or is_student or is_teacher:
+            already_in.append(username)
+            continue
+
+        # Add user as student
+        course.student_nicknames[username] = username
+        course.add_user(target_user.obj)
+        added.append(username)
+
+    if added:
+        course.save()
+
+    return HTTPResponse('Users processed.',
+                        data={
+                            'added': added,
+                            'already_in': already_in,
+                            'not_found': not_found
+                        })
+
+
+@course_api.route('/<course_name>/search-users', methods=['GET'])
+@login_required
+@Request.args('q')
+def search_users_for_course(user, course_name, q):
+    """
+    Search for users that can be added to the course.
+    Only teachers and admins can do this.
+    
+    Query params: ?q=searchterm
+    Returns users matching the search term that are not already in the course.
+    """
+    course = Course(course_name)
+
+    if not course:
+        return HTTPError('Course not found.', 404)
+
+    # Only course teacher or admin can search
+    is_course_teacher = (course.obj.teacher.pk == user.pk)
+    is_admin = (user.role == Role.ADMIN)
+
+    if not (is_course_teacher or is_admin):
+        return HTTPError('Only course teacher or admin can search users.', 403)
+
+    if not q or len(q) < 1:
+        return HTTPResponse('No search query.', data=[])
+
+    # Search users by username or email
+    matching_users = User.search(q)
+
+    # Get current course members
+    member_usernames = course.get_member_usernames()
+
+    # Filter out existing members
+    results = []
+    for u in matching_users:
+        if u.username not in member_usernames:
+            # role is already an int or Enum that behaves like int
+            role_val = u.role
+            if hasattr(role_val, 'value'):
+                role_val = role_val.value
+
+            results.append({
+                'username':
+                u.username,
+                'displayedName':
+                u.profile.displayed_name if u.profile else u.username,
+                'role':
+                role_val if role_val is not None else 2
+            })
+
+    return HTTPResponse('Success.', data=results)
+
+
 @course_api.route('/<course_name>/code', methods=['GET', 'POST', 'DELETE'])
 @login_required
 def manage_course_code(user, course_name):
