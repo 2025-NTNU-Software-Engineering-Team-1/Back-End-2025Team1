@@ -12,12 +12,12 @@ from .logging import get_logger
 logger = get_logger('key_manager')
 
 __all__ = [
-    'check_rate_limit',
+    'get_available_key',
     'get_model_for_course',
 ]
 
 
-def check_rate_limit(
+def get_available_key(
         course_name: str) -> Tuple[Optional[object], Optional[str]]:
     """
     Check and select an available API Key by course_name.

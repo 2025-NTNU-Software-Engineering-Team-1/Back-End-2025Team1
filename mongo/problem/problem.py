@@ -143,6 +143,24 @@ class Problem(MongoBase, engine=engine.Problem):
 
         return False
 
+    def get_samples(self, limit: int = 2) -> List[Dict]:
+        """
+        Get sample test cases from problem description.
+        """
+        desc = getattr(self, 'description', None)
+        if not desc or not hasattr(desc,
+                                   'sample_input') or not desc.sample_input:
+            return []
+
+        sample_output = getattr(desc, 'sample_output', []) or []
+        samples = [{
+            "input": s_in,
+            "output": s_out
+        } for i, (s_in,
+                  s_out) in enumerate(zip(desc.sample_input, sample_output))
+                   if i < limit]
+        return samples
+
     @property
     def trial_submission_quota(self) -> int:
         """Get trial submission quota for this problem."""

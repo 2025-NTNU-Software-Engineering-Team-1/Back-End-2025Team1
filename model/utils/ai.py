@@ -6,7 +6,7 @@ from flask import current_app
 from mongo.engine import DEFAULT_AI_MODEL
 
 __all__ = [
-    'check_rate_limit',
+    'get_available_key',
     'get_problem_context',
     'call_ai_service',
     'save_ai_transaction',
@@ -51,7 +51,7 @@ Student's Last Status: {last_submission_summary}
 """
 
 
-def check_rate_limit(course_name: str):
+def get_available_key(course_name: str):
     """
     Check and select an available API Key by course_name.
     Returns: (key_wrapper, error_message)
@@ -293,7 +293,7 @@ def process_ai_request(user, course_name, problem_id, message, current_code):
         HTTPError: If any error occurs during processing.
     """
     # 1. Check permissions and limits
-    key, error_msg = check_rate_limit(course_name)
+    key, error_msg = get_available_key(course_name)
     if not key:
         current_app.logger.warning(f"AI Request Denied: {error_msg}")
         raise PermissionError(error_msg)

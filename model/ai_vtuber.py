@@ -126,7 +126,7 @@ def generate_testcase_endpoint(user=None,
     Returns:
         JSON with input, expected_output, explanation
     """
-    from .ai.key_manager import check_rate_limit
+    from .ai.key_manager import get_available_key
     from .ai.logging import get_logger
 
     logger = get_logger('testcase_api')
@@ -151,7 +151,7 @@ def generate_testcase_endpoint(user=None,
             return HTTPError('Problem not found', 404)
 
         # Get API key using same logic as chatbot
-        key, error_msg = check_rate_limit(course_name)
+        key, error_msg = get_available_key(course_name)
         if not key:
             logger.warning(f"[TestcaseGen] No API key available: {error_msg}")
             return HTTPError('No API key configured for this course', 400)

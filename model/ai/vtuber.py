@@ -9,7 +9,7 @@ from mongo import AiApiKey, AiTokenUsage
 
 from .prompts import EMOTION_KEYWORDS, build_vtuber_prompt
 from .service import call_ai_service
-from .key_manager import check_rate_limit, get_model_for_course
+from .key_manager import get_available_key, get_model_for_course
 from .context import get_problem_context
 from .conversation import (
     get_conversation_history,
@@ -76,7 +76,7 @@ def process_vtuber_request(user,
         AIError: If AI service fails.
     """
     # 1. Check rate limit and get API key
-    key, error_msg = check_rate_limit(course_name)
+    key, error_msg = get_available_key(course_name)
     if not key:
         logger.warning(f"AI Request Denied for {user.username}: {error_msg}")
         raise RateLimitExceededError(error_msg)

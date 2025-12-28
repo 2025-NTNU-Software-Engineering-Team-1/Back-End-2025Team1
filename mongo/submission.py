@@ -160,6 +160,19 @@ class BaseSubmission(abc.ABC):
             'AE': 8,  # Analysis Error (Static Analysis failed)
         }
 
+    STATUS_MAP = {
+        0: "Accepted",
+        -1: "Wrong Answer",
+        -2: "Compile Error",
+        1: "Time Limit Exceeded",
+        3: "Runtime Error",
+        4: "Memory Limit Exceeded",
+        5: "Runtime Error",
+        6: "Judge Error",
+        7: "Output Limit Exceeded",
+        8: "Analysis Error"
+    }
+
     @property
     def handwritten(self):
         return self.language == 3
@@ -218,6 +231,10 @@ class BaseSubmission(abc.ABC):
     @property
     def is_function_only_mode(self) -> bool:
         return self.execution_mode == 'functionOnly'
+
+    @property
+    def status_str(self) -> str:
+        return self.STATUS_MAP.get(getattr(self, 'status', -1), "Unknown")
 
     def _validate_execution_mode_constraints(self):
         if self.is_function_only_mode and self.is_zip_mode:
@@ -278,6 +295,43 @@ class BaseSubmission(abc.ABC):
         except AttributeError:
             raise AttributeError('The submission is still in pending')
         return ret
+
+    def get_error_detail(self) -> str:
+        """
+        Get error details for non-AC submissions (Compile Error or first failed case).
+        """
+        status_code = getattr(self, 'status', -1)
+        if status_code == 0:
+            return ""
+
+        try:
+            # Compile Error
+            if status_code == -2:
+                ce_msg = getattr(self, 'stderr', '') or ''
+                if ce_msg:
+                    return f"Compile Error: {ce_msg[:500]}"
+
+            # Runtime Error / Wrong Answer etc.
+            first_failed = self._find_first_failed_case()
+            if first_failed:
+                return f"First failed case status: {self.STATUS_MAP.get(first_failed.status, 'Error')}"
+
+        except Exception as e:
+            current_app.logger.debug(f"Could not get error details: {e}")
+        return ""
+
+    def _find_first_failed_case(self) -> Optional[Any]:
+        """Helper to find the first failed test case."""
+        if not hasattr(self, 'tasks') or not self.tasks:
+            return None
+
+        for task in self.tasks:
+            if not hasattr(task, 'cases'):
+                continue
+            for case in task.cases:
+                if getattr(case, 'status', 0) != 0:
+                    return case
+        return None
 
     def get_case_artifact_files(
         self,
@@ -672,7 +726,8 @@ class BaseSubmission(abc.ABC):
         file.seek(0)
         return None
 
-    def _check_zip_submission_payload(self, file):
+    @staticmethod
+    def _check_zip_submission_payload(file):
         limit = 1024 * 1024 * 1024  # 1GB
         try:
             file.seek(0, os.SEEK_END)
@@ -709,7 +764,8 @@ class BaseSubmission(abc.ABC):
         )
         return True
 
-    def _generate_code_minio_path(self):
+    @staticmethod
+    def _generate_code_minio_path():
         return f'submissions/{generate_ulid()}.zip'
 
     def _put_code(self, code_file) -> str:
@@ -1013,7 +1069,8 @@ class BaseSubmission(abc.ABC):
         self.finish_judging()  # Call subclass's finish_judging
         return True
 
-    def _generate_output_minio_path(self, task_no: int, case_no: int) -> str:
+    @staticmethod
+    def _generate_output_minio_path(task_no: int, case_no: int) -> str:
         '''
         generate a output file path for minio
         '''
@@ -1740,7 +1797,8 @@ class TrialSubmission(MongoBase, BaseSubmission,
 
     # --- Implement Abstract Methods ---
 
-    def _calculate_task_score(self, task_index: int, status: int) -> int:
+    @staticmethod
+    def _calculate_task_score(task_index: int, status: int) -> int:
         '''
         Test submissions do not have a "score" in the traditional sense.
         The pass/fail status of cases is what matters.
@@ -1748,7 +1806,8 @@ class TrialSubmission(MongoBase, BaseSubmission,
         '''
         return 0
 
-    def _generate_output_minio_path(self, task_no: int, case_no: int) -> str:
+    @staticmethod
+    def _generate_output_minio_path(task_no: int, case_no: int) -> str:
         '''
         generate a output file path for minio (Trial)
         '''
