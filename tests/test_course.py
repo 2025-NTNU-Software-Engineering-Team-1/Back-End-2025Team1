@@ -706,7 +706,8 @@ class TestMongoCourse(BaseTester):
                                role=engine.User.Role.ADMIN)
         utils.user.create_user(username='admin', role=engine.User.Role.ADMIN)
         course = Course.get_public()
-        course.edit_course(User('admin'), 'OldPublic', 'admin')
+        with pytest.raises(PermissionError):
+            course.edit_course(User('admin'), 'OldPublic', 'admin')
         assert Course.get_public().course_name == 'Public'
 
 

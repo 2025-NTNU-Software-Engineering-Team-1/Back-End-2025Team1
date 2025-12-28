@@ -102,6 +102,12 @@ class Course(MongoBase, engine=engine.Course):
 
         if not self:
             raise engine.DoesNotExist('Course')
+
+        if self.course_name == 'Public' and new_course != 'Public':
+            raise PermissionError('Cannot rename Public course.')
+        if self.course_name != 'Public' and new_course == 'Public':
+            raise ValueError('Cannot rename course to Public.')
+
         if not perm(self, user):
             raise PermissionError
         te = User(teacher)
