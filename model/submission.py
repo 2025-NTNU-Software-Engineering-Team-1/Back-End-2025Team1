@@ -144,20 +144,50 @@ def get_submission_list(
     get the list of submission data
     '''
 
-    def parse_int(val: Optional[int], name: str):
-        if val is None:
-            return None
-        try:
-            return int(val)
-        except ValueError:
-            raise ValueError(f'can not convert {name} to integer')
+    # 定義安全常數
+    DB_INT_MAX = 9223372036854775807
 
-    def parse_str(val: Optional[str], name: str):
+    # ✅ 1. 修正整數溢位：加入範圍檢查
+    def parse_int(
+        val: Optional[int],
+        name: str,
+        *,
+        min_val: Optional[int] = None,
+        max_val: Optional[int] = None,
+    ):
         if val is None:
             return None
         try:
-            return str(val)
-        except ValueError:
+            val_int = int(val)
+
+            if min_val is not None and val_int < min_val:
+                raise ValueError(
+                    f'{name} is out of range ({min_val} ~ {max_val})')
+            if max_val is not None and val_int > max_val:
+                raise ValueError(
+                    f'{name} is out of range ({min_val} ~ {max_val})')
+
+            return val_int
+
+        except ValueError as e:
+            if "invalid literal" in str(e):
+                raise ValueError(f'can not convert {name} to integer')
+            raise e
+
+    # ✅ 2. 修正 NoSQL 注入：加入長度檢查與強制轉型
+    def parse_str(val: Optional[str], name: str, max_length: int = 64):
+        if val is None:
+            return None
+        try:
+            val_str = str(val)  # 強制轉型
+            if len(val_str) > max_length:
+                raise ValueError(
+                    f'{name} is too long (max {max_length} chars)')
+            return val_str
+        except ValueError as e:
+            # 如果是長度錯誤，直接拋出
+            if "too long" in str(e):
+                raise e
             raise ValueError(f'can not convert {name} to string')
 
     def parse_status(val: Optional[str]) -> Optional[int]:
@@ -209,22 +239,49 @@ def get_submission_list(
         submission_count = submissions['submission_count']
         submissions = submissions['submissions']
     else:
-        # convert args
-        offset = parse_int(offset, 'offset')
-        count = parse_int(count, 'count')
-        problem_id = parse_int(problem_id, 'problemId')
-        status = parse_status(status)
+        # ✅ 3. 統一驗證區塊：捕捉所有參數錯誤
+        try:
+            offset = parse_int(
+                offset,
+                'offset',
+                min_val=0,
+                max_val=DB_INT_MAX,
+            )
+            count = parse_int(
+                count,
+                'count',
+                min_val=-1,
+                max_val=500,
+            )
+            problem_id = parse_int(
+                problem_id,
+                'problemId',
+                min_val=1,
+                max_val=DB_INT_MAX,
+            )
+            status = parse_status(status)
+
+            # 針對 NoSQL 注入的驗證
+            course = parse_str(course, 'course', max_length=64)
+            username = parse_str(username, 'username', max_length=64)
+
+        except ValueError as e:
+            return HTTPError(str(e), 400)
 
         if language_type is not None:
             try:
-                language_type = list(map(int, language_type.split(',')))
+                lang_ids = list(map(int, language_type.split(',')))
+                for lid in lang_ids:
+                    if lid < 0 or lid > DB_INT_MAX:
+                        raise ValueError('language_type ID out of range')
+                language_type = lang_ids
             except ValueError as e:
                 return HTTPError(
                     'cannot parse integers from languageType',
                     400,
                 )
         # students can only get their own submissions
-        if user.role == Role.STUDENT:
+        if user.role == User.engine.Role.STUDENT:
             username = user.username
         try:
             params = drop_none({
@@ -930,8 +987,6 @@ def delete_submission(user, submission: Submission):
                 )
 
     try:
-        # Clear submission list cache before deletion so list refreshes immediately
-        clear_submission_list_cache_for_submission(str(submission.id))
         # Delete code from MinIO if exists
         if submission.code_minio_path:
             try:
@@ -1033,12 +1088,17 @@ def delete_all_submissions(user, filters: dict = None):
         language_type: int (optional)
     }
     """
+    DB_INT_MAX = 9223372036854775807
+
     if filters is None:
         return HTTPError('filters is required.', 400)
 
     course_name = filters.get('course')
     if not course_name:
         return HTTPError('course is required.', 400)
+
+    if not isinstance(course_name, str) or len(course_name) > 64:
+        return HTTPError('Invalid course name format.', 400)
 
     # Check permission
     req_user = User(user.username)
@@ -1059,11 +1119,17 @@ def delete_all_submissions(user, filters: dict = None):
         problem_id = None
         if filters.get('problemId'):
             try:
-                problem_id = int(filters['problemId'])
+                pid = int(filters['problemId'])
+                if pid < 1 or pid > DB_INT_MAX:
+                    raise ValueError  # 超出 MongoDB 處理範圍
+                problem_id = pid
             except ValueError:
                 pass
 
         username = filters.get('username')
+        if username is not None:
+            if not isinstance(username, str) or len(username) > 64:
+                return HTTPError('Invalid username format.', 400)
 
         status = None
         raw_status = filters.get('status')
@@ -1089,7 +1155,10 @@ def delete_all_submissions(user, filters: dict = None):
         language_type = None
         if filters.get('languageType'):
             try:
-                language_type = int(filters['languageType'])
+                ltype = int(filters['languageType'])
+                if ltype < 0 or ltype > DB_INT_MAX:
+                    raise ValueError
+                language_type = ltype
             except ValueError:
                 pass
 
