@@ -68,6 +68,27 @@ ROLE_SCOPE_MAP[Role.ADMIN] = ADMIN_SCOPES
 class User(MongoBase, engine=engine.User):
 
     @classmethod
+    def check_availability(cls, item: str, value: str) -> bool:
+        """
+        Security guard: only allow checking known fields with a single value.
+        """
+        if item == 'username':
+            try:
+                cls.get_by_username(value)
+                return False
+            except engine.DoesNotExist:
+                return True
+
+        if item == 'email':
+            try:
+                cls.get_by_email(value)
+                return False
+            except engine.DoesNotExist:
+                return True
+
+        raise ValueError(f'Invalid check item: {item}')
+
+    @classmethod
     def signup(
         cls,
         username: str,

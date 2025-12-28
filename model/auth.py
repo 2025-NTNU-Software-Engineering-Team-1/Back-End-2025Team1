@@ -233,6 +233,9 @@ def session():
             - 403 Login Failed
             - 429 Too Many Attempts
         '''
+        if not isinstance(request.json, dict) or len(request.json) > 2:
+            return HTTPError(
+                'Mass Assignment detected: extra fields not allowed', 400)
         ip_addr = request.headers.get('cf-connecting-ip', request.remote_addr)
 
         # Rate limit check
@@ -310,35 +313,33 @@ def change_password(user, old_password, new_password):
 
 
 @auth_api.route('/check/<item>', methods=['POST'])
-def check(item):
+@Request.json(vars_dict={'username': 'username', 'email': 'email'})
+def check(item, username=None, email=None):
     '''Checking when the user is registing.
     '''
+    if not isinstance(request.json, dict) or len(request.json) > 1:
+        return HTTPError('Extra fields not allowed', 400)
 
-    @Request.json('username: str')
-    def check_username(username):
-        if not isinstance(request.json, dict) or set(
-                request.json.keys()) != {'username'}:
-            return HTTPError('Extra fields not allowed', 400)
-        try:
-            User.get_by_username(username)
-        except DoesNotExist:
-            return HTTPResponse('Username Can Be Used', data={'valid': 1})
-        return HTTPResponse('User Exists', data={'valid': 0})
+    try:
+        if item == 'username':
+            if not username:
+                return HTTPError('Missing username', 400)
+            valid = User.check_availability('username', username)
+            return HTTPResponse(
+                'Username Can Be Used' if valid else 'User Exists',
+                data={'valid': int(valid)})
 
-    @Request.json('email: str')
-    def check_email(email):
-        if not isinstance(request.json, dict) or set(
-                request.json.keys()) != {'email'}:
-            return HTTPError('Invalid request payload: extra fields detected',
-                             400)
-        try:
-            User.get_by_email(email)
-        except DoesNotExist:
-            return HTTPResponse('Email Can Be Used', data={'valid': 1})
-        return HTTPResponse('Email Has Been Used', data={'valid': 0})
+        if item == 'email':
+            if not email:
+                return HTTPError('Missing email', 400)
+            valid = User.check_availability('email', email)
+            return HTTPResponse(
+                'Email Can Be Used' if valid else 'Email Has Been Used',
+                data={'valid': int(valid)})
+    except ValueError as e:
+        return HTTPError(str(e), 400)
 
-    method = {'username': check_username, 'email': check_email}.get(item)
-    return method() if method else HTTPError('Invalid Checking Type', 400)
+    return HTTPError('Invalid Checking Type', 400)
 
 
 @auth_api.route('/resend-email', methods=['POST'])
