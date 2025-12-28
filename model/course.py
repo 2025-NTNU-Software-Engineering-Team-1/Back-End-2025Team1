@@ -401,7 +401,7 @@ def manage_course_code(user, course_name):
     if not course:
         return HTTPError('Course not found.', 404)
 
-    if user.role != Role.Admin:
+    if user.role != Role.ADMIN:
         if not course.permission(user, Course.Permission.GRADE):
             return HTTPError('Permission denied.', 403)
 
