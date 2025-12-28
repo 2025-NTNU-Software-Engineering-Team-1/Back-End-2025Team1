@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_6e2dbee8102cccb9_ai_vtuber_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.9.2">coverage.py v7.9.2</a>,
-            created at 2025-12-27 23:21 +0000
+            created at 2025-12-28 22:10 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -91,7 +91,7 @@
     <p class="pln"><span class="n"><a id="t9" href="#t9">9</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t10" href="#t10">10</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="nam">prompts</span> <span class="key">import</span> <span class="nam">EMOTION_KEYWORDS</span><span class="op">,</span> <span class="nam">build_vtuber_prompt</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t11" href="#t11">11</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="nam">service</span> <span class="key">import</span> <span class="nam">call_ai_service</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t12" href="#t12">12</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="nam">key_manager</span> <span class="key">import</span> <span class="nam">check_rate_limit</span><span class="op">,</span> <span class="nam">get_model_for_course</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t12" href="#t12">12</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="nam">key_manager</span> <span class="key">import</span> <span class="nam">get_available_key</span><span class="op">,</span> <span class="nam">get_model_for_course</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t13" href="#t13">13</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="nam">context</span> <span class="key">import</span> <span class="nam">get_problem_context</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t14" href="#t14">14</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="nam">conversation</span> <span class="key">import</span> <span class="op">(</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t15" href="#t15">15</a></span><span class="t">    <span class="nam">get_conversation_history</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
@@ -158,7 +158,7 @@
     <p class="pln"><span class="n"><a id="t76" href="#t76">76</a></span><span class="t"><span class="str">        AIError: If AI service fails.</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t77" href="#t77">77</a></span><span class="t"><span class="str">    """</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t78" href="#t78">78</a></span><span class="t">    <span class="com"># 1. Check rate limit and get API key</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t79" href="#t79">79</a></span><span class="t">    <span class="nam">key</span><span class="op">,</span> <span class="nam">error_msg</span> <span class="op">=</span> <span class="nam">check_rate_limit</span><span class="op">(</span><span class="nam">course_name</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t79" href="#t79">79</a></span><span class="t">    <span class="nam">key</span><span class="op">,</span> <span class="nam">error_msg</span> <span class="op">=</span> <span class="nam">get_available_key</span><span class="op">(</span><span class="nam">course_name</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t80" href="#t80">80</a></span><span class="t">    <span class="key">if</span> <span class="key">not</span> <span class="nam">key</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t81" href="#t81">81</a></span><span class="t">        <span class="nam">logger</span><span class="op">.</span><span class="nam">warning</span><span class="op">(</span><span class="str">f"AI Request Denied for {user.username}: {error_msg}"</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t82" href="#t82">82</a></span><span class="t">        <span class="key">raise</span> <span class="nam">RateLimitExceededError</span><span class="op">(</span><span class="nam">error_msg</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
@@ -271,7 +271,7 @@
             <a class="nav" href="z_6e2dbee8102cccb9_ai_vtuber_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.9.2">coverage.py v7.9.2</a>,
-            created at 2025-12-27 23:21 +0000
+            created at 2025-12-28 22:10 +0000
         </p>
     </div>
 </footer>
