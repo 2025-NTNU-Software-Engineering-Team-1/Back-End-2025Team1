@@ -426,30 +426,29 @@ def manage_course_code(user, course_name):
                             })
 
     elif request.method == 'POST':
-        # Check if creating new global code or auth code
-        data = request.json or {}
-        if not isinstance(data, dict):
-            return HTTPError('Invalid payload.', 400)
-        max_usage = data.get('max_usage')
 
-        if max_usage is not None:
-            # Create new auth code
-            try:
-                max_usage = int(max_usage)
-                if max_usage < 0: raise ValueError
-            except ValueError:
-                return HTTPError('Invalid max_usage.', 400)
+        @Request.json('max_usage')
+        def create_code(max_usage):
+            if max_usage is not None:
+                # Create new auth code
+                try:
+                    max_usage = int(max_usage)
+                    if max_usage < 0: raise ValueError
+                except ValueError:
+                    return HTTPError('Invalid max_usage.', 400)
 
-            auth_code = course.add_auth_code(user, max_usage)
-            return HTTPResponse('Authorization code generated.',
-                                data={'code': auth_code.code})
-        else:
-            # Generate a new course code (Legacy)
-            new_code = Course.generate_course_code()
-            course.course_code = new_code
-            course.save()
-            return HTTPResponse('Course code generated.',
-                                data={'course_code': new_code})
+                auth_code = course.add_auth_code(user, max_usage)
+                return HTTPResponse('Authorization code generated.',
+                                    data={'code': auth_code.code})
+            else:
+                # Generate a new course code (Legacy)
+                new_code = Course.generate_course_code()
+                course.course_code = new_code
+                course.save()
+                return HTTPResponse('Course code generated.',
+                                    data={'course_code': new_code})
+
+        return create_code()
 
     elif request.method == 'DELETE':
         # Remove course code (Legacy)
@@ -468,8 +467,9 @@ def delete_course_code(user, course_name, code):
     if not course:
         return HTTPError('Course not found.', 404)
 
-    if not course.permission(user, Course.Permission.MODIFY):
-        return HTTPError('Permission denied.', 403)
+    if user.role != Role.ADMIN:
+        if not course.permission(user, Course.Permission.MODIFY):
+            return HTTPError('Permission denied.', 403)
 
     if course.remove_auth_code(code):
         return HTTPResponse('Authorization code removed.')
