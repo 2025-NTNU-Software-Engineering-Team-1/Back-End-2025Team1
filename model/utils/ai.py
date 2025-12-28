@@ -13,6 +13,8 @@ __all__ = [
     'process_ai_request',
     'EMOTION_KEYWORDS',
     'DEFAULT_AI_MODEL',
+    'is_course_teacher_or_ta',
+    'prepare_testcase_generation',
 ]
 
 # Emotion
@@ -382,3 +384,78 @@ def process_ai_request(user, course_name, problem_id, message, current_code):
         # Continue to return response
 
     return response_json
+
+
+def is_course_teacher_or_ta(user, course_name: str) -> bool:
+    """
+    Check if user is a teacher or TA for the specified course.
+    This checks course-level roles, not global roles.
+    """
+    try:
+        course = Course(course_name)
+        if not course:
+            return False
+        # Course owner (teacher)
+        if course.teacher and course.teacher.pk == user.pk:
+            return True
+        # Teaching Assistant
+        for ta in (course.tas or []):
+            if ta.pk == user.pk:
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def prepare_testcase_generation(course_name: str,
+                                problem_id,
+                                api_key_id: str = None):
+    """
+    Prepare API key and problem info for testcase generation.
+    If api_key_id is provided, use that specific key; otherwise use auto-selection.
+    
+    Args:
+        course_name: The course name
+        problem_id: The problem ID
+        api_key_id: Optional specific API key ID to use
+        
+    Returns:
+        tuple: (api_key, problem, model_name, error_msg)
+               If error_msg is not None, the other values are None.
+    """
+    # Get problem
+    try:
+        problem = Problem(problem_id)
+        if not problem:
+            return None, None, None, "Problem not found"
+    except Exception:
+        return None, None, None, "Problem not found"
+
+    # Get API key
+    if api_key_id:
+        # Use specific key selected by teacher
+        try:
+            key = AiApiKey(api_key_id)
+            if not key:
+                return None, None, None, "API key not found"
+            if not getattr(key, 'is_active', False):
+                return None, None, None, "API key is not active"
+        except Exception:
+            return None, None, None, "API key not found"
+    else:
+        # Auto-select key
+        key, error_msg = get_available_key(course_name)
+        if not key:
+            return None, None, None, error_msg or "No API key available"
+
+    # Get model
+    try:
+        course = Course(course_name)
+        if course and course.ai_model:
+            model_name = course.ai_model.name
+        else:
+            model_name = DEFAULT_AI_MODEL
+    except Exception:
+        model_name = DEFAULT_AI_MODEL
+
+    return key, problem, model_name, None

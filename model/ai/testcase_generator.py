@@ -9,47 +9,13 @@ from typing import Optional, Dict, Any
 from .context import get_problem_context
 from .service import call_ai_service
 from .logging import get_logger
+from .prompts import TESTCASE_GENERATOR_PROMPT, build_testcase_prompt
 
 logger = get_logger('testcase_generator')
 
 __all__ = [
     'generate_testcase',
-    'TESTCASE_GENERATOR_PROMPT',
 ]
-
-# Prompt template for test case generation
-TESTCASE_GENERATOR_PROMPT = """You are a test case generator for programming problems.
-
-[Problem Info]
-Title: {title}
-Description: {description}
-Input Format: {input_format}
-Output Format: {output_format}
-
-[User's Request]
-{user_hint}
-
-[Task]
-Generate 3 test cases that match the problem's input/output format.
-Each test case should cover different scenarios (e.g., basic case, edge case, larger input).
-
-[Critical Constraints]
-1. The input MUST strictly follow the Input Format specified above.
-2. The output MUST be what a correct solution would produce.
-3. Generate diverse test cases covering different scenarios.
-4. Output strict JSON only.
-
-[JSON Schema]
-{{
-  "testcases": [
-    {{
-      "input": "test case input as a string",
-      "expected_output": "expected output as a string",
-      "explanation": "brief explanation"
-    }}
-  ]
-}}
-"""
 
 
 def _get_testcase_response_schema() -> dict:
@@ -85,22 +51,26 @@ def _get_testcase_response_schema() -> dict:
     }
 
 
-def generate_testcase(problem_id: str,
-                      user,
-                      user_hint: str = "",
-                      api_key: Optional[str] = None,
-                      model: str = "gemini-flash-lite-latest",
-                      language: str = "zh-tw") -> Dict[str, Any]:
+def generate_testcase(
+        problem_id: str = None,
+        user=None,
+        user_hint: str = "",
+        api_key: Optional[str] = None,
+        model: str = "gemini-flash-lite-latest",
+        language: str = "zh-tw",
+        problem_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Generate a test case for a problem using AI.
     
     Args:
-        problem_id: The problem identifier.
+        problem_id: The problem identifier (optional if problem_context is provided).
         user: User object making the request.
         user_hint: Optional hint from user about what kind of test case to generate.
         api_key: Gemini API key to use.
         model: The model to use for generation.
         language: User's preferred language for explanations (e.g., 'en', 'zh-tw').
+        problem_context: Optional pre-built context dict with title, description, 
+                         input_format, output_format. If provided, problem_id lookup is skipped.
         
     Returns:
         Dictionary containing:
@@ -112,36 +82,24 @@ def generate_testcase(problem_id: str,
     Raises:
         ValueError: If problem not found or generation fails.
     """
-    logger.info(f"Generating test case for problem {problem_id}")
+    logger.info(f"Generating test case for problem {problem_id or 'new'}")
 
-    # Get problem context
-    try:
-        context = get_problem_context(problem_id, user)
-    except Exception as e:
-        logger.error(f"Failed to get problem context: {e}")
-        raise ValueError(f"Problem not found: {problem_id}")
+    # Get problem context - use provided context or fetch from DB
+    if problem_context:
+        context = problem_context
+    elif problem_id:
+        try:
+            context = get_problem_context(problem_id, user)
+        except Exception as e:
+            logger.error(f"Failed to get problem context: {e}")
+            raise ValueError(f"Problem not found: {problem_id}")
+    else:
+        raise ValueError(
+            "Either problem_id or problem_context must be provided")
 
-    # Build the prompt
-    user_hint_text = user_hint.strip(
-    ) if user_hint else "Generate a representative test case."
-
-    # Language instruction
+    # Build the prompt using helper from prompts.py
+    final_prompt = build_testcase_prompt(context, user_hint, language)
     lang_instruction = f"in {language}" if language else "in English"
-
-    # Update prompt with explicit language instruction
-    final_prompt = TESTCASE_GENERATOR_PROMPT.format(
-        title=context.get('title', ''),
-        description=context.get('description', ''),
-        input_format=context.get('input_format', ''),
-        output_format=context.get('output_format', ''),
-        user_hint=user_hint_text)
-
-    # Inject language requirement into the task and schema
-    final_prompt = final_prompt.replace(
-        "Generate 3 test cases",
-        f"Generate 3 test cases. The explanation field MUST be {lang_instruction}."
-    ).replace('"explanation": "brief explanation"',
-              f'"explanation": "brief explanation {lang_instruction}"')
 
     # Call AI service
     try:

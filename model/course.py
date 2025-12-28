@@ -401,8 +401,9 @@ def manage_course_code(user, course_name):
     if not course:
         return HTTPError('Course not found.', 404)
 
-    if not course.permission(user, Course.Permission.GRADE):
-        return HTTPError('Permission denied.', 403)
+    if user.role != Role.Admin:
+        if not course.permission(user, Course.Permission.GRADE):
+            return HTTPError('Permission denied.', 403)
 
     if request.method == 'GET':
         auth_codes_info = [{
