@@ -83,6 +83,7 @@ def generate_testcase(
         ValueError: If problem not found or generation fails.
     """
     logger.info(f"Generating test case for problem {problem_id or 'new'}")
+    logger.debug(f"Language = {language}")
 
     # Get problem context - use provided context or fetch from DB
     if problem_context:
@@ -99,7 +100,8 @@ def generate_testcase(
 
     # Build the prompt using helper from prompts.py
     final_prompt = build_testcase_prompt(context, user_hint, language)
-    lang_instruction = f"in {language}" if language else "in English"
+    lang = '繁體中文' if language == 'chinese' else language
+    lang_instruction = f"in {lang}" if lang else "in English"
 
     # Call AI service
     try:
